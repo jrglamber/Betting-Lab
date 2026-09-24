@@ -357,7 +357,7 @@ def health():
 
 @app.get('/api/status')
 def status():
-     q=quota.state()
+    q=quota.state()
     count=lambda table,where='': (db.fetchone(f"SELECT COUNT(*) AS n FROM {table} {where}") or {}).get('n',0)
     scoreboard=strategy_scoreboard(db)
     canonical=canonical_scoreboard(db)
