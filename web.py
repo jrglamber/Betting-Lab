@@ -170,90 +170,14 @@ worker = Worker(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Keep the pre-traffic path deliberately small. Schema initialization and
+    # forward-test state freezes must happen before traffic; routine maintenance,
+    # backfills, provider discovery and model cycles belong to the worker.
     db.init_schema()
-    # Freeze v0.19 discovery hypotheses immediately at deployment/startup so
-    # all subsequent observations are clean forward validation.
     outcome_edge_report(db)
     ensure_cohort_system_state(db)
-    repair_premature_clv(db)
-    backfill_canonical_bets(db)
-    sync_canonical_bets(db)
-    if settings.execution_shadow_enabled:
-        backfill_execution_shadows(db,settings.execution_bookmaker_keys)
-        track_execution_prices(db)
-        finalize_execution_clv(db)
-        settle_execution_from_stored_results(db)
-        backfill_execution_accounting(db)
-    # v0.6.9 measurement-only instrumentation. No provider/API calls.
-    run_measurement_maintenance(
-        db, excluded_books=settings.execution_bookmaker_keys
-    )
-    # Forward-only downstream research layer. No historical multiple backfill
-    # and no provider/API calls are made here.
-    generate_multiple_shadows(db, allowed_bookmaker_keys=settings.multiples_api_bookmaker_keys)
-    finalize_multiple_clv(db)
-    settle_multiple_shadows(db)
-    upsert_weekly_report(db)
-    if settings.tennis_shadow_enabled and settings.odds_api_key:
-        # Free active-tournament discovery; paid polling remains worker-controlled.
-        try:
-            tennis_engine.discover_active_tournaments()
-            tennis_engine.maintenance()
-        except Exception as exc:
-            db.record_collector_run("TENNIS_STARTUP",False,detail=str(exc))
-    if settings.multisport_shadow_enabled and settings.odds_api_key:
-        try:
-            multisport_engine.discover_active_leagues()
-            multisport_engine.maintenance()
-        except Exception as exc:
-            db.record_collector_run("MULTISPORT_STARTUP",False,detail=str(exc))
-    if settings.multisport_lines_enabled and settings.odds_api_key:
-        try:
-            multisport_lines_engine.discover_active_leagues()
-            multisport_lines_engine.maintenance()
-        except Exception as exc:
-            db.record_collector_run("MULTISPORT_LINES_STARTUP",False,detail=str(exc))
-    if settings.predictive_football_enabled:
-        try:
-            # v0.11.2: bootstrap one paced batch at application startup.
-            # This is deliberately independent of RUN_WORKER and ODDS_API_KEY,
-            # because historical score warm-up uses the free score source and
-            # must never sit at 0/0 simply because the collector worker did not
-            # start. Subsequent batches continue through the normal worker.
-            # Bootstrap first. A failure in syncing existing internal results
-            # must never prevent the independent historical warm-up.
-            predictive_football_engine.bootstrap_historical_data()
-            predictive_football_engine.sync_internal_results()
-            predictive_football_engine.freeze_due_predictions()
-            predictive_football_engine.ensure_market_predictions()
-            predictive_football_engine.evaluate_predictions()
-            predictive_football_engine.evaluate_market_predictions()
-            predictive_football_engine.track_prices()
-            predictive_football_engine.track_market_prices()
-            predictive_football_engine.finalize_clv()
-            predictive_football_engine.finalize_market_clv()
-            predictive_football_engine.finalize_prediction_market_close()
-            predictive_football_engine.settle()
-            predictive_football_engine.settle_market_predictions()
-        except Exception as exc:
-            db.record_collector_run("PREDICTIVE_FOOTBALL_STARTUP",False,detail=str(exc))
-    if settings.predictive_football_pred2_enabled:
-        try:
-            # PRED2 is an isolated challenger that reuses PRED1's stored
-            # score history and already-collected odds snapshots. It does not
-            # bootstrap a second data source or place live bets.
-            predictive_football_pred2_engine.one_cycle()
-            db.record_collector_run(
-                "PREDICTIVE_FOOTBALL_PRED2_STARTUP",True,
-                detail="PRED2 Dixon-Coles challenger initialized",
-            )
-        except Exception as exc:
-            db.record_collector_run(
-                "PREDICTIVE_FOOTBALL_PRED2_STARTUP",False,detail=str(exc)
-            )
+
     if settings.predictive_football_pred3_enabled:
-        # StatsBomb Open Data is fetched by the normal worker rather than in
-        # the FastAPI lifespan so GitHub/network latency cannot delay web startup.
         db.record_collector_run(
             "PREDICTIVE_FOOTBALL_PRED3_STARTUP",True,
             detail="PRED3 StatsBomb xG challenger enabled; bootstrap deferred to worker",
@@ -263,22 +187,7 @@ async def lifespan(app: FastAPI):
             "PREDICTIVE_FOOTBALL_PRED4_STARTUP",True,
             detail="PRED4 current PXG1 challenger enabled; consumes stored PXG1 data only",
         )
-    if settings.meta_edge_enabled:
-        try:
-            out = run_meta_edge_maintenance(db)
-            db.record_collector_run(
-                "META_EDGE_STARTUP", True,
-                detail="; ".join(f"{k}={v}" for k,v in out.items()),
-            )
-            meta2 = run_meta_model_maintenance(
-                db, settings.meta_edge_min_clean_labels, settings.meta_edge_model_enabled
-            )
-            db.record_collector_run(
-                "META_EDGE_MODEL_STARTUP", True,
-                detail="; ".join(f"{k}={v}" for k,v in meta2.items()),
-            )
-        except Exception as exc:
-            db.record_collector_run("META_EDGE_STARTUP",False,detail=str(exc))
+
     if settings.enable_live_betting:
         raise RuntimeError("Betting Lab is shadow-only; disable ENABLE_LIVE_BETTING")
     if settings.run_worker and settings.odds_api_key:
