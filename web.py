@@ -1491,7 +1491,7 @@ def predictive_football_page():
 
 @app.get('/proxy-xg',response_class=HTMLResponse)
 def proxy_xg_page():
-     st=proxy_xg_status(db,settings); model=st.get('latest_model') or {}; cur=st.get('current_matches') or {}; man=st.get('statsbomb_manifest') or {}; api_man=st.get('api_manifest') or {}; usage=st.get('today_api_usage') or {}
+    st=proxy_xg_status(db,settings); model=st.get('latest_model') or {}; cur=st.get('current_matches') or {}; man=st.get('statsbomb_manifest') or {}; api_man=st.get('api_manifest') or {}; usage=st.get('today_api_usage') or {}
     return HTMLResponse(f"""<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>PXG1</title><style>{BASE_STYLE}</style></head><body>
     <a href='/'>← Betting Lab</a> · <a href='/predictive-football-pred3'>PRED3</a> · <a href='/outcome-edge'>Outcome Edge</a>
     <h1>Proxy xG <span class='pill'>PXG1 · RESEARCH ONLY</span></h1>
