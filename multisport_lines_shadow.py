@@ -535,10 +535,22 @@ def track_line_prices(db: Database, now: Optional[datetime]=None) -> int:
         for r in rows:
             line_move = line_clv_points(bet["market_key"], bet["selection"], float(bet["line_point"]), float(r["line_point"]), bet)
             price_move = clv_pct(float(bet["offered_odds"]), float(r["price"])) if abs(float(r["line_point"])-float(bet["line_point"]))<1e-9 else None
-            try:
+            if db.is_postgres:
                 db.execute(
                     """
                     INSERT INTO multisport_line_price_observations(
+                        line_bet_id,observed_at,source_snapshot_at,bookmaker_key,
+                        market_key,selection,line_point,price,price_move_pct,line_move_points
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT (line_bet_id,source_snapshot_at,line_point) DO NOTHING
+                    """,
+                    (bet["id"],utc_now_iso(),r["captured_at"],bet["bookmaker_key"],bet["market_key"],
+                     bet["selection"],r["line_point"],r["price"],price_move,line_move),
+                )
+            else:
+                db.execute(
+                    """
+                    INSERT OR IGNORE INTO multisport_line_price_observations(
                         line_bet_id,observed_at,source_snapshot_at,bookmaker_key,
                         market_key,selection,line_point,price,price_move_pct,line_move_points
                     ) VALUES(?,?,?,?,?,?,?,?,?,?)
@@ -546,9 +558,7 @@ def track_line_prices(db: Database, now: Optional[datetime]=None) -> int:
                     (bet["id"],utc_now_iso(),r["captured_at"],bet["bookmaker_key"],bet["market_key"],
                      bet["selection"],r["line_point"],r["price"],price_move,line_move),
                 )
-                inserted += 1
-            except Exception:
-                pass
+            inserted += 1
     return inserted
 
 
