@@ -357,7 +357,7 @@ def health():
 
 @app.get('/api/status')
 def status():
-    db.init_schema(); q=quota.state()
+     q=quota.state()
     count=lambda table,where='': (db.fetchone(f"SELECT COUNT(*) AS n FROM {table} {where}") or {}).get('n',0)
     scoreboard=strategy_scoreboard(db)
     canonical=canonical_scoreboard(db)
@@ -464,45 +464,45 @@ def status():
 
 @app.get('/api/proxy-xg/status')
 def api_proxy_xg_status():
-    db.init_schema()
+    
     return proxy_xg_status(db,settings)
 
 @app.post('/admin/proxy-xg/run')
 def admin_proxy_xg_run(x_admin_secret:Optional[str]=Header(None)):
-    _admin(x_admin_secret);db.init_schema();return proxy_xg_engine.one_cycle()
+    _admin(x_admin_secret);return proxy_xg_engine.one_cycle()
 
 @app.get('/api/outcome-edge')
 def api_outcome_edge():
-    db.init_schema();return outcome_edge_report(db)
+    return outcome_edge_report(db)
 
 @app.get('/api/meta-edge/status')
 def api_meta_edge_status():
-    db.init_schema()
+    
     return meta_edge_scoreboard(db,settings.meta_edge_min_clean_labels)
 
 @app.get('/api/meta-edge/segments')
 def api_meta_edge_segments():
-    db.init_schema()
+    
     return meta_edge_segments(db)
 
 @app.get('/api/meta-edge/samples')
 def api_meta_edge_samples(limit:int=Query(100,ge=1,le=1000)):
-    db.init_schema()
+    
     return latest_meta_edge_samples(db,limit)
 
 @app.get('/api/meta-edge/model')
 def api_meta_edge_model():
-    db.init_schema()
+    
     return meta_model_status(db)
 
 @app.get('/api/meta-edge/model/scores')
 def api_meta_edge_model_scores(limit:int=Query(100,ge=1,le=1000)):
-    db.init_schema()
+    
     return latest_meta_model_scores(db,limit)
 
 @app.post('/admin/meta-edge/run')
 def admin_meta_edge_run(x_admin_secret:Optional[str]=Header(None)):
-    _admin(x_admin_secret);db.init_schema()
+    _admin(x_admin_secret);
     meta1=run_meta_edge_maintenance(db)
     meta2=run_meta_model_maintenance(
         db, settings.meta_edge_min_clean_labels, settings.meta_edge_model_enabled
@@ -511,47 +511,47 @@ def admin_meta_edge_run(x_admin_secret:Optional[str]=Header(None)):
 
 @app.get('/api/events')
 def events(limit:int=Query(100,ge=1,le=500)):
-    db.init_schema();return db.fetchall("SELECT * FROM events ORDER BY commence_time ASC LIMIT ?",(limit,))
+    return db.fetchall("SELECT * FROM events ORDER BY commence_time ASC LIMIT ?",(limit,))
 
 @app.get('/api/signals')
 def signals(limit:int=Query(100,ge=1,le=1000)):
-    db.init_schema();return db.fetchall("""SELECT s.*,e.league,e.home_team,e.away_team,e.commence_time FROM signals s JOIN events e ON e.event_id=s.event_id ORDER BY s.id DESC LIMIT ?""",(limit,))
+    return db.fetchall("""SELECT s.*,e.league,e.home_team,e.away_team,e.commence_time FROM signals s JOIN events e ON e.event_id=s.event_id ORDER BY s.id DESC LIMIT ?""",(limit,))
 
 @app.get('/api/consensus')
 def consensus(limit:int=Query(100,ge=1,le=1000)):
-    db.init_schema();return db.fetchall("SELECT * FROM consensus_snapshots ORDER BY id DESC LIMIT ?",(limit,))
+    return db.fetchall("SELECT * FROM consensus_snapshots ORDER BY id DESC LIMIT ?",(limit,))
 
 @app.get('/api/canonical-bets')
 def canonical_bets(limit:int=Query(100,ge=1,le=1000)):
-    db.init_schema();return latest_canonical_bets(db,limit)
+    return latest_canonical_bets(db,limit)
 
 @app.get('/api/execution-bets')
 def execution_bets(limit:int=Query(100,ge=1,le=1000)):
-    db.init_schema();return latest_execution_bets(db,limit)
+    return latest_execution_bets(db,limit)
 
 @app.get('/api/execution/evaluations')
 def execution_evaluations(limit:int=Query(100,ge=1,le=1000)):
-    db.init_schema();return db.fetchall("SELECT * FROM execution_evaluations ORDER BY id DESC LIMIT ?",(limit,))
+    return db.fetchall("SELECT * FROM execution_evaluations ORDER BY id DESC LIMIT ?",(limit,))
 
 @app.get('/api/execution/scoreboard')
 def execution_scoreboard_api():
-    db.init_schema();return execution_scoreboard(db)
+    return execution_scoreboard(db)
 
 @app.get('/api/multiples/scoreboard')
 def multiples_scoreboard_api():
-    db.init_schema();return multiples_scoreboard(db)
+    return multiples_scoreboard(db)
 
 @app.get('/api/multiples/bets')
 def multiples_bets_api(
     limit:int=Query(100,ge=1,le=1000),
     include_legacy:bool=Query(False),
 ):
-    db.init_schema()
+    
     return latest_multiple_shadows(db,limit,include_legacy=include_legacy)
 
 @app.get('/api/manual-systems/status')
 def manual_systems_status_api():
-    db.init_schema()
+    
     return {
         "enabled":settings.manual_systems_enabled,
         "placeable_bookmaker_keys":settings.manual_systems_placeable_bookmaker_keys,
@@ -567,22 +567,22 @@ def manual_systems_cards_api(
     limit:int=Query(100,ge=1,le=1000),
     manual_only:bool=Query(False),
 ):
-    db.init_schema()
+    
     return latest_manual_system_cards(db,limit,manual_only=manual_only)
 
 @app.get('/api/cohort-systems/status')
 def cohort_systems_status_api():
-    db.init_schema()
+    
     return cohort_systems_scoreboard(db)
 
 @app.get('/api/cohort-systems/cards')
 def cohort_systems_cards_api(limit:int=Query(100,ge=1,le=1000)):
-    db.init_schema()
+    
     return latest_cohort_system_cards(db,limit)
 
 @app.get('/api/tennis/status')
 def tennis_status_api():
-    db.init_schema()
+    
     return {
         "enabled":settings.tennis_shadow_enabled,
         "market":settings.tennis_market,
@@ -595,25 +595,25 @@ def tennis_status_api():
 
 @app.get('/api/tennis/bets')
 def tennis_bets_api(limit:int=Query(100,ge=1,le=1000)):
-    db.init_schema();return latest_tennis_bets(db,limit)
+    return latest_tennis_bets(db,limit)
 
 @app.get('/api/tennis/evaluations')
 def tennis_evaluations_api(limit:int=Query(100,ge=1,le=1000)):
-    db.init_schema()
+    
     return db.fetchall(
         "SELECT * FROM tennis_execution_evaluations ORDER BY id DESC LIMIT ?",(limit,)
     )
 
 @app.get('/api/tennis/tournaments')
 def tennis_tournaments_api():
-    db.init_schema()
+    
     return db.fetchall(
         "SELECT * FROM tennis_tournament_state ORDER BY active DESC,tour,title"
     )
 
 @app.get('/api/multisport/status')
 def multisport_status_api():
-    db.init_schema()
+    
     return {
         "enabled":settings.multisport_shadow_enabled,
         "market":settings.multisport_market,
@@ -629,11 +629,11 @@ def multisport_status_api():
 
 @app.get('/api/multisport/bets')
 def multisport_bets_api(limit:int=Query(100,ge=1,le=1000)):
-    db.init_schema();return latest_multisport_bets(db,limit)
+    return latest_multisport_bets(db,limit)
 
 @app.get('/api/multisport/evaluations')
 def multisport_evaluations_api(limit:int=Query(100,ge=1,le=1000)):
-    db.init_schema()
+    
     return db.fetchall(
         "SELECT * FROM multisport_execution_evaluations ORDER BY id DESC LIMIT ?",
         (limit,),
@@ -641,18 +641,18 @@ def multisport_evaluations_api(limit:int=Query(100,ge=1,le=1000)):
 
 @app.get('/api/multisport/leagues')
 def multisport_leagues_api():
-    db.init_schema()
+    
     return db.fetchall(
         "SELECT * FROM multisport_league_state ORDER BY active DESC,sport_family,title"
     )
 
 @app.get('/api/multisport/funnel')
 def multisport_funnel_api():
-    db.init_schema();return multisport_funnel(db)
+    return multisport_funnel(db)
 
 @app.get('/api/multisport-lines/status')
 def multisport_lines_status_api():
-    db.init_schema();return {
+    return {
         'enabled':settings.multisport_lines_enabled,
         'markets':settings.multisport_lines_markets,
         'min_consensus_books':settings.multisport_lines_min_consensus_books,
@@ -664,15 +664,15 @@ def multisport_lines_status_api():
 
 @app.get('/api/multisport-lines/bets')
 def multisport_lines_bets_api(limit:int=Query(100,ge=1,le=1000)):
-    db.init_schema();return latest_line_bets(db,limit)
+    return latest_line_bets(db,limit)
 
 @app.get('/api/multisport-lines/evaluations')
 def multisport_lines_evaluations_api(limit:int=Query(100,ge=1,le=1000)):
-    db.init_schema();return db.fetchall('SELECT * FROM multisport_line_evaluations ORDER BY id DESC LIMIT ?',(limit,))
+    return db.fetchall('SELECT * FROM multisport_line_evaluations ORDER BY id DESC LIMIT ?',(limit,))
 
 @app.get('/api/predictive-football/status')
 def predictive_football_status_api():
-    db.init_schema()
+    
     startup_run=db.fetchone(
         """SELECT started_at,finished_at,ok,detail
            FROM collector_runs
@@ -699,15 +699,15 @@ def predictive_football_status_api():
 
 @app.get('/api/predictive-football/bets')
 def predictive_football_bets_api(limit:int=Query(100,ge=1,le=1000)):
-    db.init_schema();return latest_predictive_bets(db,limit)
+    return latest_predictive_bets(db,limit)
 
 @app.get('/api/predictive-football/market-bets')
 def predictive_football_market_bets_api(limit:int=Query(100,ge=1,le=1000)):
-    db.init_schema();return latest_predictive_market_bets(db,limit)
+    return latest_predictive_market_bets(db,limit)
 
 @app.get('/api/predictive-football/market-predictions')
 def predictive_football_market_predictions_api(limit:int=Query(100,ge=1,le=1000)):
-    db.init_schema()
+    
     return db.fetchall(
         "SELECT * FROM football_predictive_market_predictions ORDER BY id DESC LIMIT ?",
         (limit,),
@@ -715,7 +715,7 @@ def predictive_football_market_predictions_api(limit:int=Query(100,ge=1,le=1000)
 
 @app.get('/api/predictive-football/market-evaluations')
 def predictive_football_market_evaluations_api(limit:int=Query(100,ge=1,le=1000)):
-    db.init_schema()
+    
     return db.fetchall(
         "SELECT * FROM football_predictive_market_evaluations ORDER BY id DESC LIMIT ?",
         (limit,),
@@ -723,7 +723,7 @@ def predictive_football_market_evaluations_api(limit:int=Query(100,ge=1,le=1000)
 
 @app.get('/api/predictive-football/predictions')
 def predictive_football_predictions_api(limit:int=Query(100,ge=1,le=1000)):
-    db.init_schema()
+    
     return db.fetchall(
         "SELECT * FROM football_predictive_predictions ORDER BY id DESC LIMIT ?",
         (limit,),
@@ -731,7 +731,7 @@ def predictive_football_predictions_api(limit:int=Query(100,ge=1,le=1000)):
 
 @app.get('/api/predictive-football/evaluations')
 def predictive_football_evaluations_api(limit:int=Query(100,ge=1,le=1000)):
-    db.init_schema()
+    
     return db.fetchall(
         "SELECT * FROM football_predictive_evaluations ORDER BY id DESC LIMIT ?",
         (limit,),
@@ -739,7 +739,7 @@ def predictive_football_evaluations_api(limit:int=Query(100,ge=1,le=1000)):
 
 @app.get('/api/predictive-football-pred2/status')
 def predictive_football_pred2_status_api():
-    db.init_schema()
+    
     startup_run=db.fetchone(
         """SELECT started_at,finished_at,ok,detail
            FROM collector_runs
@@ -767,27 +767,27 @@ def predictive_football_pred2_status_api():
 
 @app.get('/api/predictive-football-pred2/bets')
 def predictive_football_pred2_bets_api(limit:int=Query(100,ge=1,le=1000)):
-    db.init_schema();return latest_predictive2_bets(db,limit)
+    return latest_predictive2_bets(db,limit)
 
 @app.get('/api/predictive-football-pred2/market-bets')
 def predictive_football_pred2_market_bets_api(limit:int=Query(100,ge=1,le=1000)):
-    db.init_schema();return latest_predictive2_market_bets(db,limit)
+    return latest_predictive2_market_bets(db,limit)
 
 @app.get('/api/predictive-football-pred2/predictions')
 def predictive_football_pred2_predictions_api(limit:int=Query(100,ge=1,le=1000)):
-    db.init_schema();return db.fetchall(
+    return db.fetchall(
         "SELECT * FROM football_predictive2_predictions ORDER BY id DESC LIMIT ?",(limit,)
     )
 
 @app.get('/api/predictive-football-pred2/market-predictions')
 def predictive_football_pred2_market_predictions_api(limit:int=Query(100,ge=1,le=1000)):
-    db.init_schema();return db.fetchall(
+    return db.fetchall(
         "SELECT * FROM football_predictive2_market_predictions ORDER BY id DESC LIMIT ?",(limit,)
     )
 
 @app.get('/api/predictive-football-pred3/status')
 def predictive_football_pred3_status_api():
-    db.init_schema()
+    
     startup_run=db.fetchone(
         """SELECT started_at,finished_at,ok,detail FROM collector_runs
            WHERE run_type='PREDICTIVE_FOOTBALL_PRED3_STARTUP'
@@ -823,25 +823,25 @@ def predictive_football_pred3_status_api():
 
 @app.get('/api/predictive-football-pred3/bets')
 def predictive_football_pred3_bets_api(limit:int=Query(100,ge=1,le=1000)):
-    db.init_schema();return latest_predictive3_bets(db,limit)
+    return latest_predictive3_bets(db,limit)
 
 @app.get('/api/predictive-football-pred3/market-bets')
 def predictive_football_pred3_market_bets_api(limit:int=Query(100,ge=1,le=1000)):
-    db.init_schema();return latest_predictive3_market_bets(db,limit)
+    return latest_predictive3_market_bets(db,limit)
 
 @app.get('/api/predictive-football-pred3/predictions')
 def predictive_football_pred3_predictions_api(limit:int=Query(100,ge=1,le=1000)):
-    db.init_schema();return db.fetchall(
+    return db.fetchall(
         "SELECT * FROM football_predictive3_predictions ORDER BY id DESC LIMIT ?",(limit,)
     )
 
 @app.post('/admin/predictive-football-pred3/run')
 def admin_predictive_football_pred3_run(x_admin_secret:Optional[str]=Header(None)):
-    _admin(x_admin_secret);db.init_schema();return predictive_football_pred3_engine.one_cycle()
+    _admin(x_admin_secret);return predictive_football_pred3_engine.one_cycle()
 
 @app.get('/api/predictive-football-pred4/status')
 def predictive_football_pred4_status_api():
-    db.init_schema()
+    
     latest=db.fetchone(
         "SELECT MAX(played_at) AS latest FROM football_pxg_current_matches WHERE home_proxy_xg IS NOT NULL AND away_proxy_xg IS NOT NULL"
     ) or {}
@@ -864,25 +864,25 @@ def predictive_football_pred4_status_api():
 
 @app.get('/api/predictive-football-pred4/bets')
 def predictive_football_pred4_bets_api(limit:int=Query(100,ge=1,le=1000)):
-    db.init_schema();return latest_predictive4_bets(db,limit)
+    return latest_predictive4_bets(db,limit)
 
 @app.get('/api/predictive-football-pred4/market-bets')
 def predictive_football_pred4_market_bets_api(limit:int=Query(100,ge=1,le=1000)):
-    db.init_schema();return latest_predictive4_market_bets(db,limit)
+    return latest_predictive4_market_bets(db,limit)
 
 @app.get('/api/predictive-football-pred4/predictions')
 def predictive_football_pred4_predictions_api(limit:int=Query(100,ge=1,le=1000)):
-    db.init_schema();return db.fetchall(
+    return db.fetchall(
         "SELECT * FROM football_predictive4_predictions ORDER BY id DESC LIMIT ?",(limit,)
     )
 
 @app.post('/admin/predictive-football-pred4/run')
 def admin_predictive_football_pred4_run(x_admin_secret:Optional[str]=Header(None)):
-    _admin(x_admin_secret);db.init_schema();return predictive_football_pred4_engine.one_cycle()
+    _admin(x_admin_secret);return predictive_football_pred4_engine.one_cycle()
 
 @app.get('/api/predictive-football/compare')
 def predictive_football_compare_api():
-    db.init_schema()
+    
     p1=predictive_scoreboard(db);p2=predictive2_scoreboard(db);p3=predictive3_scoreboard(db);p4=predictive4_scoreboard(db)
     paired=(db.fetchone(
         """SELECT COUNT(*) AS n FROM football_predictive_predictions p1
@@ -908,7 +908,7 @@ def predictive_football_compare_api():
 
 @app.get('/api/predictive-football/historical-validation')
 def predictive_football_historical_validation_api(limit:int=Query(100,ge=1,le=1000)):
-    db.init_schema()
+    
     return {
         "enabled":settings.predictive_football_historical_enabled,
         "settings":{
@@ -925,60 +925,60 @@ def predictive_football_historical_validation_api(limit:int=Query(100,ge=1,le=10
 
 @app.get('/api/predictive-football/historical-bets')
 def predictive_football_historical_bets_api(limit:int=Query(200,ge=1,le=2000)):
-    db.init_schema();return db.fetchall(
+    return db.fetchall(
         "SELECT * FROM football_predictive_historical_bets ORDER BY id DESC LIMIT ?",(limit,)
     )
 
 @app.post('/admin/predictive-football/historical-run')
 def admin_predictive_football_historical_run(x_admin_secret:Optional[str]=Header(None)):
-    _admin(x_admin_secret);db.init_schema();return predictive_historical_engine.one_cycle(force=True)
+    _admin(x_admin_secret);return predictive_historical_engine.one_cycle(force=True)
 
 @app.get('/api/research/instrumentation')
 def research_instrumentation_api():
-    db.init_schema()
+    
     return instrumentation_report(db)
 
 @app.get('/api/research/intelligence')
 def research_intelligence_api():
-    db.init_schema();return research_intelligence(db)
+    return research_intelligence(db)
 
 @app.get('/api/research/weekly')
 def research_weekly_api(limit:int=Query(12,ge=1,le=104)):
-    db.init_schema();upsert_weekly_report(db);return latest_weekly_reports(db,limit)
+    upsert_weekly_report(db);return latest_weekly_reports(db,limit)
 
 @app.get('/api/research/canonical-scoreboard')
 def canonical_research_scoreboard():
-    db.init_schema();return canonical_scoreboard(db)
+    return canonical_scoreboard(db)
 
 @app.get('/api/research/scoreboard')
-def research_scoreboard(): db.init_schema();return strategy_scoreboard(db)
+def research_scoreboard(): return strategy_scoreboard(db)
 
 @app.get('/api/research/rejections')
-def research_rejections(): db.init_schema();return rejection_summary(db)
+def research_rejections(): return rejection_summary(db)
 
 @app.get('/api/research/evaluations')
-def research_evaluations(limit:int=Query(100,ge=1,le=1000)): db.init_schema();return latest_evaluations(db,limit)
+def research_evaluations(limit:int=Query(100,ge=1,le=1000)): return latest_evaluations(db,limit)
 
 @app.get('/api/events/{event_id}/market')
-def event_market(event_id:str): db.init_schema();return event_market_snapshot(db,event_id)
+def event_market(event_id:str): return event_market_snapshot(db,event_id)
 
 @app.get('/api/events/{event_id}/history')
-def event_history(event_id:str,limit:int=Query(2000,ge=1,le=10000)): db.init_schema();return event_price_history(db,event_id,limit)
+def event_history(event_id:str,limit:int=Query(2000,ge=1,le=10000)): return event_price_history(db,event_id,limit)
 
 @app.get('/api/signals/{signal_id}/price-history')
-def signal_history(signal_id:int): db.init_schema();return signal_price_history(db,signal_id)
+def signal_history(signal_id:int): return signal_price_history(db,signal_id)
 
 @app.get('/api/collector-runs')
 def collector_runs(limit:int=Query(100,ge=1,le=1000)):
-    db.init_schema();return db.fetchall("SELECT * FROM collector_runs ORDER BY id DESC LIMIT ?",(limit,))
+    return db.fetchall("SELECT * FROM collector_runs ORDER BY id DESC LIMIT ?",(limit,))
 
 @app.post('/admin/discover')
 def admin_discover(x_admin_secret:Optional[str]=Header(None)):
-    _admin(x_admin_secret);db.init_schema();return {"events_seen":collector.discover()}
+    _admin(x_admin_secret);return {"events_seen":collector.discover()}
 
 @app.post('/admin/poll')
 def admin_poll(x_admin_secret:Optional[str]=Header(None)):
-    _admin(x_admin_secret);db.init_schema();result=collector.poll_one_cycle()
+    _admin(x_admin_secret);result=collector.poll_one_cycle()
     if result.get('polled') and result.get('mode') == 'breadth':
         for eid in result.get('event_ids',[]):
             write_consensus_and_value_signals(db,eid,min_books=settings.min_consensus_books,min_edge_pct=settings.min_edge_pct)
@@ -1005,31 +1005,31 @@ def admin_poll(x_admin_secret:Optional[str]=Header(None)):
 
 @app.post('/admin/multisport-lines/run')
 def admin_multisport_lines_run(x_admin_secret:Optional[str]=Header(None)):
-    _admin(x_admin_secret);db.init_schema();return multisport_lines_engine.one_cycle()
+    _admin(x_admin_secret);return multisport_lines_engine.one_cycle()
 
 @app.post('/admin/multisport/run')
 def admin_multisport_run(x_admin_secret:Optional[str]=Header(None)):
-    _admin(x_admin_secret);db.init_schema()
+    _admin(x_admin_secret);
     return multisport_engine.one_cycle()
 
 @app.post('/admin/predictive-football/run')
 def admin_predictive_football_run(x_admin_secret:Optional[str]=Header(None)):
-    _admin(x_admin_secret);db.init_schema()
+    _admin(x_admin_secret);
     return predictive_football_engine.one_cycle()
 
 @app.post('/admin/predictive-football-pred2/run')
 def admin_predictive_football_pred2_run(x_admin_secret:Optional[str]=Header(None)):
-    _admin(x_admin_secret);db.init_schema()
+    _admin(x_admin_secret);
     return predictive_football_pred2_engine.one_cycle()
 
 @app.post('/admin/tennis/run')
 def admin_tennis_run(x_admin_secret:Optional[str]=Header(None)):
-    _admin(x_admin_secret);db.init_schema()
+    _admin(x_admin_secret);
     return tennis_engine.one_cycle()
 
 @app.post('/admin/multiples/run')
 def admin_multiples_run(x_admin_secret:Optional[str]=Header(None)):
-    _admin(x_admin_secret);db.init_schema()
+    _admin(x_admin_secret);
     return {
         "created":generate_multiple_shadows(db,allowed_bookmaker_keys=settings.multiples_api_bookmaker_keys),
         "clv_finalized":finalize_multiple_clv(db),
@@ -1039,14 +1039,14 @@ def admin_multiples_run(x_admin_secret:Optional[str]=Header(None)):
 
 @app.post('/admin/manual-systems/run')
 def admin_manual_systems_run(x_admin_secret:Optional[str]=Header(None)):
-    _admin(x_admin_secret);db.init_schema()
+    _admin(x_admin_secret);
     out=manual_systems_engine.one_cycle()
     out['scoreboard']=manual_systems_scoreboard(db)
     return out
 
 @app.post('/admin/close-lines')
 def admin_close_lines(x_admin_secret:Optional[str]=Header(None)):
-    _admin(x_admin_secret);db.init_schema()
+    _admin(x_admin_secret);
     out={"finalized":finalize_closing_lines(db),"price_observations":track_signal_prices(db)}
     out["canonical_synced"]=sync_canonical_bets(db)
     if settings.execution_shadow_enabled:
@@ -1063,7 +1063,7 @@ def admin_close_lines(x_admin_secret:Optional[str]=Header(None)):
 
 @app.get('/api/results')
 def results(limit:int=Query(100,ge=1,le=1000)):
-    db.init_schema()
+    
     return db.fetchall("""
         SELECT r.*,e.league,e.home_team,e.away_team,e.commence_time
         FROM event_results r JOIN events e ON e.event_id=r.event_id
@@ -1072,7 +1072,7 @@ def results(limit:int=Query(100,ge=1,le=1000)):
 
 @app.post('/admin/results')
 def admin_results(x_admin_secret:Optional[str]=Header(None)):
-    _admin(x_admin_secret);db.init_schema()
+    _admin(x_admin_secret);
     finalized=finalize_closing_lines(db)
     out=result_collector.collect()
     out["closing_finalized"]=finalized
@@ -1089,14 +1089,14 @@ def admin_results(x_admin_secret:Optional[str]=Header(None)):
 
 @app.post('/admin/settle')
 def admin_settle(signal_id:int,result:str,x_admin_secret:Optional[str]=Header(None)):
-    _admin(x_admin_secret);db.init_schema()
+    _admin(x_admin_secret);
     try:return settle_signal(db,signal_id,result)
     except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc))
 
 
 @app.get('/export/research.zip')
 def export_research_zip():
-    db.init_schema()
+    
     payload, filename = build_research_export(db, settings, VERSION)
     return Response(
         content=payload,
@@ -1113,7 +1113,7 @@ body{background:#0d1117;color:#e6edf3;font-family:Arial,sans-serif;margin:0;padd
 
 @app.get('/',response_class=HTMLResponse)
 def dashboard():
-    db.init_schema();s=status();q=s['quota'];execution=s['execution_scoreboard'];funnel=s['execution_funnel'];score=s['scoreboard'];multiples=s['multiples_shadow'];manual_systems=s['manual_systems_shadow'];tennis=s['tennis_shadow'];multisport=s['multisport_shadow'];multisport_lines=s['multisport_lines_shadow'];predictive=s['predictive_football'];predictive2=s['predictive_football_pred2'];predictive3=s['predictive_football_pred3'];predictive4=s['predictive_football_pred4'];pxg=s['proxy_xg'];outcome_edge=s['outcome_edge'];cohort_systems=s['cohort_systems_shadow'];predictive_historical=s['predictive_football_historical'];meta_edge=s['meta_edge'];meta_edge_model=s['meta_edge_model']
+    s=status();q=s['quota'];execution=s['execution_scoreboard'];funnel=s['execution_funnel'];score=s['scoreboard'];multiples=s['multiples_shadow'];manual_systems=s['manual_systems_shadow'];tennis=s['tennis_shadow'];multisport=s['multisport_shadow'];multisport_lines=s['multisport_lines_shadow'];predictive=s['predictive_football'];predictive2=s['predictive_football_pred2'];predictive3=s['predictive_football_pred3'];predictive4=s['predictive_football_pred4'];pxg=s['proxy_xg'];outcome_edge=s['outcome_edge'];cohort_systems=s['cohort_systems_shadow'];predictive_historical=s['predictive_football_historical'];meta_edge=s['meta_edge'];meta_edge_model=s['meta_edge_model']
     exec_bets=latest_execution_bets(db,40)
     recent_multiples=latest_multiple_shadows(db,8)
     recent_manual_systems=latest_manual_system_cards(db,8,manual_only=True)
@@ -1325,7 +1325,7 @@ def dashboard():
 
 @app.get('/meta-edge',response_class=HTMLResponse)
 def meta_edge_page():
-    db.init_schema()
+    
     score=meta_edge_scoreboard(db,settings.meta_edge_min_clean_labels)
     model=meta_model_status(db)
     seg=meta_edge_segments(db)
@@ -1387,7 +1387,7 @@ def meta_edge_page():
 
 @app.get('/predictive-football',response_class=HTMLResponse)
 def predictive_football_page():
-    db.init_schema()
+    
     score=predictive_scoreboard(db)
     bootstrap=predictive_bootstrap_status(db)
     startup_run=db.fetchone(
@@ -1491,7 +1491,7 @@ def predictive_football_page():
 
 @app.get('/proxy-xg',response_class=HTMLResponse)
 def proxy_xg_page():
-    db.init_schema(); st=proxy_xg_status(db,settings); model=st.get('latest_model') or {}; cur=st.get('current_matches') or {}; man=st.get('statsbomb_manifest') or {}; api_man=st.get('api_manifest') or {}; usage=st.get('today_api_usage') or {}
+     st=proxy_xg_status(db,settings); model=st.get('latest_model') or {}; cur=st.get('current_matches') or {}; man=st.get('statsbomb_manifest') or {}; api_man=st.get('api_manifest') or {}; usage=st.get('today_api_usage') or {}
     return HTMLResponse(f"""<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>PXG1</title><style>{BASE_STYLE}</style></head><body>
     <a href='/'>← Betting Lab</a> · <a href='/predictive-football-pred3'>PRED3</a> · <a href='/outcome-edge'>Outcome Edge</a>
     <h1>Proxy xG <span class='pill'>PXG1 · RESEARCH ONLY</span></h1>
@@ -1509,7 +1509,7 @@ def proxy_xg_page():
 
 @app.get('/outcome-edge',response_class=HTMLResponse)
 def outcome_edge_page():
-    db.init_schema(); report=outcome_edge_report(db); overall=report['overall']; focus=report['focus_4_to_7_49']
+     report=outcome_edge_report(db); overall=report['overall']; focus=report['focus_4_to_7_49']
     rows=''.join(
         f"<tr><td>{escape(str(x['odds_band']))}</td><td>{x['selections']}</td><td>{x['wins']}</td><td>{_fmt(x['hit_rate_pct'])}%</td><td>{_fmt(x['mean_implied_probability_pct'])}%</td><td>{_fmt(x['hit_minus_implied_pp'])}pp</td><td>{_fmt(x['flat_stake_roi_pct'])}%</td><td>{_fmt(x['avg_ab_clv_pct'])}%</td></tr>"
         for x in report['odds_bands']
@@ -1533,7 +1533,7 @@ def outcome_edge_page():
 
 @app.get('/predictive-football-pred4',response_class=HTMLResponse)
 def predictive_football_pred4_page():
-    db.init_schema(); score=predictive4_scoreboard(db); status4=predictive_football_pred4_status_api()
+     score=predictive4_scoreboard(db); status4=predictive_football_pred4_status_api()
     bets=latest_predictive4_market_bets(db,60)+latest_predictive4_bets(db,60)
     preds=db.fetchall("SELECT * FROM football_predictive4_predictions ORDER BY id DESC LIMIT 60")
     brows=''.join(
@@ -1562,7 +1562,7 @@ def predictive_football_pred4_page():
 
 @app.get('/predictive-football-pred3',response_class=HTMLResponse)
 def predictive_football_pred3_page():
-    db.init_schema(); score=predictive3_scoreboard(db); status3=predictive_football_pred3_status_api()
+     score=predictive3_scoreboard(db); status3=predictive_football_pred3_status_api()
     bets=latest_predictive3_bets(db,60); preds=db.fetchall(
         "SELECT * FROM football_predictive3_predictions ORDER BY id DESC LIMIT 60"
     )
@@ -1594,7 +1594,7 @@ def predictive_football_pred3_page():
 
 @app.get('/predictive-football-pred2',response_class=HTMLResponse)
 def predictive_football_pred2_page():
-    db.init_schema()
+    
     score=predictive2_scoreboard(db)
     score1=predictive_scoreboard(db)
     h2h_bets=latest_predictive2_bets(db,100)
@@ -1681,7 +1681,7 @@ def predictive_football_pred2_page():
 
 @app.get('/multisport-lines',response_class=HTMLResponse)
 def multisport_lines_page():
-    db.init_schema();score=line_scoreboard(db);segments=line_segments(db);funnel_data=line_funnel(db);bets=latest_line_bets(db,120)
+    score=line_scoreboard(db);segments=line_segments(db);funnel_data=line_funnel(db);bets=latest_line_bets(db,120)
     cards=[('Events',score['events']),('Line shadows',score['bets']),('Settled',score['settled']),('A/B line closes',score['line_close_samples']),('Avg line CLV pts',_fmt(score['avg_line_clv_points'])),('Positive line move',f"{_fmt(score['positive_line_move_pct'])}%"),('Same-line price CLV',score['price_clv_samples']),('Avg price CLV',f"{_fmt(score['avg_price_clv_pct'])}%"),('Net P&L u',_fmt(score['net_pnl_units'])),('Net ROI',f"{_fmt(score['net_roi_pct'])}%"),('Shared credits today',f"{multisport_lines_engine.quota.today_paid_cost()}/{settings.multisport_daily_paid_credit_budget}")]
     card_html=''.join(f"<div class='card'><div class='label'>{escape(str(k))}</div><div class='value'>{escape(str(v))}</div></div>" for k,v in cards)
     brows=''.join(f"<tr><td>{x['id']}</td><td>{escape(x['sport_family'])}</td><td>{escape(x['league_title'])}</td><td>{escape(x['market_key'])}</td><td>{escape(x['home_team'])} v {escape(x['away_team'])}</td><td>{escape(x['selection'])}</td><td>{_fmt(x['line_point'])}</td><td>{escape(x['bookmaker_title'])}</td><td>{_fmt(x['offered_odds'])}</td><td>{_fmt(x['edge_pct'])}%</td><td>{_fmt(x.get('latest_line_move_points'))}</td><td>{_fmt(x.get('line_clv_points'))}</td><td>{escape(str(x.get('close_quality') or 'PENDING'))}</td><td>{escape(str(x.get('result') or 'PENDING'))}</td></tr>" for x in bets) or "<tr><td colspan='14'>No line shadows yet.</td></tr>"
@@ -1693,7 +1693,7 @@ def multisport_lines_page():
 
 @app.get('/multisport',response_class=HTMLResponse)
 def multisport_page():
-    db.init_schema()
+    
     score=multisport_scoreboard(db);segments=multisport_segments(db);moneyline_funnel=multisport_funnel(db)
     bets=latest_multisport_bets(db,100)
     leagues=db.fetchall(
@@ -1769,7 +1769,7 @@ def multisport_page():
 
 @app.get('/tennis',response_class=HTMLResponse)
 def tennis_page():
-    db.init_schema()
+    
     score=tennis_scoreboard(db);segments=tennis_segments(db)
     bets=latest_tennis_bets(db,100)
     tournaments=db.fetchall(
@@ -1835,7 +1835,7 @@ def tennis_page():
 
 @app.get('/multiples',response_class=HTMLResponse)
 def multiples_page():
-    db.init_schema()
+    
     score=multiples_scoreboard(db)
     recent=latest_multiple_shadows(db,100)
 
@@ -1890,7 +1890,7 @@ def multiples_page():
 
 @app.get('/manual-systems',response_class=HTMLResponse)
 def manual_systems_page():
-    db.init_schema()
+    
     score=manual_systems_scoreboard(db)
     recent=latest_manual_system_cards(db,150)
     cards=[
@@ -1945,7 +1945,7 @@ def manual_systems_page():
 
 @app.get('/cohort-systems',response_class=HTMLResponse)
 def cohort_systems_page():
-    db.init_schema()
+    
     score=cohort_systems_scoreboard(db)
     recent=latest_cohort_system_cards(db,150)
     cards=[
@@ -1987,7 +1987,7 @@ def cohort_systems_page():
 
 @app.get('/research',response_class=HTMLResponse)
 def research_page():
-    db.init_schema()
+    
     upsert_weekly_report(db)
     intel=research_intelligence(db)
     overall=intel['overall'];status=intel['sample_status'];rolling=intel['rolling_7d']
@@ -2101,7 +2101,7 @@ def research_page():
 
 @app.get('/event/{event_id}',response_class=HTMLResponse)
 def event_page(event_id:str):
-    db.init_schema();snap=event_market_snapshot(db,event_id);event=snap.get('event')
+    snap=event_market_snapshot(db,event_id);event=snap.get('event')
     if not event: raise HTTPException(status_code=404,detail='event not found')
     quotes=snap['quotes'];cons=db.fetchall("""SELECT * FROM consensus_snapshots WHERE event_id=? AND captured_at=(SELECT MAX(captured_at) FROM consensus_snapshots WHERE event_id=?) ORDER BY market_key,point,selection""",(event_id,event_id))
     sigs=db.fetchall("SELECT * FROM signals WHERE event_id=? ORDER BY id DESC",(event_id,));evals=db.fetchall("SELECT * FROM candidate_evaluations WHERE event_id=? ORDER BY id DESC LIMIT 100",(event_id,))
@@ -2123,7 +2123,7 @@ def event_page(event_id:str):
 
 @app.get('/signal/{signal_id}',response_class=HTMLResponse)
 def signal_page(signal_id:int):
-    db.init_schema();sig=db.fetchone("""SELECT s.*,e.home_team,e.away_team,e.league,e.commence_time FROM signals s JOIN events e ON e.event_id=s.event_id WHERE s.id=?""",(signal_id,))
+    sig=db.fetchone("""SELECT s.*,e.home_team,e.away_team,e.league,e.commence_time FROM signals s JOIN events e ON e.event_id=s.event_id WHERE s.id=?""",(signal_id,))
     if not sig: raise HTTPException(status_code=404,detail='signal not found')
     hist=signal_price_history(db,signal_id)
     rows=''.join(f"<tr><td>{escape(x['source_snapshot_at'])}</td><td>{_fmt(x['price'])}</td><td>{_fmt(x['move_vs_entry_pct'])}%</td></tr>" for x in hist) or "<tr><td colspan='3'>No follow-up observation yet.</td></tr>"
