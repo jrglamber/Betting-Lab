@@ -1533,7 +1533,7 @@ def outcome_edge_page():
 
 @app.get('/predictive-football-pred4',response_class=HTMLResponse)
 def predictive_football_pred4_page():
-     score=predictive4_scoreboard(db); status4=predictive_football_pred4_status_api()
+    score=predictive4_scoreboard(db); status4=predictive_football_pred4_status_api()
     bets=latest_predictive4_market_bets(db,60)+latest_predictive4_bets(db,60)
     preds=db.fetchall("SELECT * FROM football_predictive4_predictions ORDER BY id DESC LIMIT 60")
     brows=''.join(
@@ -1562,7 +1562,7 @@ def predictive_football_pred4_page():
 
 @app.get('/predictive-football-pred3',response_class=HTMLResponse)
 def predictive_football_pred3_page():
-     score=predictive3_scoreboard(db); status3=predictive_football_pred3_status_api()
+    score=predictive3_scoreboard(db); status3=predictive_football_pred3_status_api()
     bets=latest_predictive3_bets(db,60); preds=db.fetchall(
         "SELECT * FROM football_predictive3_predictions ORDER BY id DESC LIMIT 60"
     )
