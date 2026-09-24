@@ -1509,7 +1509,7 @@ def proxy_xg_page():
 
 @app.get('/outcome-edge',response_class=HTMLResponse)
 def outcome_edge_page():
-     report=outcome_edge_report(db); overall=report['overall']; focus=report['focus_4_to_7_49']
+    report=outcome_edge_report(db); overall=report['overall']; focus=report['focus_4_to_7_49']
     rows=''.join(
         f"<tr><td>{escape(str(x['odds_band']))}</td><td>{x['selections']}</td><td>{x['wins']}</td><td>{_fmt(x['hit_rate_pct'])}%</td><td>{_fmt(x['mean_implied_probability_pct'])}%</td><td>{_fmt(x['hit_minus_implied_pp'])}pp</td><td>{_fmt(x['flat_stake_roi_pct'])}%</td><td>{_fmt(x['avg_ab_clv_pct'])}%</td></tr>"
         for x in report['odds_bands']
