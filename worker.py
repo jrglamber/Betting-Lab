@@ -436,6 +436,8 @@ class Worker:
         return result
 
     def _run(self):
+        # Operational heartbeat only: proves the background worker actually started.
+        print("WORKER_HEARTBEAT started", flush=True)
         # Recovery/backfill work is intentionally off the FastAPI readiness path.
         # Run it once in the worker so deploys become healthy quickly without
         # losing historical repair coverage.
@@ -460,6 +462,7 @@ class Worker:
                     self.collector.discover()
                     last_discovery = now
                 self.one_cycle()
+                print("WORKER_HEARTBEAT cycle_complete", flush=True)
             except Exception:
                 # Worker failures are audited inside collector calls where possible.
                 pass
