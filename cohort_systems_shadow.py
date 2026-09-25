@@ -576,7 +576,11 @@ def _metrics(rows: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
 
 
 def cohort_systems_scoreboard(db: Database) -> Dict[str, Any]:
-    state = ensure_cohort_system_state(db)
+    # State is created/updated by startup + worker maintenance. Scoreboard reads
+    # must not mutate forward-test metadata while rendering a page/API response.
+    state = db.fetchone("SELECT * FROM cohort_system_shadow_state WHERE singleton_id=1") or {
+        "started_at": None, "algorithm_version": ALGORITHM_VERSION,
+    }
     rows = db.fetchall("SELECT * FROM cohort_system_shadow_bets ORDER BY id")
     by_cohort: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     by_system: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
