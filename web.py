@@ -1705,7 +1705,7 @@ def high_payout_shadow_page():
     cards=[
         ('HP cards',len(recent)),('Open',len([x for x in recent if str(x.get('status'))=='OPEN'])),
         ('Manual-placeable',len([x for x in recent if int(x.get('manual_placeable') or 0)==1])),
-        ('Lanes','HP1 / HP2 / HP3'),('Structures','HP1: 2/3/4/Y/6/H · HP2/3: 2/3'),
+        ('Lanes','HP1 / HP2 / HP3'),('Structures','HP1: 2/3/4/Y/6/H · HP2/3: 2/3/Y/H'),
         ('Mode','FORWARD SHADOW'),
     ]
     card_html=''.join(f"<div class='card'><div class='label'>{escape(str(k))}</div><div class='value'>{escape(str(v))}</div></div>" for k,v in cards)
@@ -1728,7 +1728,7 @@ def high_payout_shadow_page():
     return HTMLResponse(f"""<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>High-Payout Shadow v{VERSION}</title><style>{BASE_STYLE}</style></head><body>
     <a href='/'>← Betting Lab</a><h1>High-Payout Shadow <span class='pill'>HP1 · FORWARD ONLY</span></h1>
     <div class='sub'>Three frozen forward lanes: HP1 1.50–3.00 compound · HP2 4.00–4.99 anomaly · HP3 5.00–7.49 control · research only</div>
-    <div class='panel'><strong>Frozen rules:</strong> HP1 uses 1.50–3.00 legs across Double/Treble/Fourfold/Yankee/Sixfold/Heinz. HP2 uses 4.00–4.99 legs as singles-control + Double/Treble systems. HP3 uses 5.00–7.49 with the same Double/Treble construction as a control. Different fixtures, deterministic ranking, same selections measured against equal-stake singles. No automatic bet placement.</div>
+    <div class='panel'><strong>Frozen rules:</strong> HP1 uses 1.50–3.00 legs across Double/Treble/Fourfold/Yankee/Sixfold/Heinz. HP2 uses 4.00–4.99 legs as singles-control + Double/Treble/Yankee/Heinz systems. HP3 uses 5.00–7.49 with the same structures as a control. Different fixtures, deterministic ranking, same selections measured against equal-stake singles. No automatic bet placement.</div>
     <div class='grid'>{card_html}</div>
     <div class='panel'><h2>Structure scoreboard</h2><table><thead><tr><th>Type</th><th>Cards</th><th>Settled</th><th>System P&L</th><th>System ROI</th><th>Singles ROI</th><th>A/B CLV</th></tr></thead><tbody>{seg_html}</tbody></table></div>
     <div class='panel'><h2>Candidate queue / latest cards</h2><table><thead><tr><th>ID</th><th>Formed</th><th>Lane</th><th>Type</th><th>Book</th><th>Mode</th><th>Selections</th><th>Exp ROI</th><th>CLV q</th><th>CLV</th><th>Status</th></tr></thead><tbody>{recent_html}</tbody></table></div>
