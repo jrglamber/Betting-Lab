@@ -26,10 +26,10 @@ from meta_edge import run_meta_edge_maintenance
 from meta_edge_model import run_meta_model_maintenance
 from cohort_systems_shadow import run_cohort_systems_maintenance
 from execution_shadow import execution_scoreboard
-from football_predictive import predictive_scoreboard
-from football_predictive_pred2 import predictive2_scoreboard
-from football_predictive_pred3 import predictive3_scoreboard
-from football_predictive_pred4 import predictive4_scoreboard
+from predictive_football import predictive_scoreboard
+from predictive_football_pred2 import predictive2_scoreboard
+from predictive_football_pred3 import predictive3_scoreboard
+from predictive_football_pred4 import predictive4_scoreboard
 
 
 def _compact_evidence(score):
