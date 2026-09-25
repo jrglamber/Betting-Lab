@@ -53,6 +53,7 @@ def record_phase3_evidence_snapshot(db):
     }
     detail = repr(payload)
     db.record_collector_run("PHASE3_EVIDENCE_SNAPSHOT", True, detail=detail)
+    print(f"PHASE3_EVIDENCE_SNAPSHOT {detail}", flush=True)
     return payload
 
 
