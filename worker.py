@@ -463,7 +463,9 @@ class Worker:
                     last_discovery = now
                 self.one_cycle()
                 print("WORKER_HEARTBEAT cycle_complete", flush=True)
-            except Exception:
-                # Worker failures are audited inside collector calls where possible.
-                pass
+            except Exception as exc:
+                # Never let an unexpected outer-loop failure become invisible.
+                # This is observability-only and does not alter research decisions.
+                self.db.record_collector_run("WORKER_CYCLE", False, detail=str(exc))
+                print(f"WORKER_CYCLE_ERROR {type(exc).__name__}: {exc}", flush=True)
             self._stop.wait(self.tick_seconds)
