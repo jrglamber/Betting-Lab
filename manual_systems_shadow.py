@@ -16,7 +16,10 @@ from results import grade_signal
 
 ALGORITHM_VERSION = "HP1_HIGH_PAYOUT_FORWARD"
 APP_VERSION = "0.16.1"
-SYSTEM_SPECS = {"DOUBLE": (2, 1), "TREBLE": (3, 1), "FOURFOLD": (4, 1), "YANKEE": (4, 11), "SIXFOLD": (6, 1), "HEINZ": (6, 57)}\nHIGH_PAYOUT_SYSTEMS = tuple(SYSTEM_SPECS)\nMIN_LEG_ODDS = 1.50\nMAX_LEG_ODDS = 3.00
+SYSTEM_SPECS = {"DOUBLE": (2, 1), "TREBLE": (3, 1), "FOURFOLD": (4, 1), "YANKEE": (4, 11), "SIXFOLD": (6, 1), "HEINZ": (6, 57)}
+HIGH_PAYOUT_SYSTEMS = tuple(SYSTEM_SPECS)
+MIN_LEG_ODDS = 1.50
+MAX_LEG_ODDS = 3.00
 DEFAULT_PLACEABLE_BOOKS = ("williamhill", "ladbrokes_uk")
 DEFAULT_COMPARISON_BOOKS = ("betfair_ex_uk", "matchbook", "smarkets")
 DEFAULT_COHORTS = ("MIXED_BEST", "CONSENSUS", "PRED1", "PRED2")
@@ -873,7 +876,10 @@ class ManualSystemsShadowEngine:
         )
         created = generate_manual_system_shadows(
             self.db, now=now,
-            # HP1 is a frozen construction experiment: always shadow the full\n            # double/treble/fourfold/Yankee/sixfold/Heinz family. Existing env\n            # settings cannot silently narrow the forward cohort.\n            system_types=HIGH_PAYOUT_SYSTEMS,
+            # HP1 is a frozen construction experiment: always shadow the full
+            # double/treble/fourfold/Yankee/sixfold/Heinz family. Existing env
+            # settings cannot silently narrow the forward cohort.
+            system_types=HIGH_PAYOUT_SYSTEMS,
             placeable_bookmaker_keys=placeable,
             comparison_bookmaker_keys=comparison,
             source_cohorts=tuple(getattr(self.settings, "manual_systems_source_cohorts", DEFAULT_COHORTS) or ()),
