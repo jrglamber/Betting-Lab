@@ -63,10 +63,11 @@ class Database:
         finally:
             conn.close()
 
-    def execute(self, sql: str, params: Sequence[Any] = ()) -> None:
+    def execute(self, sql: str, params: Sequence[Any] = ()) -> int:
         with self.connection() as conn:
             cur = conn.cursor()
             cur.execute(self._sql(sql), tuple(params))
+            return max(0, int(cur.rowcount or 0))
 
     def executemany(self, sql: str, rows: Iterable[Sequence[Any]]) -> None:
         with self.connection() as conn:
