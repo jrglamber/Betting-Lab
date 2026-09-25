@@ -169,7 +169,9 @@ def ensure_watch_cohorts(db: Database) -> List[Dict[str, Any]]:
 
 
 def watch_cohort_report(db: Database) -> List[Dict[str, Any]]:
-    registry = ensure_watch_cohorts(db)
+    # Cohorts are frozen by startup/maintenance. Reporting must never create a
+    # cohort, otherwise the act of viewing research can change its boundary.
+    registry = db.fetchall("SELECT * FROM outcome_edge_watch_cohorts ORDER BY cohort_key")
     out: List[Dict[str, Any]] = []
     for meta in registry:
         key = str(meta["cohort_key"])
