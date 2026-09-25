@@ -25,6 +25,7 @@ from instrumentation import run_measurement_maintenance
 from meta_edge import run_meta_edge_maintenance
 from meta_edge_model import run_meta_model_maintenance
 from cohort_systems_shadow import run_cohort_systems_maintenance
+from outcome_edge import outcome_edge_report
 from execution_shadow import execution_scoreboard
 from predictive_football import predictive_scoreboard
 from predictive_football_pred2 import predictive2_scoreboard
@@ -35,10 +36,14 @@ from predictive_football_pred4 import predictive4_scoreboard
 def _compact_evidence(score):
     """Small, aggregate-only research snapshot for operational observability."""
     keys = (
-        "predictions", "settled_predictions", "avg_brier", "avg_log_loss",
-        "market_comparison_sample", "model_brier_advantage",
-        "bets", "settled_bets", "net_pnl", "net_roi_pct",
-        "clv_samples", "avg_clv_pct", "beat_close_pct",
+        "training_matches", "predictions", "settled_predictions", "prediction_accuracy_pct",
+        "avg_brier_score", "avg_log_loss", "closing_market_comparison_samples",
+        "avg_model_brier_advantage", "derived_market_cases",
+        "settled_derived_market_selection_predictions", "avg_derived_market_brier",
+        "bets", "h2h_bets", "btts_bets", "totals_bets", "strong_candidates",
+        "settled_bets", "gross_pnl_units", "net_pnl_units", "net_roi_pct",
+        "clv_samples", "avg_clv_pct", "median_clv_pct", "beat_close_pct",
+        "avg_edge_pct",
     )
     return {key: score.get(key) for key in keys if key in score}
 
@@ -50,6 +55,9 @@ def record_phase3_evidence_snapshot(db):
         "pred2": _compact_evidence(predictive2_scoreboard(db)),
         "pred3": _compact_evidence(predictive3_scoreboard(db)),
         "pred4": _compact_evidence(predictive4_scoreboard(db)),
+        "outcome_edge": {
+            "frozen_watch_cohorts": outcome_edge_report(db).get("frozen_watch_cohorts", []),
+        },
     }
     detail = repr(payload)
     db.record_collector_run("PHASE3_EVIDENCE_SNAPSHOT", True, detail=detail)
