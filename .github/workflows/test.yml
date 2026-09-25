@@ -1,4 +1,5 @@
 name: test
+# CI validation: compile + regression suite before merge.
 
 on:
   push:
