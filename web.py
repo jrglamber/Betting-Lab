@@ -1022,7 +1022,33 @@ body{background:#0d1117;color:#e6edf3;font-family:Arial,sans-serif;margin:0;padd
 
 @app.get('/',response_class=HTMLResponse)
 def dashboard():
-    s=status();q=s['quota'];execution=s['execution_scoreboard'];funnel=s['execution_funnel'];score=s['scoreboard'];multiples=s['multiples_shadow'];manual_systems=s['manual_systems_shadow'];tennis=s['tennis_shadow'];multisport=s['multisport_shadow'];multisport_lines=s['multisport_lines_shadow'];predictive=s['predictive_football'];predictive2=s['predictive_football_pred2'];predictive3=s['predictive_football_pred3'];predictive4=s['predictive_football_pred4'];pxg=s['proxy_xg'];outcome_edge=s['outcome_edge'];cohort_systems=s['cohort_systems_shadow'];predictive_historical=s['predictive_football_historical'];meta_edge=s['meta_edge'];meta_edge_model=s['meta_edge_model']
+    # Build only the summaries rendered by this page. The full status() endpoint
+    # also performs diagnostic counts and historical/meta reports that the
+    # dashboard never displays, so calling it here made every page load pay for
+    # unrelated research diagnostics.
+    q=quota.state()
+    execution=execution_scoreboard(db); funnel=execution_funnel(db); score=strategy_scoreboard(db)
+    multiples=multiples_scoreboard(db); manual_systems=manual_systems_scoreboard(db)
+    tennis=tennis_scoreboard(db); multisport=multisport_scoreboard(db); multisport_lines=line_scoreboard(db)
+    predictive=predictive_scoreboard(db); predictive2=predictive2_scoreboard(db)
+    predictive3=predictive3_scoreboard(db); predictive4=predictive4_scoreboard(db)
+    pxg=proxy_xg_status(db,settings); outcome_edge=outcome_edge_report(db)
+    cohort_systems=cohort_systems_scoreboard(db)
+    s={
+        'quota':q,
+        'execution_scoreboard':execution,'execution_funnel':funnel,'scoreboard':score,
+        'multiples_shadow':multiples,'manual_systems_shadow':manual_systems,
+        'tennis_shadow':tennis,'multisport_shadow':multisport,'multisport_lines_shadow':multisport_lines,
+        'predictive_football':predictive,'predictive_football_pred2':predictive2,
+        'predictive_football_pred3':predictive3,'predictive_football_pred4':predictive4,
+        'proxy_xg':pxg,'outcome_edge':outcome_edge,'cohort_systems_shadow':cohort_systems,
+        'bets_until_midnight':bets_until_midnight(db),
+        'today_paid_cost':quota.today_paid_cost(),'daily_paid_credit_budget':settings.daily_paid_credit_budget,
+        'tennis_paid_credits_today':tennis_engine.quota.today_paid_cost(),
+        'tennis_daily_paid_credit_budget':settings.tennis_daily_paid_credit_budget,
+        'multisport_paid_credits_today':multisport_engine.quota.today_paid_cost(),
+        'multisport_daily_paid_credit_budget':settings.multisport_daily_paid_credit_budget,
+    }
     exec_bets=latest_execution_bets(db,40)
     recent_multiples=latest_multiple_shadows(db,8)
     recent_manual_systems=latest_manual_system_cards(db,8,manual_only=True)
