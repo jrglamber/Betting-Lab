@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 from config import Settings
 from db import Database
-from outcome_edge import outcome_edge_report, _source_rows
+from outcome_edge import outcome_edge_report, ensure_watch_cohorts, _source_rows
 from predictive_football_pred4 import PredictiveFootballPred4Engine
 
 
@@ -117,6 +117,7 @@ def test_v019_outcome_edge_includes_pred_derived_markets_and_freezes_watch(tmp_p
     _seed_pred1_btts(db)
     rows = _source_rows(db)
     assert any(r["source"] == "PRED1" and r["market_key"] == "btts" for r in rows)
+    ensure_watch_cohorts(db)
     report = outcome_edge_report(db)
     watches = {x["cohort_key"]: x for x in report["frozen_watch_cohorts"]}
     assert "PRED12_BTTS" in watches
