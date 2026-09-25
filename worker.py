@@ -187,7 +187,15 @@ class Worker:
         if self.predictive_football_pred3_engine is not None:
             try:
                 pred3 = (self.predictive_football_pred3_engine.one_cycle() if len(inspect.signature(self.predictive_football_pred3_engine.one_cycle).parameters)==0 else self.predictive_football_pred3_engine.one_cycle(pred_now))
-                self.db.record_collector_run(\n                    "PREDICTIVE_FOOTBALL_PRED3_MAINT", True, detail=f"cycle={pred3}"\n                )\n                # Phase 3 observability: expose aggregate PRED3 forecast rejection\n                # reasons already produced by the engine. Research-only; no model\n                # thresholds, mappings or execution behaviour are changed.\n                forecasts = pred3.get("forecasts", {}) if isinstance(pred3, dict) else {}\n                if forecasts.get("skipped"):\n                    print(f"PRED3_FORECAST_DIAGNOSTICS {forecasts}", flush=True)
+                self.db.record_collector_run(
+                    "PREDICTIVE_FOOTBALL_PRED3_MAINT", True, detail=f"cycle={pred3}"
+                )
+                # Phase 3 observability: expose aggregate PRED3 forecast rejection
+                # reasons already produced by the engine. Research-only; no model
+                # thresholds, mappings or execution behaviour are changed.
+                forecasts = pred3.get("forecasts", {}) if isinstance(pred3, dict) else {}
+                if forecasts.get("skipped"):
+                    print(f"PRED3_FORECAST_DIAGNOSTICS {forecasts}", flush=True)
             except Exception as exc:
                 self.db.record_collector_run(
                     "PREDICTIVE_FOOTBALL_PRED3_MAINT", False, detail=str(exc)
