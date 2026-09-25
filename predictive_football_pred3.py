@@ -801,7 +801,7 @@ class PredictiveFootballPred3Engine:
             )
         )
         predictions = self.db.fetchall(
-            "SELECT home_probability,draw_probability,away_probability,home_team,away_team,actual_outcome,brier_score,log_loss,model_brier_advantage,closing_market_quality FROM football_predictive3_predictions"
+            "SELECT * FROM football_predictive3_predictions ORDER BY id"
         )
         created = 0
         for pred in predictions:
