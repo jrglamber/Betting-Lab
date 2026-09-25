@@ -853,7 +853,9 @@ def research_intelligence_api():
 
 @app.get('/api/research/weekly')
 def research_weekly_api(limit:int=Query(12,ge=1,le=104)):
-    upsert_weekly_report(db);return latest_weekly_reports(db,limit)
+    # Weekly reports are maintained by the worker. GET must remain read-only so
+    # dashboard/API reads cannot contend with maintenance writes.
+    return latest_weekly_reports(db,limit)
 
 @app.get('/api/research/canonical-scoreboard')
 def canonical_research_scoreboard():
