@@ -79,7 +79,7 @@ from predictive_historical import (
     PredictiveHistoricalValidator, historical_validation_summary,
 )
 from proxy_xg import ProxyXgEngine, proxy_xg_status
-from outcome_edge import outcome_edge_report
+from outcome_edge import outcome_edge_report, ensure_watch_cohorts
 from cohort_systems_shadow import (
     ensure_cohort_system_state, run_cohort_systems_maintenance, cohort_systems_scoreboard,
     latest_cohort_system_cards, settle_cohort_system_shadows,
@@ -174,6 +174,9 @@ async def lifespan(app: FastAPI):
     # forward-test state freezes must happen before traffic; routine maintenance,
     # backfills, provider discovery and model cycles belong to the worker.
     db.init_schema()
+    # Freeze any newly-defined outcome-edge watch cohorts deliberately before
+    # traffic; report rendering itself remains read-only.
+    ensure_watch_cohorts(db)
     outcome_edge_report(db)
     ensure_cohort_system_state(db)
 
