@@ -18,8 +18,16 @@ ALGORITHM_VERSION = "HP1_HIGH_PAYOUT_FORWARD"
 APP_VERSION = "0.16.1"
 SYSTEM_SPECS = {"DOUBLE": (2, 1), "TREBLE": (3, 1), "FOURFOLD": (4, 1), "YANKEE": (4, 11), "SIXFOLD": (6, 1), "HEINZ": (6, 57)}
 HIGH_PAYOUT_SYSTEMS = tuple(SYSTEM_SPECS)
+HP1_SYSTEMS = HIGH_PAYOUT_SYSTEMS
+HP2_SYSTEMS = ("DOUBLE", "TREBLE")
+HP3_SYSTEMS = ("DOUBLE", "TREBLE")
 MIN_LEG_ODDS = 1.50
 MAX_LEG_ODDS = 3.00
+HP_LANES = (
+    ("HP1_HIGH_PAYOUT_FORWARD", 1.50, 3.00, HP1_SYSTEMS),
+    ("HP2_ODDS_4_TO_4_99_FORWARD", 4.00, 5.00, HP2_SYSTEMS),
+    ("HP3_ODDS_5_TO_7_49_FORWARD", 5.00, 7.50, HP3_SYSTEMS),
+)
 DEFAULT_PLACEABLE_BOOKS = ("williamhill", "ladbrokes_uk")
 DEFAULT_COMPARISON_BOOKS = ("betfair_ex_uk", "matchbook", "smarkets")
 DEFAULT_COHORTS = ("MIXED_BEST", "CONSENSUS", "PRED1", "PRED2")
@@ -47,6 +55,14 @@ def _line_combos(system_type: str, leg_orders: Sequence[int]) -> List[Tuple[int,
         sizes = (2, 3, 4)
     elif system_type == "HEINZ" and n == 6:
         sizes = (2, 3, 4, 5, 6)
+    elif system_type == "DOUBLE" and n == 2:
+        sizes = (2,)
+    elif system_type == "TREBLE" and n == 3:
+        sizes = (3,)
+    elif system_type == "FOURFOLD" and n == 4:
+        sizes = (4,)
+    elif system_type == "SIXFOLD" and n == 6:
+        sizes = (6,)
     else:
         return []
     out: List[Tuple[int, ...]] = []
@@ -419,6 +435,9 @@ def generate_manual_system_shadows(
     quote_freshness_minutes: float = 45.0,
     max_quote_spread_minutes: float = 15.0,
     horizon_hours: float = 30.0,
+    algorithm_version: str = ALGORITHM_VERSION,
+    min_leg_odds: float = MIN_LEG_ODDS,
+    max_leg_odds: float = MAX_LEG_ODDS,
 ) -> int:
     now = now or datetime.now(timezone.utc)
     if now.tzinfo is None:
@@ -453,9 +472,13 @@ def generate_manual_system_shadows(
                     db, cohort_rows, bookmaker_key=book, now=now,
                     freshness_minutes=quote_freshness_minutes,
                 )
+                eligible = [
+                    x for x in eligible
+                    if float(min_leg_odds) <= float(x["quote"]["price"]) < float(max_leg_odds)
+                ]
                 for system_type in systems:
                     leg_count, expected_lines = SYSTEM_SPECS[system_type]
-                    key = f"{ALGORITHM_VERSION}|{kickoff_date}|{book}|{cohort}|{system_type}"
+                    key = f"{algorithm_version}|{kickoff_date}|{book}|{cohort}|{system_type}"
                     if key in existing or len(eligible) < leg_count:
                         continue
                     chosen = eligible[:leg_count]
@@ -502,7 +525,7 @@ def generate_manual_system_shadows(
                         ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                         """,
                         (
-                            key, now.isoformat(), ALGORITHM_VERSION, system_type, leg_count, expected_lines,
+                            key, now.isoformat(), algorithm_version, system_type, leg_count, expected_lines,
                             book, title, placement_mode, manual_placeable, cohort,
                             json.dumps(source_engines), kickoff_date, first_kickoff, last_kickoff,
                             1.0, line_stake, 1.0 / float(leg_count),
@@ -874,19 +897,21 @@ class ManualSystemsShadowEngine:
             max_events_per_cycle=int(getattr(self.settings, "manual_systems_max_events_per_refresh", 6)),
             daily_credit_budget=int(getattr(self.settings, "manual_systems_daily_credit_budget", 300)),
         )
-        created = generate_manual_system_shadows(
-            self.db, now=now,
-            # HP1 is a frozen construction experiment: always shadow the full
-            # double/treble/fourfold/Yankee/sixfold/Heinz family. Existing env
-            # settings cannot silently narrow the forward cohort.
-            system_types=HIGH_PAYOUT_SYSTEMS,
-            placeable_bookmaker_keys=placeable,
-            comparison_bookmaker_keys=comparison,
-            source_cohorts=tuple(getattr(self.settings, "manual_systems_source_cohorts", DEFAULT_COHORTS) or ()),
-            quote_freshness_minutes=float(getattr(self.settings, "manual_systems_quote_freshness_minutes", 45.0)),
-            max_quote_spread_minutes=float(getattr(self.settings, "manual_systems_max_quote_spread_minutes", 15.0)),
-            horizon_hours=float(getattr(self.settings, "manual_systems_formation_horizon_hours", 30.0)),
-        )
+        created = 0
+        for algorithm_version, min_leg_odds, max_leg_odds, system_types in HP_LANES:
+            created += generate_manual_system_shadows(
+                self.db, now=now,
+                system_types=system_types,
+                placeable_bookmaker_keys=placeable,
+                comparison_bookmaker_keys=comparison,
+                source_cohorts=tuple(getattr(self.settings, "manual_systems_source_cohorts", DEFAULT_COHORTS) or ()),
+                quote_freshness_minutes=float(getattr(self.settings, "manual_systems_quote_freshness_minutes", 45.0)),
+                max_quote_spread_minutes=float(getattr(self.settings, "manual_systems_max_quote_spread_minutes", 15.0)),
+                horizon_hours=float(getattr(self.settings, "manual_systems_formation_horizon_hours", 30.0)),
+                algorithm_version=algorithm_version,
+                min_leg_odds=min_leg_odds,
+                max_leg_odds=max_leg_odds,
+            )
         clv = finalize_manual_system_clv(self.db, now=now)
         settled = settle_manual_system_shadows(self.db)
         return {"enabled": True, "refresh": refresh, "created": created, "clv_finalized": clv, "settled": settled}

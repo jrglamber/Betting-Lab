@@ -1699,13 +1699,13 @@ def multiples_page():
 @app.get('/high-payout-shadow',response_class=HTMLResponse)
 def high_payout_shadow_page():
     score=manual_systems_scoreboard(db)
-    recent=[x for x in latest_manual_system_cards(db,200) if str(x.get('algorithm_version') or '').startswith('HP1_')]
+    recent=[x for x in latest_manual_system_cards(db,300) if str(x.get('algorithm_version') or '').startswith(('HP1_','HP2_','HP3_'))]
     hp_types={'DOUBLE','TREBLE','FOURFOLD','YANKEE','SIXFOLD','HEINZ'}
     type_segments=[x for x in score['segments']['system_type'] if str(x.get('key')) in hp_types]
     cards=[
         ('HP cards',len(recent)),('Open',len([x for x in recent if str(x.get('status'))=='OPEN'])),
         ('Manual-placeable',len([x for x in recent if int(x.get('manual_placeable') or 0)==1])),
-        ('Leg odds','1.50–3.00'),('Structures','2 / 3 / 4 / Y / 6 / H'),
+        ('Lanes','HP1 / HP2 / HP3'),('Structures','HP1: 2/3/4/Y/6/H · HP2/3: 2/3'),
         ('Mode','FORWARD SHADOW'),
     ]
     card_html=''.join(f"<div class='card'><div class='label'>{escape(str(k))}</div><div class='value'>{escape(str(v))}</div></div>" for k,v in cards)
@@ -1720,18 +1720,18 @@ def high_payout_shadow_page():
             for i,l in enumerate(m.get('legs',[]))
         )
         rows.append(
-            f"<tr><td>{m['id']}</td><td>{escape(str(m['created_at']))}</td><td><strong>{escape(str(m['system_type']))}</strong></td>"
+            f"<tr><td>{m['id']}</td><td>{escape(str(m['created_at']))}</td><td>{escape(str(m.get('algorithm_version') or '')).split('_')[0]}</td><td><strong>{escape(str(m['system_type']))}</strong></td>"
             f"<td>{escape(str(m['bookmaker_title']))}</td><td>{escape(str(m['placement_mode']))}</td><td>{legs}</td>"
             f"<td>{_fmt(m.get('expected_roi_pct'))}%</td><td>{escape(str(m.get('clv_quality') or 'PENDING'))}</td><td>{_fmt(m.get('clv_pct'))}%</td><td>{escape(str(m.get('status') or ''))}</td></tr>"
         )
-    recent_html=''.join(rows) or "<tr><td colspan='10'>No qualifying cards yet. The worker will add them automatically as eligible football selections and fresh bookmaker quotes become available.</td></tr>"
+    recent_html=''.join(rows) or "<tr><td colspan='11'>No qualifying cards yet. The worker will add them automatically as eligible football selections and fresh bookmaker quotes become available.</td></tr>"
     return HTMLResponse(f"""<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>High-Payout Shadow v{VERSION}</title><style>{BASE_STYLE}</style></head><body>
     <a href='/'>← Betting Lab</a><h1>High-Payout Shadow <span class='pill'>HP1 · FORWARD ONLY</span></h1>
-    <div class='sub'>Lowish-odds football selections combined into larger payouts · Double / Treble / Fourfold / Yankee / Sixfold / Heinz · research only</div>
-    <div class='panel'><strong>Frozen rules:</strong> legs 1.50–3.00, different fixtures, deterministic ranking, same selections measured as singles and systems. William Hill/Ladbrokes are manual-placeable lanes; comparison venues remain research references. No automatic bet placement.</div>
+    <div class='sub'>Three frozen forward lanes: HP1 1.50–3.00 compound · HP2 4.00–4.99 anomaly · HP3 5.00–7.49 control · research only</div>
+    <div class='panel'><strong>Frozen rules:</strong> HP1 uses 1.50–3.00 legs across Double/Treble/Fourfold/Yankee/Sixfold/Heinz. HP2 uses 4.00–4.99 legs as singles-control + Double/Treble systems. HP3 uses 5.00–7.49 with the same Double/Treble construction as a control. Different fixtures, deterministic ranking, same selections measured against equal-stake singles. No automatic bet placement.</div>
     <div class='grid'>{card_html}</div>
     <div class='panel'><h2>Structure scoreboard</h2><table><thead><tr><th>Type</th><th>Cards</th><th>Settled</th><th>System P&L</th><th>System ROI</th><th>Singles ROI</th><th>A/B CLV</th></tr></thead><tbody>{seg_html}</tbody></table></div>
-    <div class='panel'><h2>Candidate queue / latest cards</h2><table><thead><tr><th>ID</th><th>Formed</th><th>Type</th><th>Book</th><th>Mode</th><th>Selections</th><th>Exp ROI</th><th>CLV q</th><th>CLV</th><th>Status</th></tr></thead><tbody>{recent_html}</tbody></table></div>
+    <div class='panel'><h2>Candidate queue / latest cards</h2><table><thead><tr><th>ID</th><th>Formed</th><th>Lane</th><th>Type</th><th>Book</th><th>Mode</th><th>Selections</th><th>Exp ROI</th><th>CLV q</th><th>CLV</th><th>Status</th></tr></thead><tbody>{recent_html}</tbody></table></div>
     </body></html>""")
 
 @app.get('/manual-systems',response_class=HTMLResponse)
