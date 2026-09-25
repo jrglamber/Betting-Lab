@@ -8,13 +8,13 @@ from typing import Callable, Optional
 
 from collector import Collector
 from signals import write_consensus_and_value_signals, write_consensus_snapshots_only, write_cross_market_signals, write_slow_book_signals
-from research import track_signal_prices, finalize_closing_lines
+from research import track_signal_prices, finalize_closing_lines, repair_premature_clv
 from db import Database
 from results import ResultCollector
-from canonical import cluster_event_signals, sync_canonical_bets
+from canonical import cluster_event_signals, backfill_canonical_bets, sync_canonical_bets
 from research_intelligence import upsert_weekly_report
 from execution_shadow import (
-    evaluate_latest_execution_wave, track_execution_prices,
+    backfill_execution_shadows, evaluate_latest_execution_wave, track_execution_prices,
     finalize_execution_clv, settle_execution_from_stored_results,
     backfill_execution_accounting,
 )
@@ -391,6 +391,22 @@ class Worker:
         return result
 
     def _run(self):
+        # Recovery/backfill work is intentionally off the FastAPI readiness path.
+        # Run it once in the worker so deploys become healthy quickly without
+        # losing historical repair coverage.
+        try:
+            repaired = repair_premature_clv(self.db)
+            canonical = backfill_canonical_bets(self.db)
+            execution = (
+                backfill_execution_shadows(self.db, self.execution_bookmaker_keys)
+                if self.execution_shadow_enabled else 0
+            )
+            self.db.record_collector_run(
+                "STARTUP_RECOVERY", True,
+                detail=f"premature_clv={repaired},canonical={canonical},execution={execution}",
+            )
+        except Exception as exc:
+            self.db.record_collector_run("STARTUP_RECOVERY", False, detail=str(exc))
         last_discovery = 0.0
         while not self._stop.is_set():
             now = time.time()
