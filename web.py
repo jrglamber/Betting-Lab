@@ -1126,7 +1126,7 @@ def dashboard():
       <a href='/outcome-edge'>Outcome Edge</a><a href='/cohort-systems'>Cohort Systems</a>
       <a href='/meta-edge'>Meta Edge</a><a href='/research'>Research Intelligence</a>
       <a href='/tennis'>Tennis</a><a href='/multisport'>Multi-Sport</a>
-      <a href='/multiples'>Multiples</a><a href='/manual-systems'>Manual Systems</a>
+      <a href='/multiples'>Multiples</a><a href='/high-payout-shadow'>High-Payout Shadow</a><a href='/manual-systems'>Manual Systems</a>
       <a href='/export/research.zip'>Research Export</a>
     </div>
     </body></html>""")
@@ -1694,6 +1694,44 @@ def multiples_page():
       <div class='panel'><h2>Bookmaker</h2><table><thead><tr><th>Book</th><th>Bets</th><th>Settled</th><th>Avg odds</th><th>P&L u</th><th>ROI</th><th>A/B CLV n</th><th>A/B CLV</th><th>Beat close</th></tr></thead><tbody>{segment_rows(score['segments']['bookmaker'])}</tbody></table></div>
     </div>
     <div class='panel'><h2>Latest multiples</h2><table><thead><tr><th>ID</th><th>Formed</th><th>Legs</th><th>Book</th><th>Selections</th><th>Entry odds</th><th>Fair odds</th><th>Model edge</th><th>Max quote age m</th><th>Close odds</th><th>CLV quality</th><th>CLV</th><th>Result</th><th>P&L u</th></tr></thead><tbody>{recent_html}</tbody></table></div>
+    </body></html>""")
+
+@app.get('/high-payout-shadow',response_class=HTMLResponse)
+def high_payout_shadow_page():
+    score=manual_systems_scoreboard(db)
+    recent=[x for x in latest_manual_system_cards(db,200) if str(x.get('algorithm_version') or '').startswith('HP1_')]
+    hp_types={'DOUBLE','TREBLE','FOURFOLD','YANKEE','SIXFOLD','HEINZ'}
+    type_segments=[x for x in score['segments']['system_type'] if str(x.get('key')) in hp_types]
+    cards=[
+        ('HP cards',len(recent)),('Open',len([x for x in recent if str(x.get('status'))=='OPEN'])),
+        ('Manual-placeable',len([x for x in recent if int(x.get('manual_placeable') or 0)==1])),
+        ('Leg odds','1.50–3.00'),('Structures','2 / 3 / 4 / Y / 6 / H'),
+        ('Mode','FORWARD SHADOW'),
+    ]
+    card_html=''.join(f"<div class='card'><div class='label'>{escape(str(k))}</div><div class='value'>{escape(str(v))}</div></div>" for k,v in cards)
+    seg_html=''.join(
+        f"<tr><td>{escape(str(x.get('key')))}</td><td>{x['cards']}</td><td>{x['settled']}</td><td>{_fmt(x['system_pnl_units'])}</td><td>{_fmt(x['system_roi_pct'])}%</td><td>{_fmt(x['singles_roi_pct'])}%</td><td>{_fmt(x['avg_clv_pct'])}%</td></tr>"
+        for x in type_segments
+    ) or "<tr><td colspan='7'>Waiting for the first qualifying high-payout cards.</td></tr>"
+    rows=[]
+    for m in recent:
+        legs='<br>'.join(
+            f"{i+1}. {escape(str(l['home_team']))} v {escape(str(l['away_team']))} — {_market_label(l['market_key'])} {escape(str(l['selection']))} @ {_fmt(l['entry_odds'])}"
+            for i,l in enumerate(m.get('legs',[]))
+        )
+        rows.append(
+            f"<tr><td>{m['id']}</td><td>{escape(str(m['created_at']))}</td><td><strong>{escape(str(m['system_type']))}</strong></td>"
+            f"<td>{escape(str(m['bookmaker_title']))}</td><td>{escape(str(m['placement_mode']))}</td><td>{legs}</td>"
+            f"<td>{_fmt(m.get('expected_roi_pct'))}%</td><td>{escape(str(m.get('clv_quality') or 'PENDING'))}</td><td>{_fmt(m.get('clv_pct'))}%</td><td>{escape(str(m.get('status') or ''))}</td></tr>"
+        )
+    recent_html=''.join(rows) or "<tr><td colspan='10'>No qualifying cards yet. The worker will add them automatically as eligible football selections and fresh bookmaker quotes become available.</td></tr>"
+    return HTMLResponse(f"""<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>High-Payout Shadow v{VERSION}</title><style>{BASE_STYLE}</style></head><body>
+    <a href='/'>← Betting Lab</a><h1>High-Payout Shadow <span class='pill'>HP1 · FORWARD ONLY</span></h1>
+    <div class='sub'>Lowish-odds football selections combined into larger payouts · Double / Treble / Fourfold / Yankee / Sixfold / Heinz · research only</div>
+    <div class='panel'><strong>Frozen rules:</strong> legs 1.50–3.00, different fixtures, deterministic ranking, same selections measured as singles and systems. William Hill/Ladbrokes are manual-placeable lanes; comparison venues remain research references. No automatic bet placement.</div>
+    <div class='grid'>{card_html}</div>
+    <div class='panel'><h2>Structure scoreboard</h2><table><thead><tr><th>Type</th><th>Cards</th><th>Settled</th><th>System P&L</th><th>System ROI</th><th>Singles ROI</th><th>A/B CLV</th></tr></thead><tbody>{seg_html}</tbody></table></div>
+    <div class='panel'><h2>Candidate queue / latest cards</h2><table><thead><tr><th>ID</th><th>Formed</th><th>Type</th><th>Book</th><th>Mode</th><th>Selections</th><th>Exp ROI</th><th>CLV q</th><th>CLV</th><th>Status</th></tr></thead><tbody>{recent_html}</tbody></table></div>
     </body></html>""")
 
 @app.get('/manual-systems',response_class=HTMLResponse)
