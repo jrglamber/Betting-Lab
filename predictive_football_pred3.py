@@ -801,7 +801,7 @@ class PredictiveFootballPred3Engine:
             )
         )
         predictions = self.db.fetchall(
-            "SELECT * FROM football_predictive3_predictions ORDER BY id"
+            "SELECT home_probability,draw_probability,away_probability,home_team,away_team,actual_outcome,brier_score,log_loss,model_brier_advantage,closing_market_quality FROM football_predictive3_predictions"
         )
         created = 0
         for pred in predictions:
@@ -1726,10 +1726,10 @@ def predictive3_scoreboard(db: Database) -> Dict[str,Any]:
     settled_preds=[p for p in preds if p.get("brier_score") is not None]
 
     h2h_bets=db.fetchall(
-        "SELECT * FROM football_predictive3_bets ORDER BY id"
+        "SELECT pnl_units,net_pnl_units,strong_candidate,clv_pct,clv_quality FROM football_predictive3_bets"
     )
     market_bets=db.fetchall(
-        "SELECT * FROM football_predictive3_market_bets ORDER BY id"
+        "SELECT pnl_units,net_pnl_units,strong_candidate,clv_pct,clv_quality,market_key FROM football_predictive3_market_bets"
     )
     all_bets=h2h_bets+market_bets
     settled_bets=[b for b in all_bets if b.get("pnl_units") is not None]
@@ -1767,7 +1767,7 @@ def predictive3_scoreboard(db: Database) -> Dict[str,Any]:
     btts_bets=[b for b in market_bets if b.get("market_key")=="btts"]
     totals_bets=[b for b in market_bets if b.get("market_key")=="totals"]
     market_predictions=db.fetchall(
-        "SELECT * FROM football_predictive3_market_predictions ORDER BY id"
+        "SELECT prediction_id,market_key,line_key,brier_score FROM football_predictive3_market_predictions"
     )
     derived_cases={
         (
