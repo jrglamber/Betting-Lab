@@ -210,7 +210,7 @@ def manual_quote_targets(
     *,
     now: Optional[datetime] = None,
     horizon_hours: float = 12.0,
-    min_distinct_fixtures: int = 2,
+    min_distinct_fixtures: int = 4,
     refresh_interval_minutes: float = 30.0,
 ) -> List[Dict[str, Any]]:
     """Return only events that could contribute to a Yankee/Heinz today.
