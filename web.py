@@ -1924,8 +1924,7 @@ def cohort_systems_page():
 
 @app.get('/research',response_class=HTMLResponse)
 def research_page():
-    
-    upsert_weekly_report(db)
+    # Worker owns weekly-report maintenance; page rendering stays read-only.
     intel=research_intelligence(db)
     overall=intel['overall'];status=intel['sample_status'];rolling=intel['rolling_7d']
     segments=intel['segments'];checkpoints=intel['price_checkpoints'];clv_results=intel['clv_vs_results']
