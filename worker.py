@@ -190,6 +190,12 @@ class Worker:
                 self.db.record_collector_run(
                     "PREDICTIVE_FOOTBALL_PRED3_MAINT", True, detail=f"cycle={pred3}"
                 )
+                # Phase 3 observability: log aggregate PRED3 forecast rejection
+                # reasons already produced by the engine. Research-only; no model
+                # thresholds, mappings or execution behaviour are changed.
+                forecasts = pred3.get("forecasts", {}) if isinstance(pred3, dict) else {}
+                if forecasts.get("skipped"):
+                    print(f"PRED3_FORECAST_DIAGNOSTICS {forecasts}", flush=True)
             except Exception as exc:
                 self.db.record_collector_run(
                     "PREDICTIVE_FOOTBALL_PRED3_MAINT", False, detail=str(exc)
