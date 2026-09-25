@@ -25,6 +25,35 @@ from instrumentation import run_measurement_maintenance
 from meta_edge import run_meta_edge_maintenance
 from meta_edge_model import run_meta_model_maintenance
 from cohort_systems_shadow import run_cohort_systems_maintenance
+from execution_shadow import execution_scoreboard
+from predictive_football import predictive_scoreboard
+from predictive_football_pred2 import predictive2_scoreboard
+from predictive_football_pred3 import predictive3_scoreboard
+from predictive_football_pred4 import predictive4_scoreboard
+
+
+def _compact_evidence(score):
+    """Small, aggregate-only research snapshot for operational observability."""
+    keys = (
+        "predictions", "settled_predictions", "avg_brier", "avg_log_loss",
+        "market_comparison_sample", "model_brier_advantage",
+        "bets", "settled_bets", "net_pnl", "net_roi_pct",
+        "clv_samples", "avg_clv_pct", "beat_close_pct",
+    )
+    return {key: score.get(key) for key in keys if key in score}
+
+
+def record_phase3_evidence_snapshot(db):
+    payload = {
+        "execution": _compact_evidence(execution_scoreboard(db)),
+        "pred1": _compact_evidence(predictive_scoreboard(db)),
+        "pred2": _compact_evidence(predictive2_scoreboard(db)),
+        "pred3": _compact_evidence(predictive3_scoreboard(db)),
+        "pred4": _compact_evidence(predictive4_scoreboard(db)),
+    }
+    detail = repr(payload)
+    db.record_collector_run("PHASE3_EVIDENCE_SNAPSHOT", True, detail=detail)
+    return payload
 
 
 class Worker:
@@ -239,6 +268,7 @@ class Worker:
             execution_settled = settle_execution_from_stored_results(self.db) if self.execution_shadow_enabled else 0
             accounting_backfilled = backfill_execution_accounting(self.db) if self.execution_shadow_enabled else 0
             weekly = upsert_weekly_report(self.db)
+            evidence_snapshot = record_phase3_evidence_snapshot(self.db)
             self.db.record_collector_run(
                 "RESEARCH_MAINT", True,
                 detail=f"price_observations={tracked}; closing_finalized={finalized}; canonical_synced={canonical_synced}; execution_observations={execution_tracked}; execution_finalized={execution_finalized}; execution_settled={execution_settled}; execution_accounting={accounting_backfilled}; weekly_report={weekly['report_key']}"
