@@ -124,3 +124,18 @@ def test_v019_outcome_edge_includes_pred_derived_markets_and_freezes_watch(tmp_p
     # The pre-existing BTTS result is discovery evidence, not forward validation.
     assert watches["PRED12_BTTS"]["discovery_sample"]["selections"] == 1
     assert watches["PRED12_BTTS"]["forward_sample"]["selections"] == 0
+
+
+def test_v019_outcome_edge_report_is_read_only_after_explicit_freeze(tmp_path):
+    db = _db(tmp_path)
+    _seed_pred1_btts(db)
+    ensure_watch_cohorts(db)
+    before = db.fetchall("SELECT * FROM outcome_edge_watch_cohorts ORDER BY cohort_key")
+    assert before
+
+    first = outcome_edge_report(db)
+    second = outcome_edge_report(db)
+    after = db.fetchall("SELECT * FROM outcome_edge_watch_cohorts ORDER BY cohort_key")
+
+    assert after == before
+    assert second["frozen_watch_cohorts"] == first["frozen_watch_cohorts"]
