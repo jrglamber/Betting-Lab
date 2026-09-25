@@ -1027,240 +1027,108 @@ body{background:#0d1117;color:#e6edf3;font-family:Arial,sans-serif;margin:0;padd
 
 @app.get('/',response_class=HTMLResponse)
 def dashboard():
-    # Build only the summaries rendered by this page. The full status() endpoint
-    # also performs diagnostic counts and historical/meta reports that the
-    # dashboard never displays, so calling it here made every page load pay for
-    # unrelated research diagnostics.
-    q=quota.state()
-    execution=execution_scoreboard(db); funnel=execution_funnel(db); score=strategy_scoreboard(db)
-    multiples=multiples_scoreboard(db); manual_systems=manual_systems_scoreboard(db)
-    tennis=tennis_scoreboard(db); multisport=multisport_scoreboard(db); multisport_lines=line_scoreboard(db)
-    predictive=predictive_scoreboard(db); predictive2=predictive2_scoreboard(db)
-    predictive3=predictive3_scoreboard(db); predictive4=predictive4_scoreboard(db)
-    pxg=proxy_xg_status(db,settings); outcome_edge=outcome_edge_report(db)
-    cohort_systems=cohort_systems_scoreboard(db)
-    s={
-        'quota':q,
-        'execution_scoreboard':execution,'execution_funnel':funnel,'scoreboard':score,
-        'multiples_shadow':multiples,'manual_systems_shadow':manual_systems,
-        'tennis_shadow':tennis,'multisport_shadow':multisport,'multisport_lines_shadow':multisport_lines,
-        'predictive_football':predictive,'predictive_football_pred2':predictive2,
-        'predictive_football_pred3':predictive3,'predictive_football_pred4':predictive4,
-        'proxy_xg':pxg,'outcome_edge':outcome_edge,'cohort_systems_shadow':cohort_systems,
-        'bets_until_midnight':bets_until_midnight(db),
-        'today_paid_cost':quota.today_paid_cost(),'daily_paid_credit_budget':settings.daily_paid_credit_budget,
-        'tennis_paid_credits_today':tennis_engine.quota.today_paid_cost(),
-        'tennis_daily_paid_credit_budget':settings.tennis_daily_paid_credit_budget,
-        'multisport_paid_credits_today':multisport_engine.quota.today_paid_cost(),
-        'multisport_daily_paid_credit_budget':settings.multisport_daily_paid_credit_budget,
-    }
-    exec_bets=latest_execution_bets(db,40)
-    recent_multiples=latest_multiple_shadows(db,8)
-    recent_manual_systems=latest_manual_system_cards(db,8,manual_only=True)
-    theoretical=latest_canonical_bets(db,20)
-    sigs=db.fetchall("""SELECT s.*,e.home_team,e.away_team,e.league,e.commence_time FROM signals s JOIN events e ON e.event_id=s.event_id ORDER BY s.id DESC LIMIT 30""")
-    cards=[
-        ('Bets until midnight',s['bets_until_midnight']),
-        ('Executable bets',execution['bets']),('Executable settled',execution['settled']),
-        ('Gross P&L u',_fmt(execution['pnl_units'])),('Net P&L u',_fmt(execution['net_pnl_units'])),
-        ('Gross ROI',f"{_fmt(execution['roi_pct'])}%"),('Net ROI',f"{_fmt(execution['net_roi_pct'])}%"),
-        ('Theoretical canonical',funnel['theoretical_canonical']),('Execution rate',f"{_fmt(funnel['execution_accept_rate_pct'])}%"),
-        ('A/B CLV samples',execution['clv_samples']),('Headline CLV %',_fmt(execution['avg_clv_pct'])),
-        ('All CLV samples',execution['all_clv_samples']),('All-close CLV %',_fmt(execution['all_avg_clv_pct'])),
-        ('Credits remaining',q.get('credits_remaining','—')),('Paid credits today',f"{s['today_paid_cost']}/{s['daily_paid_credit_budget']}"),
-    ]
-    card_html=''.join(f"<div class='card'><div class='label'>{escape(str(k))}</div><div class='value'>{escape(str(v))}</div></div>" for k,v in cards)
-    erows=''.join(
-        f"<tr><td>{x['id']}</td><td>{escape(x['home_team'])} v {escape(x['away_team'])}</td><td>{_market_label(x['market_key'])}</td><td>{escape(x['selection'])}</td>"
-        f"<td>{escape(x['bookmaker_title'])}</td><td>{_fmt(x['offered_odds'])}</td><td>{_fmt(x['fair_odds'])}</td><td>{_fmt(x['edge_pct'])}%</td><td>{_fmt(x['min_odds'])}</td>"
-        f"<td>{_fmt(x.get('reference_best_odds'))}</td><td>{_fmt(x.get('gap_to_reference_pct'))}%</td><td>{x.get('execution_venue_count',1)}</td><td>{x['strategy_count']}</td><td>{x['bookmaker_count']}</td><td>{x['detection_count']}</td>"
-        f"<td>{_fmt(x.get('latest_move_pct'))}%</td><td>{_fmt(x.get('clv_pct'))}%</td>"
-        f"<td>{escape(str(x.get('clv_quality') or 'PENDING'))}</td><td>{_fmt(x.get('closing_minutes_before_kickoff'))}</td>"
-        f"<td>{escape(str(x.get('result') or 'PENDING'))}</td><td>{_fmt(x.get('pnl_units'))}</td>"
-        f"<td>{_fmt(x.get('commission_units'))}</td><td>{_fmt(x.get('net_pnl_units'))}</td></tr>"
-        for x in exec_bets
-    ) or "<tr><td colspan='23'>No automation-capable executable shadow bets yet.</td></tr>"
-    trows=''.join(
-        f"<tr><td>{x['id']}</td><td>{escape(x['home_team'])} v {escape(x['away_team'])}</td><td>{_market_label(x['market_key'])}</td><td>{escape(x['selection'])}</td><td>{escape(x['bookmaker_title'])}</td><td>{_fmt(x['offered_odds'])}</td><td>{_fmt(x['edge_pct'])}%</td></tr>"
-        for x in theoretical
-    ) or "<tr><td colspan='7'>No theoretical canonical bets yet.</td></tr>"
-    sig_rows=''.join(f"<tr><td>{x['id']}</td><td>{escape(x['strategy'])}</td><td>{escape(x['home_team'])} v {escape(x['away_team'])}</td><td>{_market_label(x['market_key'])}</td><td>{escape(x['selection'])}</td><td>{escape(x['bookmaker_title'])}</td><td>{_fmt(x['offered_odds'])}</td><td>{_fmt(x['edge_pct'])}%</td></tr>" for x in sigs) or "<tr><td colspan='8'>No raw detections yet.</td></tr>"
-    multiple_cards=[
-        ('Shadows',multiples['bets']),('Settled',multiples['settled']),
-        ('Doubles',multiples['segments']['leg_count']['2']['bets']),
-        ('Trebles',multiples['segments']['leg_count']['3']['bets']),
-        ('Avg combined odds',_fmt(multiples['avg_combined_odds'])),
-        ('P&L u',_fmt(multiples['pnl_units'])),
-        ('A/B CLV samples',multiples['clv_samples']),
-        ('A/B CLV %',_fmt(multiples['avg_clv_pct'])),
-    ]
-    multiple_card_html=''.join(f"<div class='card'><div class='label'>{escape(str(k))}</div><div class='value'>{escape(str(v))}</div></div>" for k,v in multiple_cards)
-    multiple_rows=[]
-    for m in recent_multiples:
-        legs=' · '.join(
-            f"{escape(str(l['home_team']))} v {escape(str(l['away_team']))}: {escape(str(l['selection']))} @{_fmt(l['entry_odds'])}"
-            for l in m.get('legs',[])
+    """Mobile-first one-page research cockpit. Detailed reports stay on their own pages."""
+    q = quota.state()
+    execution = execution_scoreboard(db)
+    predictive = predictive_scoreboard(db)
+    predictive2 = predictive2_scoreboard(db)
+    predictive3 = predictive3_scoreboard(db)
+    predictive4 = predictive4_scoreboard(db)
+    outcome = outcome_edge_report(db)
+    cohorts = cohort_systems_scoreboard(db)
+
+    def pct(v):
+        return f"{_fmt(v)}%"
+
+    def tone(v, good_positive=True):
+        if v is None:
+            return ""
+        try:
+            n=float(v)
+        except Exception:
+            return ""
+        good = n >= 0 if good_positive else n <= 0
+        return "ok" if good else "bad"
+
+    def metric(label, value, css=""):
+        return f"<div class='card'><div class='label'>{escape(str(label))}</div><div class='value {css}'>{escape(str(value))}</div></div>"
+
+    provider = "configured" if settings.odds_api_key else "NOT CONFIGURED"
+    paused = bool(q.get("paid_polling_paused"))
+    health = "PAUSED" if paused else "COLLECTING"
+    health_css = "warn" if paused else "ok"
+
+    headline = "".join([
+        metric("Data collection", health, health_css),
+        metric("Bets until midnight", bets_until_midnight(db)),
+        metric("Executable bets", execution.get("bets",0)),
+        metric("Settled", execution.get("settled",0)),
+        metric("Net P&L", f"{_fmt(execution.get('net_pnl_units'))}u", tone(execution.get("net_pnl_units"))),
+        metric("Net ROI", pct(execution.get("net_roi_pct")), tone(execution.get("net_roi_pct"))),
+        metric("A/B CLV", pct(execution.get("avg_clv_pct")), tone(execution.get("avg_clv_pct"))),
+        metric("Beat close", pct(execution.get("beat_close_pct")), "ok" if (execution.get("beat_close_pct") or 0)>=50 else "bad"),
+        metric("Claimed edge", pct(execution.get("avg_edge_pct"))),
+        metric("CLV samples", execution.get("clv_samples",0)),
+        metric("Credits remaining", q.get("credits_remaining","—")),
+    ])
+
+    def model_row(name, score, href):
+        return (
+            f"<tr><td><a href='{href}'><strong>{name}</strong></a></td>"
+            f"<td>{score.get('predictions',0)}</td><td>{score.get('settled_predictions',0)}</td>"
+            f"<td>{_fmt(score.get('avg_brier_score'),4)}</td>"
+            f"<td class='{tone(score.get('avg_clv_pct'))}'>{pct(score.get('avg_clv_pct'))}</td>"
+            f"<td class='{tone(score.get('net_roi_pct'))}'>{pct(score.get('net_roi_pct'))}</td>"
+            f"<td>{score.get('clv_samples',0)}</td></tr>"
         )
-        multiple_rows.append(
-            f"<tr><td>{m['id']}</td><td>{m['leg_count']}</td><td>{escape(str(m['bookmaker_title']))}</td><td>{legs}</td>"
-            f"<td>{_fmt(m['combined_odds'])}</td><td>{_fmt(m['edge_pct'])}%</td><td>{escape(str(m.get('clv_quality') or 'PENDING'))}</td>"
-            f"<td>{_fmt(m.get('clv_pct'))}%</td><td>{escape(str(m.get('result') or 'PENDING'))}</td><td>{_fmt(m.get('pnl_units'))}</td></tr>"
+    models = "".join([
+        model_row("PRED1",predictive,"/predictive-football"),
+        model_row("PRED2",predictive2,"/predictive-football-pred2"),
+        model_row("PRED3",predictive3,"/predictive-football-pred3"),
+        model_row("PRED4",predictive4,"/predictive-football-pred4"),
+    ])
+
+    watched = outcome.get("frozen_watch_cohorts",[]) or []
+    cohort_rows=[]
+    for x in watched:
+        fwd=x.get("forward") or {}
+        cohort_rows.append(
+            f"<tr><td>{escape(str(x.get('label') or x.get('cohort_key') or 'Cohort'))}</td>"
+            f"<td>{fwd.get('selections',0)}</td><td>{_fmt(fwd.get('flat_stake_roi_pct'))}%</td>"
+            f"<td>{_fmt(fwd.get('avg_ab_clv_pct'))}%</td><td>{fwd.get('clv_samples',0)}</td></tr>"
         )
-    multiple_rows_html=''.join(multiple_rows) or "<tr><td colspan='10'>Multiples Shadow has not formed a same-book double/treble yet.</td></tr>"
-    manual_cards=[
-        ('Cards',manual_systems['cards']),('Manual-placeable',manual_systems['manual_placeable_cards']),
-        ('Settled',manual_systems['settled']),('System P&L u',_fmt(manual_systems['system_pnl_units'])),
-        ('Singles control P&L u',_fmt(manual_systems['singles_pnl_units'])),
-        ('System − singles u',_fmt(manual_systems['system_minus_singles_units'])),
-        ('A/B CLV samples',manual_systems['ab_clv_samples']),('Quote credits today',manual_systems['quote_credits_today']),
-    ]
-    manual_card_html=''.join(f"<div class='card'><div class='label'>{escape(str(k))}</div><div class='value'>{escape(str(v))}</div></div>" for k,v in manual_cards)
-    manual_rows=[]
-    for m in recent_manual_systems:
-        legs=' · '.join(
-            f"{escape(str(l['home_team']))} v {escape(str(l['away_team']))}: {escape(str(l['source_engine']))} {escape(str(l['selection']))} @{_fmt(l['entry_odds'])}"
-            for l in m.get('legs',[])
-        )
-        manual_rows.append(
-            f"<tr><td>{m['id']}</td><td>{escape(str(m['system_type']))}</td><td>{escape(str(m['bookmaker_title']))}</td><td>{escape(str(m['source_cohort']))}</td><td>{legs}</td>"
-            f"<td>{_fmt(m.get('expected_roi_pct'))}%</td><td>{escape(str(m.get('clv_quality') or 'PENDING'))}</td><td>{_fmt(m.get('clv_pct'))}%</td>"
-            f"<td>{_fmt(m.get('system_pnl_units'))}</td><td>{_fmt(m.get('singles_pnl_units'))}</td></tr>"
-        )
-    manual_rows_html=''.join(manual_rows) or "<tr><td colspan='10'>No manual-placeable Yankee/Heinz card has formed yet.</td></tr>"
-    paused=bool(q.get('paid_polling_paused'));reason=q.get('pause_reason') or '—';provider='configured' if settings.odds_api_key else 'NOT CONFIGURED'
-    approved=', '.join(settings.execution_bookmaker_keys)
-    return HTMLResponse(f"""<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Betting Lab v{VERSION}</title><style>{BASE_STYLE}</style></head><body>
-    <h1>Project Exit Plan — Betting Lab v{VERSION}</h1><div class='sub'>Automation-capable execution shadow · all bookmakers retained only for consensus/reference research</div>
-    <div class='panel'>Provider: <strong>{provider}</strong> · Paid polling: <strong class=\"{'warn' if paused else 'ok'}\">{'PAUSED' if paused else 'ACTIVE'}</strong> · reason: {escape(str(reason))} · reserve: {settings.quota_reserve_credits} · approved execution keys: <strong>{escape(approved)}</strong></div>
-    <div class='grid'>{card_html}</div>
-    <div class='panel'><h2>Tennis Shadow <span class='pill'>TS1</span></h2>
-      <div class='muted'>Separate two-way match-winner pricing experiment. Football evidence is unchanged. <a href='/tennis'>Open Tennis Shadow →</a></div>
-      <div class='grid'>
-        <div class='card'><div class='label'>Tennis bets</div><div class='value'>{tennis['bets']}</div></div>
-        <div class='card'><div class='label'>Settled</div><div class='value'>{tennis['settled']}</div></div>
-        <div class='card'><div class='label'>A/B CLV samples</div><div class='value'>{tennis['clv_samples']}</div></div>
-        <div class='card'><div class='label'>A/B CLV</div><div class='value'>{_fmt(tennis['avg_clv_pct'])}%</div></div>
-        <div class='card'><div class='label'>Net ROI</div><div class='value'>{_fmt(tennis['net_roi_pct'])}%</div></div>
-        <div class='card'><div class='label'>Tennis credits today</div><div class='value'>{s['tennis_paid_credits_today']}/{s['tennis_daily_paid_credit_budget']}</div></div>
-      </div>
+    cohort_html="".join(cohort_rows) or "<tr><td colspan='5'>Forward cohorts are frozen and waiting for evidence.</td></tr>"
+
+    return HTMLResponse(f"""<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
+    <title>Betting Lab v{VERSION}</title><style>{BASE_STYLE}
+    .hero{{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap}}
+    .hero h1{{font-size:24px}}.compact{{margin:12px 0 18px}}.compact .card{{padding:13px}}
+    .compact .value{{font-size:21px}}.nav{{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0 20px}}
+    .nav a{{background:#21262d;border:1px solid #30363d;padding:8px 10px;border-radius:8px;font-size:13px}}
+    .summary{{font-size:14px;line-height:1.55}}.table-wrap{{overflow-x:auto}}
+    @media(max-width:600px){{body{{padding:14px}}.grid{{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:12px 0 18px}}.card{{padding:12px}}.value{{font-size:20px}}.panel{{padding:14px;margin-bottom:12px}}table{{min-width:620px}}}}
+    </style></head><body>
+    <div class='hero'><div><h1>Betting Lab</h1><div class='sub'>Forward evidence cockpit · v{VERSION}</div></div>
+    <span class='pill {health_css}'>{health}</span></div>
+    <div class='grid compact'>{headline}</div>
+
+    <div class='panel summary'><strong>What matters now:</strong> claimed executable edge is {pct(execution.get('avg_edge_pct'))}, while A/B CLV is <span class='{tone(execution.get('avg_clv_pct'))}'>{pct(execution.get('avg_clv_pct'))}</span> and net ROI is <span class='{tone(execution.get('net_roi_pct'))}'>{pct(execution.get('net_roi_pct'))}</span>. The lab remains shadow-only; we are gathering forward evidence rather than promoting strategies.</div>
+
+    <div class='panel'><h2>Football models</h2><div class='muted'>Tap a model for its detailed research page.</div>
+    <div class='table-wrap'><table><thead><tr><th>Model</th><th>Pred</th><th>Settled</th><th>Brier</th><th>A/B CLV</th><th>ROI</th><th>CLV n</th></tr></thead><tbody>{models}</tbody></table></div></div>
+
+    <div class='panel'><h2>Frozen forward cohorts</h2><div class='muted'>Only post-freeze evidence counts here.</div>
+    <div class='table-wrap'><table><thead><tr><th>Cohort</th><th>Selections</th><th>ROI</th><th>A/B CLV</th><th>CLV n</th></tr></thead><tbody>{cohort_html}</tbody></table></div></div>
+
+    <div class='panel summary'><strong>Collection status:</strong> provider {provider}; paid polling <span class='{health_css}'>{'PAUSED' if paused else 'ACTIVE'}</span>. Cohort-system cards: {cohorts.get('cards',0)} · settled: {cohorts.get('settled',0)}.</div>
+
+    <div class='nav'>
+      <a href='/outcome-edge'>Outcome Edge</a><a href='/cohort-systems'>Cohort Systems</a>
+      <a href='/meta-edge'>Meta Edge</a><a href='/research'>Research Intelligence</a>
+      <a href='/tennis'>Tennis</a><a href='/multisport'>Multi-Sport</a>
+      <a href='/multiples'>Multiples</a><a href='/manual-systems'>Manual Systems</a>
+      <a href='/export/research.zip'>Research Export</a>
     </div>
-    <div class='panel'><h2>Multi-Sport Shadow <span class='pill'>MSP1</span></h2>
-      <div class='muted'>Two-way h2h/moneyline pricing research across active MLB, NFL/NCAAF, basketball, AFL/NRL and hockey targets. Separate evidence cohort. <a href='/multisport'>Open Multi-Sport Shadow →</a> · <a href='/multisport-lines'>Spreads/totals →</a></div>
-      <div class='grid'>
-        <div class='card'><div class='label'>Active leagues</div><div class='value'>{multisport['active_leagues']}</div></div>
-        <div class='card'><div class='label'>Executable shadows</div><div class='value'>{multisport['bets']}</div></div>
-        <div class='card'><div class='label'>Settled</div><div class='value'>{multisport['settled']}</div></div>
-        <div class='card'><div class='label'>A/B CLV</div><div class='value'>{_fmt(multisport['avg_clv_pct'])}%</div></div>
-        <div class='card'><div class='label'>Net ROI</div><div class='value'>{_fmt(multisport['net_roi_pct'])}%</div></div>
-        <div class='card'><div class='label'>Credits today</div><div class='value'>{s['multisport_paid_credits_today']}/{s['multisport_daily_paid_credit_budget']}</div></div>
-      </div>
-    </div>
-    <div class='panel'><h2>Predictive Football <span class='pill'>PRED1</span></h2>
-      <div class='muted'>Independent score-only Bayesian Poisson model. One frozen score forecast now drives 1X2, BTTS and totals; prices are consulted only afterwards. <a href='/predictive-football'>Open Predictive Football →</a></div>
-      <div class='grid'>
-        <div class='card'><div class='label'>Training matches</div><div class='value'>{predictive['training_matches']}</div></div>
-        <div class='card'><div class='label'>Predictions</div><div class='value'>{predictive['predictions']}</div></div>
-        <div class='card'><div class='label'>Model shadows</div><div class='value'>{predictive['bets']}</div></div>
-        <div class='card'><div class='label'>1X2 / BTTS / Totals</div><div class='value'>{predictive['h2h_bets']} / {predictive['btts_bets']} / {predictive['totals_bets']}</div></div>
-        <div class='card'><div class='label'>A/B CLV</div><div class='value'>{_fmt(predictive['avg_clv_pct'])}%</div></div>
-        <div class='card'><div class='label'>Brier</div><div class='value'>{_fmt(predictive['avg_brier_score'],4)}</div></div>
-        <div class='card'><div class='label'>Net ROI</div><div class='value'>{_fmt(predictive['net_roi_pct'])}%</div></div>
-      </div>
-    </div>
-    <div class='panel'><h2>Predictive Football Challenger <span class='pill'>PRED2</span></h2>
-      <div class='muted'>Dixon-Coles low-score dependency challenger. Same score history, forecast horizon, thresholds and approved-venue waves as PRED1. <a href='/predictive-football-pred2'>Open PRED2 →</a></div>
-      <div class='grid'>
-        <div class='card'><div class='label'>Predictions</div><div class='value'>{predictive2['predictions']}</div></div>
-        <div class='card'><div class='label'>Model shadows</div><div class='value'>{predictive2['bets']}</div></div>
-        <div class='card'><div class='label'>1X2 / BTTS / Totals</div><div class='value'>{predictive2['h2h_bets']} / {predictive2['btts_bets']} / {predictive2['totals_bets']}</div></div>
-        <div class='card'><div class='label'>A/B CLV</div><div class='value'>{_fmt(predictive2['avg_clv_pct'])}%</div></div>
-        <div class='card'><div class='label'>Brier</div><div class='value'>{_fmt(predictive2['avg_brier_score'],4)}</div></div>
-        <div class='card'><div class='label'>Net ROI</div><div class='value'>{_fmt(predictive2['net_roi_pct'])}%</div></div>
-      </div>
-    </div>
-    <div class='panel'><h2>Predictive Football xG Challenger <span class='pill'>PRED3</span></h2>
-      <div class='muted'>Independent StatsBomb Open Data xG/event challenger. Forecasts only when both teams have sufficient non-stale StatsBomb history; bookmaker prices are consulted only after freeze. <a href='/predictive-football-pred3'>Open PRED3 →</a></div>
-      <div class='cards'>
-        <div class='card'><div class='label'>Forecasts</div><div class='value'>{predictive3['predictions']}</div></div>
-        <div class='card'><div class='label'>Settled forecasts</div><div class='value'>{predictive3['settled_predictions']}</div></div>
-        <div class='card'><div class='label'>Brier</div><div class='value'>{_fmt(predictive3['avg_brier_score'],4)}</div></div>
-        <div class='card'><div class='label'>A/B CLV</div><div class='value'>{_fmt(predictive3['avg_clv_pct'])}%</div></div>
-      </div>
-    </div>
-    <div class='panel'><h2>Current PXG Challenger <span class='pill'>PRED4 · SHADOW ONLY</span></h2>
-      <div class='muted'>Uses only recent completed PXG1 current-match histories. Requires repeated team evidence before forecasting and consults bookmaker prices only after the forecast is frozen. <a href='/predictive-football-pred4'>Open PRED4 →</a></div>
-      <div class='grid'>
-        <div class='card'><div class='label'>Forecasts</div><div class='value'>{predictive4['predictions']}</div></div>
-        <div class='card'><div class='label'>Model shadows</div><div class='value'>{predictive4['bets']}</div></div>
-        <div class='card'><div class='label'>BTTS shadows</div><div class='value'>{predictive4['btts_bets']}</div></div>
-        <div class='card'><div class='label'>Brier</div><div class='value'>{_fmt(predictive4['avg_brier_score'],4)}</div></div>
-        <div class='card'><div class='label'>A/B CLV</div><div class='value'>{_fmt(predictive4['avg_clv_pct'])}%</div></div>
-        <div class='card'><div class='label'>Net ROI</div><div class='value'>{_fmt(predictive4['net_roi_pct'])}%</div></div>
-      </div>
-    </div>
-    <div class='panel'><h2>Outcome Edge Research <span class='pill'>ACTUAL vs IMPLIED</span></h2>
-      <div class='muted'>Reframes the evidence around whether selections actually win more often than their stored entry prices imply. CLV remains a diagnostic, not the objective. <a href='/outcome-edge'>Open Outcome Edge →</a></div>
-      <div class='grid'>
-        <div class='card'><div class='label'>Unique settled</div><div class='value'>{outcome_edge['overall']['selections']}</div></div>
-        <div class='card'><div class='label'>Hit rate</div><div class='value'>{_fmt(outcome_edge['overall']['hit_rate_pct'])}%</div></div>
-        <div class='card'><div class='label'>Mean implied</div><div class='value'>{_fmt(outcome_edge['overall']['mean_implied_probability_pct'])}%</div></div>
-        <div class='card'><div class='label'>Actual − implied</div><div class='value'>{_fmt(outcome_edge['overall']['hit_minus_implied_pp'])}pp</div></div>
-        <div class='card'><div class='label'>4–7.49 sample</div><div class='value'>{outcome_edge['focus_4_to_7_49']['selections']}</div></div>
-        <div class='card'><div class='label'>4–7.49 ROI</div><div class='value'>{_fmt(outcome_edge['focus_4_to_7_49']['flat_stake_roi_pct'])}%</div></div>
-      </div>
-    </div>
-    <div class='panel'><h2>Current Underlying Performance <span class='pill'>PXG1 · RESEARCH ONLY</span></h2>
-      <div class='muted'>Free proxy-xG research: learn from genuine StatsBomb xG, then apply the mapping to current completed-match statistics when an API-Football key is supplied. PRED1/PRED2/PRED3 remain untouched; PRED4 consumes this dataset as an isolated shadow challenger. <a href='/proxy-xg'>Open PXG1 →</a></div>
-      <div class='grid'>
-        <div class='card'><div class='label'>Training samples</div><div class='value'>{pxg['training_samples']}</div></div>
-        <div class='card'><div class='label'>Current matches</div><div class='value'>{int(pxg['current_matches'].get('matches') or 0)}</div></div>
-        <div class='card'><div class='label'>API-Football</div><div class='value'>{'READY' if pxg['api_football_configured'] else 'WAITING'}</div></div>
-      </div>
-    </div>
-    <div class='panel'><h2>Meta-Edge / CLV Trust Research <span class='pill'>META1 + META2 · SHADOW ONLY</span></h2>
-      <div class='muted'>META1 freezes entry-time features and labels them later with A/B-quality CLV. Once the clean-label gate is crossed, META2 freezes a time-validated trust model and annotates future PRED1/PRED2 opportunities. It makes zero provider calls and cannot create, reject, resize or place bets. <a href='/meta-edge'>Open Meta-Edge →</a></div>
-      <div class='grid'>
-        <div class='card'><div class='label'>Feature samples</div><div class='value'>{meta_edge['samples']}</div></div>
-        <div class='card'><div class='label'>Clean A/B labels</div><div class='value'>{meta_edge['clean_ab_labels']}</div></div>
-        <div class='card'><div class='label'>META2 status</div><div class='value'>{escape(str(meta_edge_model.get('status') or 'WAITING'))}</div></div>
-        <div class='card'><div class='label'>Forward META2 scores</div><div class='value'>{meta_edge_model.get('forward_scores',0)}</div></div>
-        <div class='card'><div class='label'>META1 avg CLV</div><div class='value'>{_fmt(meta_edge['avg_clv_pct'])}%</div></div>
-        <div class='card'><div class='label'>META1 beat close</div><div class='value'>{_fmt(meta_edge['beat_close_pct'])}%</div></div>
-      </div>
-    </div>
-    <div class='panel'><h2>Predictive Historical Validation <span class='pill'>PRED-HIST · FROZEN</span></h2>
-      <div class='muted'>Retrospective corroboration only: PRED1/PRED2 are reconstructed using information available at the original 24h freeze, with sampled historical prices at the configured checkpoints. It never writes to the forward PRED tables and is not a tuning lane. <a href='/api/predictive-football/historical-validation'>Open validation JSON →</a></div>
-      <div class='grid'>
-        <div class='card'><div class='label'>Complete fixtures</div><div class='value'>{predictive_historical['complete_fixtures']}</div></div>
-        <div class='card'><div class='label'>Partial fixtures</div><div class='value'>{predictive_historical['partial_fixtures']}</div></div>
-        <div class='card'><div class='label'>PRED1 Brier</div><div class='value'>{_fmt(predictive_historical['pred1_avg_brier'],4)}</div></div>
-        <div class='card'><div class='label'>PRED2 Brier</div><div class='value'>{_fmt(predictive_historical['pred2_avg_brier'],4)}</div></div>
-        <div class='card'><div class='label'>Closing-market Brier</div><div class='value'>{_fmt(predictive_historical['closing_market_avg_brier'],4)}</div></div>
-        <div class='card'><div class='label'>P1 / P2 fixture wins</div><div class='value'>{predictive_historical['pred1_fixture_wins']} / {predictive_historical['pred2_fixture_wins']}</div></div>
-        <div class='card'><div class='label'>PRED1 sampled CLV</div><div class='value'>{_fmt(predictive_historical['sampled_execution']['PRED1']['avg_clv_pct'])}%</div></div>
-        <div class='card'><div class='label'>PRED2 sampled CLV</div><div class='value'>{_fmt(predictive_historical['sampled_execution']['PRED2']['avg_clv_pct'])}%</div></div>
-        <div class='card'><div class='label'>Historical credits today</div><div class='value'>{s['predictive_football_historical_paid_credits_today']}/{s['predictive_football_historical_daily_credit_budget']}</div></div>
-      </div>
-    </div>
-    <div class='panel'><h2>Multi-Sport Lines <span class='pill'>MSP2</span></h2>
-      <div class='muted'>Featured spreads/handicaps + totals at exact reference lines. Separate from MSP1 moneylines. <a href='/multisport-lines'>Open Lines Shadow →</a></div>
-      <div class='grid'>
-        <div class='card'><div class='label'>Line shadows</div><div class='value'>{multisport_lines['bets']}</div></div>
-        <div class='card'><div class='label'>Settled</div><div class='value'>{multisport_lines['settled']}</div></div>
-        <div class='card'><div class='label'>A/B line closes</div><div class='value'>{multisport_lines['line_close_samples']}</div></div>
-        <div class='card'><div class='label'>Avg line CLV pts</div><div class='value'>{_fmt(multisport_lines['avg_line_clv_points'])}</div></div>
-        <div class='card'><div class='label'>Price CLV samples</div><div class='value'>{multisport_lines['price_clv_samples']}</div></div>
-        <div class='card'><div class='label'>Net ROI</div><div class='value'>{_fmt(multisport_lines['net_roi_pct'])}%</div></div>
-      </div>
-    </div>
-    <div class='panel'><h2>Execution Shadow</h2><div class='muted'>Only Betfair Exchange / Matchbook / Smarkets prices can enter this ledger. A theoretical signal is rejected if no approved venue has at least the strategy's minimum acceptable price. This is the universe that future automated live execution would use.</div><p><a class='button' href='/export/research.zip'>Download Research Export (.zip)</a><a class='button secondary' href='/research'>Open Research Intelligence →</a></p><div class='muted'>The export contains the full research tables and summaries, but no API keys, database credentials or admin secret.</div></div>
-    <div class='panel'><h2>Multiples Shadow <span class='pill'>API-GATED</span></h2><div class='muted'>New doubles/trebles form only at an explicitly verified accumulator-capable API venue. Ordinary fixed-odds books are no longer eligible. Current API venue allowlist: {', '.join(settings.multiples_api_bookmaker_keys) if settings.multiples_api_bookmaker_keys else 'NONE — formation paused'}. Legacy non-API MS1 records are retained for research/settlement but are excluded from this headline lane.</div><div class='grid'>{multiple_card_html}</div><p><a class='button secondary' href='/multiples'>Open Multiples Shadow →</a></p><table><thead><tr><th>ID</th><th>Legs</th><th>Book</th><th>Selections</th><th>Combined odds</th><th>Model edge</th><th>CLV quality</th><th>CLV</th><th>Result</th><th>P&L u</th></tr></thead><tbody>{multiple_rows_html}</tbody></table></div>
-    <div class='panel'><h2>Manual Systems Shadow <span class='pill'>MS2 · YANKEE / HEINZ</span></h2><div class='muted'>William Hill and Ladbrokes are manual-placeable research venues. Betfair Exchange, Matchbook and Smarkets are synthetic price-comparison controls only. Each system risks exactly 1u in total and is compared with the same 1u split equally across its legs. <a href='/manual-systems'>Open Manual Systems Shadow →</a></div><div class='grid'>{manual_card_html}</div><table><thead><tr><th>ID</th><th>System</th><th>Book</th><th>Cohort</th><th>Legs</th><th>Expected ROI</th><th>CLV quality</th><th>CLV</th><th>System P&L</th><th>Singles P&L</th></tr></thead><tbody>{manual_rows_html}</tbody></table></div>
-    <div class='panel'><h2>Cohort Systems Shadow <span class='pill'>MS3 · FORWARD ONLY</span></h2><div class='muted'>Frozen BTTS-only, 4.00–7.49-only and hybrid Yankee/Heinz experiments. v0.19.2 arms prospective cards then priority-refreshes the exact constituent event/markets before confirming them; shadow-only with no order placement. <a href='/cohort-systems'>Open MS3 →</a></div><div class='grid'><div class='card'><div class='label'>Cards</div><div class='value'>{cohort_systems['cards']}</div></div><div class='card'><div class='label'>Settled</div><div class='value'>{cohort_systems['settled']}</div></div><div class='card'><div class='label'>System P&L u</div><div class='value'>{_fmt(cohort_systems['system_pnl_units'])}</div></div><div class='card'><div class='label'>Singles P&L u</div><div class='value'>{_fmt(cohort_systems['singles_pnl_units'])}</div></div></div></div>
-    <div class='panel'><h2>Executable shadow betting performance</h2><div class='muted'>Headline CLV uses A/B closes only (within 30 minutes of kickoff). Net P&L deducts the configured research commission assumption while preserving gross P&L.</div><table><thead><tr><th>Bets</th><th>Settled</th><th>Wins</th><th>Gross P&L u</th><th>Gross ROI</th><th>Commission u</th><th>Net P&L u</th><th>Net ROI</th><th>Win rate</th><th>Avg edge</th><th>A/B Avg CLV</th><th>A/B samples</th><th>All-close CLV</th><th>All samples</th><th>Beat close</th><th>Gross DD</th><th>Net DD</th></tr></thead><tbody><tr><td>{execution['bets']}</td><td>{execution['settled']}</td><td>{execution['wins']}</td><td>{_fmt(execution['pnl_units'])}</td><td>{_fmt(execution['roi_pct'])}%</td><td>{_fmt(execution['commission_units'])}</td><td>{_fmt(execution['net_pnl_units'])}</td><td>{_fmt(execution['net_roi_pct'])}%</td><td>{_fmt(execution['win_rate_pct'])}%</td><td>{_fmt(execution['avg_edge_pct'])}%</td><td>{_fmt(execution['avg_clv_pct'])}%</td><td>{execution['clv_samples']}</td><td>{_fmt(execution['all_avg_clv_pct'])}%</td><td>{execution['all_clv_samples']}</td><td>{_fmt(execution['beat_close_pct'])}%</td><td>{_fmt(execution['max_drawdown_units'])}</td><td>{_fmt(execution['net_max_drawdown_units'])}</td></tr></tbody></table></div>
-    <div class='panel'><h2>Executable shadow bets</h2><table><thead><tr><th>ID</th><th>Fixture</th><th>Market</th><th>Selection</th><th>API venue</th><th>Entry</th><th>Fair</th><th>Edge</th><th>Min</th><th>Best market ref</th><th>Gap</th><th>Exec venues</th><th>Strategies</th><th>Raw books</th><th>Detections</th><th>Current move</th><th>Final CLV</th><th>CLV quality</th><th>Close mins</th><th>Result</th><th>Gross P&L u</th><th>Commission u</th><th>Net P&L u</th></tr></thead><tbody>{erows}</tbody></table></div>
-    <div class='panel'><h2>Theoretical canonical opportunities</h2><div class='muted'>These keep the original all-bookmaker research intact. They are not headline bets and may be impossible to automate.</div><table><thead><tr><th>ID</th><th>Fixture</th><th>Market</th><th>Selection</th><th>Theoretical best book</th><th>Price</th><th>Edge</th></tr></thead><tbody>{trows}</tbody></table></div>
-    <div class='panel'><h2>Latest raw detections</h2><table><thead><tr><th>ID</th><th>Strategy</th><th>Fixture</th><th>Market</th><th>Selection</th><th>Book</th><th>Offered</th><th>Edge</th></tr></thead><tbody>{sig_rows}</tbody></table></div>
     </body></html>""")
 
 @app.get('/meta-edge',response_class=HTMLResponse)
