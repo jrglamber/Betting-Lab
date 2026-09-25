@@ -1677,97 +1677,101 @@ def predictive4_bootstrap_status(db: Database) -> Dict[str,Any]:
     return {"source":"PXG1 current API-Football proxy-xG","scored_current_matches":total,"distinct_teams":teams,"provider_calls":0}
 
 def predictive4_scoreboard(db: Database) -> Dict[str,Any]:
-    preds=db.fetchall(
-        "SELECT * FROM football_predictive4_predictions ORDER BY id"
-    )
-    settled_preds=[p for p in preds if p.get("brier_score") is not None]
-
-    h2h_bets=db.fetchall(
-        "SELECT * FROM football_predictive4_bets ORDER BY id"
-    )
-    market_bets=db.fetchall(
-        "SELECT * FROM football_predictive4_market_bets ORDER BY id"
-    )
-    all_bets=h2h_bets+market_bets
-    settled_bets=[b for b in all_bets if b.get("pnl_units") is not None]
-    headline=[
-        b for b in all_bets
-        if b.get("clv_pct") is not None and b.get("clv_quality") in {"A","B"}
-    ]
-    clvs=[float(b["clv_pct"]) for b in headline]
-    net=sum(float(b.get("net_pnl_units") or 0.0) for b in settled_bets)
-    gross=sum(float(b.get("pnl_units") or 0.0) for b in settled_bets)
-    strong=sum(
-        1 for b in all_bets if int(b.get("strong_candidate") or 0)==1
-    )
+    # Aggregate in SQL rather than materialising every historical prediction and
+    # bet on each dashboard/status request. Metrics and forward-test semantics
+    # are unchanged.
+    pred = db.fetchone(
+        """
+        SELECT COUNT(*) AS predictions,
+               COUNT(brier_score) AS settled_predictions,
+               AVG(brier_score) AS avg_brier_score,
+               AVG(log_loss) AS avg_log_loss,
+               SUM(CASE WHEN brier_score IS NOT NULL AND
+                   CASE
+                     WHEN home_probability>=draw_probability AND home_probability>=away_probability THEN home_team
+                     WHEN draw_probability>=away_probability THEN 'Draw'
+                     ELSE away_team
+                   END = actual_outcome THEN 1 ELSE 0 END) AS correct_predictions,
+               SUM(CASE WHEN model_brier_advantage IS NOT NULL AND closing_market_quality IN ('A','B') THEN 1 ELSE 0 END) AS comparison_samples,
+               AVG(CASE WHEN model_brier_advantage IS NOT NULL AND closing_market_quality IN ('A','B') THEN model_brier_advantage END) AS avg_model_brier_advantage
+        FROM football_predictive4_predictions
+        """
+    ) or {}
+    h2h = db.fetchone(
+        """
+        SELECT COUNT(*) AS bets,
+               SUM(CASE WHEN strong_candidate=1 THEN 1 ELSE 0 END) AS strong_candidates,
+               SUM(CASE WHEN pnl_units IS NOT NULL THEN 1 ELSE 0 END) AS settled_bets,
+               SUM(CASE WHEN pnl_units IS NOT NULL THEN pnl_units ELSE 0 END) AS gross_pnl_units,
+               SUM(CASE WHEN pnl_units IS NOT NULL THEN net_pnl_units ELSE 0 END) AS net_pnl_units,
+               SUM(CASE WHEN clv_pct IS NOT NULL AND clv_quality IN ('A','B') THEN 1 ELSE 0 END) AS clv_samples,
+               SUM(CASE WHEN clv_pct IS NOT NULL AND clv_quality IN ('A','B') THEN clv_pct ELSE 0 END) AS clv_sum,
+               SUM(CASE WHEN clv_pct>0 AND clv_quality IN ('A','B') THEN 1 ELSE 0 END) AS beat_close
+        FROM football_predictive4_bets
+        """
+    ) or {}
+    market = db.fetchone(
+        """
+        SELECT COUNT(*) AS bets,
+               SUM(CASE WHEN market_key='btts' THEN 1 ELSE 0 END) AS btts_bets,
+               SUM(CASE WHEN market_key='totals' THEN 1 ELSE 0 END) AS totals_bets,
+               SUM(CASE WHEN strong_candidate=1 THEN 1 ELSE 0 END) AS strong_candidates,
+               SUM(CASE WHEN pnl_units IS NOT NULL THEN 1 ELSE 0 END) AS settled_bets,
+               SUM(CASE WHEN pnl_units IS NOT NULL THEN pnl_units ELSE 0 END) AS gross_pnl_units,
+               SUM(CASE WHEN pnl_units IS NOT NULL THEN net_pnl_units ELSE 0 END) AS net_pnl_units,
+               SUM(CASE WHEN clv_pct IS NOT NULL AND clv_quality IN ('A','B') THEN 1 ELSE 0 END) AS clv_samples,
+               SUM(CASE WHEN clv_pct IS NOT NULL AND clv_quality IN ('A','B') THEN clv_pct ELSE 0 END) AS clv_sum,
+               SUM(CASE WHEN clv_pct>0 AND clv_quality IN ('A','B') THEN 1 ELSE 0 END) AS beat_close
+        FROM football_predictive4_market_bets
+        """
+    ) or {}
+    derived = db.fetchone(
+        """
+        SELECT COUNT(DISTINCT CAST(prediction_id AS TEXT)||'|'||market_key||'|'||line_key) AS derived_market_cases,
+               COUNT(brier_score) AS settled_derived,
+               AVG(brier_score) AS avg_derived_market_brier
+        FROM football_predictive4_market_predictions
+        """
+    ) or {}
     source_rows=int((db.fetchone(
         "SELECT COUNT(*) AS n FROM football_pxg_current_matches WHERE home_proxy_xg IS NOT NULL AND away_proxy_xg IS NOT NULL"
     ) or {}).get("n") or 0)
-    briers=[float(p["brier_score"]) for p in settled_preds]
-    logs=[float(p["log_loss"]) for p in settled_preds]
-    advantages=[
-        float(p["model_brier_advantage"])
-        for p in settled_preds
-        if p.get("model_brier_advantage") is not None
-        and p.get("closing_market_quality") in {"A","B"}
-    ]
-    accuracy=sum(
-        1 for p in settled_preds
-        if max(
-            (
-                (float(p["home_probability"]),p["home_team"]),
-                (float(p["draw_probability"]),"Draw"),
-                (float(p["away_probability"]),p["away_team"]),
-            )
-        )[1] == p["actual_outcome"]
-    )
-    btts_bets=[b for b in market_bets if b.get("market_key")=="btts"]
-    totals_bets=[b for b in market_bets if b.get("market_key")=="totals"]
-    market_predictions=db.fetchall(
-        "SELECT * FROM football_predictive4_market_predictions ORDER BY id"
-    )
-    derived_cases={
-        (
-            int(x["prediction_id"]),str(x["market_key"]),str(x["line_key"])
-        )
-        for x in market_predictions
-    }
-    settled_derived=[
-        x for x in market_predictions if x.get("brier_score") is not None
-    ]
-    derived_briers=[float(x["brier_score"]) for x in settled_derived]
+    predictions=int(pred.get("predictions") or 0)
+    settled_predictions=int(pred.get("settled_predictions") or 0)
+    correct=int(pred.get("correct_predictions") or 0)
+    h2h_bets=int(h2h.get("bets") or 0)
+    market_bets=int(market.get("bets") or 0)
+    settled_bets=int(h2h.get("settled_bets") or 0)+int(market.get("settled_bets") or 0)
+    gross=float(h2h.get("gross_pnl_units") or 0.0)+float(market.get("gross_pnl_units") or 0.0)
+    net=float(h2h.get("net_pnl_units") or 0.0)+float(market.get("net_pnl_units") or 0.0)
+    clv_samples=int(h2h.get("clv_samples") or 0)+int(market.get("clv_samples") or 0)
+    clv_sum=float(h2h.get("clv_sum") or 0.0)+float(market.get("clv_sum") or 0.0)
+    beat_close=int(h2h.get("beat_close") or 0)+int(market.get("beat_close") or 0)
     return {
         "current_pxg_matches":source_rows,
-        "predictions":len(preds),
-        "settled_predictions":len(settled_preds),
-        "prediction_accuracy_pct":(
-            accuracy/len(settled_preds)*100.0 if settled_preds else None
-        ),
-        "avg_brier_score":mean(briers) if briers else None,
-        "avg_log_loss":mean(logs) if logs else None,
-        "closing_market_comparison_samples":len(advantages),
-        "avg_model_brier_advantage":mean(advantages) if advantages else None,
-        "derived_market_cases":len(derived_cases),
-        "settled_derived_market_selection_predictions":len(settled_derived),
-        "avg_derived_market_brier":(
-            mean(derived_briers) if derived_briers else None
-        ),
-        "bets":len(all_bets),
-        "h2h_bets":len(h2h_bets),
-        "btts_bets":len(btts_bets),
-        "totals_bets":len(totals_bets),
-        "strong_candidates":strong,
-        "settled_bets":len(settled_bets),
+        "predictions":predictions,
+        "settled_predictions":settled_predictions,
+        "prediction_accuracy_pct":correct/settled_predictions*100.0 if settled_predictions else None,
+        "avg_brier_score":float(pred["avg_brier_score"]) if pred.get("avg_brier_score") is not None else None,
+        "avg_log_loss":float(pred["avg_log_loss"]) if pred.get("avg_log_loss") is not None else None,
+        "closing_market_comparison_samples":int(pred.get("comparison_samples") or 0),
+        "avg_model_brier_advantage":float(pred["avg_model_brier_advantage"]) if pred.get("avg_model_brier_advantage") is not None else None,
+        "derived_market_cases":int(derived.get("derived_market_cases") or 0),
+        "settled_derived_market_selection_predictions":int(derived.get("settled_derived") or 0),
+        "avg_derived_market_brier":float(derived["avg_derived_market_brier"]) if derived.get("avg_derived_market_brier") is not None else None,
+        "bets":h2h_bets+market_bets,
+        "h2h_bets":h2h_bets,
+        "btts_bets":int(market.get("btts_bets") or 0),
+        "totals_bets":int(market.get("totals_bets") or 0),
+        "strong_candidates":int(h2h.get("strong_candidates") or 0)+int(market.get("strong_candidates") or 0),
+        "settled_bets":settled_bets,
         "gross_pnl_units":gross,
         "net_pnl_units":net,
-        "net_roi_pct":net/len(settled_bets)*100.0 if settled_bets else None,
-        "clv_samples":len(clvs),
-        "avg_clv_pct":mean(clvs) if clvs else None,
-        "beat_close_pct":(
-            sum(1 for x in clvs if x>0)/len(clvs)*100.0 if clvs else None
-        ),
+        "net_roi_pct":net/settled_bets*100.0 if settled_bets else None,
+        "clv_samples":clv_samples,
+        "avg_clv_pct":clv_sum/clv_samples if clv_samples else None,
+        "beat_close_pct":beat_close/clv_samples*100.0 if clv_samples else None,
     }
-
 
 def predictive4_market_summary(db: Database) -> List[Dict[str,Any]]:
     predictions=db.fetchall(
