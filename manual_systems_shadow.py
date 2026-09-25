@@ -14,9 +14,12 @@ from execution_shadow import clv_quality, parse_iso
 from quota import provider_actual_cost
 from results import grade_signal
 
-ALGORITHM_VERSION = "MS2_MANUAL_SYSTEMS_V1"
+ALGORITHM_VERSION = "HP1_HIGH_PAYOUT_FORWARD"
 APP_VERSION = "0.16.1"
-SYSTEM_SPECS = {"YANKEE": (4, 11), "HEINZ": (6, 57)}
+SYSTEM_SPECS = {"DOUBLE": (2, 1), "TREBLE": (3, 1), "FOURFOLD": (4, 1), "YANKEE": (4, 11), "SIXFOLD": (6, 1), "HEINZ": (6, 57)}
+HIGH_PAYOUT_SYSTEMS = tuple(SYSTEM_SPECS)
+MIN_LEG_ODDS = 1.50
+MAX_LEG_ODDS = 3.00
 DEFAULT_PLACEABLE_BOOKS = ("williamhill", "ladbrokes_uk")
 DEFAULT_COMPARISON_BOOKS = ("betfair_ex_uk", "matchbook", "smarkets")
 DEFAULT_COHORTS = ("MIXED_BEST", "CONSENSUS", "PRED1", "PRED2")
@@ -409,7 +412,7 @@ def generate_manual_system_shadows(
     db: Database,
     *,
     now: Optional[datetime] = None,
-    system_types: Sequence[str] = ("YANKEE", "HEINZ"),
+    system_types: Sequence[str] = HIGH_PAYOUT_SYSTEMS,
     placeable_bookmaker_keys: Sequence[str] = DEFAULT_PLACEABLE_BOOKS,
     comparison_bookmaker_keys: Sequence[str] = DEFAULT_COMPARISON_BOOKS,
     source_cohorts: Sequence[str] = DEFAULT_COHORTS,
@@ -873,7 +876,10 @@ class ManualSystemsShadowEngine:
         )
         created = generate_manual_system_shadows(
             self.db, now=now,
-            system_types=tuple(getattr(self.settings, "manual_systems_types", ("YANKEE", "HEINZ")) or ()),
+            # HP1 is a frozen construction experiment: always shadow the full
+            # double/treble/fourfold/Yankee/sixfold/Heinz family. Existing env
+            # settings cannot silently narrow the forward cohort.
+            system_types=HIGH_PAYOUT_SYSTEMS,
             placeable_bookmaker_keys=placeable,
             comparison_bookmaker_keys=comparison,
             source_cohorts=tuple(getattr(self.settings, "manual_systems_source_cohorts", DEFAULT_COHORTS) or ()),
