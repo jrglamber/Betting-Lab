@@ -31,6 +31,14 @@ from predictive_football import predictive_scoreboard
 from predictive_football_pred2 import predictive2_scoreboard
 from predictive_football_pred3 import predictive3_scoreboard
 from predictive_football_pred4 import predictive4_scoreboard
+from multiples_shadow import multiples_scoreboard
+from manual_systems_shadow import manual_systems_scoreboard
+from cohort_systems_shadow import cohort_systems_scoreboard
+from tennis_shadow import tennis_scoreboard
+from multisport_shadow import multisport_scoreboard
+from multisport_lines_shadow import line_scoreboard
+from meta_edge import meta_edge_scoreboard
+from meta_edge_model import meta_model_status
 
 
 def _compact_evidence(score):
@@ -59,6 +67,17 @@ def record_phase3_evidence_snapshot(db):
             "frozen_watch_cohorts": outcome_edge_report(db).get("frozen_watch_cohorts", []),
         },
     }
+    # Whole-lab aggregate telemetry is deliberately emitted through the existing
+    # runtime log path so external analysis can inspect current research without
+    # Railway Agent calls or database credentials. No secrets/raw odds payloads.
+    payload["multiples"] = multiples_scoreboard(db)
+    payload["manual_systems"] = manual_systems_scoreboard(db)
+    payload["cohort_systems"] = cohort_systems_scoreboard(db)
+    payload["tennis"] = tennis_scoreboard(db)
+    payload["multisport"] = multisport_scoreboard(db)
+    payload["multisport_lines"] = line_scoreboard(db)
+    payload["meta_edge"] = meta_edge_scoreboard(db, 200)
+    payload["meta_model"] = meta_model_status(db)
     detail = repr(payload)
     db.record_collector_run("PHASE3_EVIDENCE_SNAPSHOT", True, detail=detail)
     print(f"PHASE3_EVIDENCE_SNAPSHOT {detail}", flush=True)
