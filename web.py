@@ -508,6 +508,30 @@ def research_shadows_api(limit:int=Query(500,ge=1,le=1000)):
         'high_payout':{'lane_breakdown':lane_rows,'latest':hp_cards},
     }
 
+@app.get('/api/research-snapshot')
+def research_snapshot_api(limit:int=Query(250,ge=1,le=1000)):
+    """Read-only whole-lab snapshot for external analysis; never mutates research state."""
+    return {
+        'read_only':True,'generated_at':datetime.now(timezone.utc).isoformat(),
+        'core':{'strategy':strategy_scoreboard(db),'canonical':canonical_scoreboard(db),'execution':execution_scoreboard(db),'execution_funnel':execution_funnel(db),'latest_execution':latest_execution_bets(db,limit)},
+        'multiples':{'scoreboard':multiples_scoreboard(db),'latest':latest_multiple_shadows(db,limit,include_legacy=True)},
+        'manual_systems':{'scoreboard':manual_systems_scoreboard(db),'latest':latest_manual_system_cards(db,limit,manual_only=False)},
+        'outcome_edge':outcome_edge_report(db),
+        'cohort_systems':{'scoreboard':cohort_systems_scoreboard(db),'latest':latest_cohort_system_cards(db,limit)},
+        'pred1':{'scoreboard':predictive_scoreboard(db),'funnel':predictive_funnel(db),'markets':predictive_market_summary(db),'leagues':predictive_league_summary(db),'latest':latest_predictive_bets(db,limit)},
+        'pred2':{'scoreboard':predictive2_scoreboard(db),'funnel':predictive2_funnel(db),'markets':predictive2_market_summary(db),'leagues':predictive2_league_summary(db),'latest':latest_predictive2_bets(db,limit)},
+        'pred3':{'scoreboard':predictive3_scoreboard(db),'funnel':predictive3_funnel(db),'markets':predictive3_market_summary(db),'leagues':predictive3_league_summary(db),'latest':latest_predictive3_bets(db,limit)},
+        'pred4':{'scoreboard':predictive4_scoreboard(db),'funnel':predictive4_funnel(db),'markets':predictive4_market_summary(db),'leagues':predictive4_league_summary(db),'latest':latest_predictive4_bets(db,limit)},
+        'proxy_xg':proxy_xg_status(db,settings),
+        'tennis':{'scoreboard':tennis_scoreboard(db),'segments':tennis_segments(db),'latest':latest_tennis_bets(db,limit)},
+        'multisport':{'scoreboard':multisport_scoreboard(db),'segments':multisport_segments(db),'funnel':multisport_funnel(db),'latest':latest_multisport_bets(db,limit)},
+        'multisport_lines':{'scoreboard':line_scoreboard(db),'segments':line_segments(db),'funnel':line_funnel(db),'latest':latest_line_bets(db,limit)},
+        'meta_edge':{'scoreboard':meta_edge_scoreboard(db,settings.meta_edge_min_clean_labels),'segments':meta_edge_segments(db),'latest':latest_meta_edge_samples(db,limit)},
+        'meta_model':{'status':meta_model_status(db),'latest':latest_meta_model_scores(db,limit)},
+        'historical_validation':historical_validation_summary(db),
+        'instrumentation':instrumentation_report(db),
+    }
+
 @app.get('/api/cohort-systems/status')
 def cohort_systems_status_api():
     
