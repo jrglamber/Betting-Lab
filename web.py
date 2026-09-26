@@ -482,6 +482,32 @@ def manual_systems_cards_api(
     
     return latest_manual_system_cards(db,limit,manual_only=manual_only)
 
+@app.get('/api/research-shadows')
+def research_shadows_api(limit:int=Query(500,ge=1,le=1000)):
+    """Read-only analyst view of Multiples, Manual Systems and HP1/2/3."""
+    manual_cards=latest_manual_system_cards(db,limit,manual_only=False)
+    hp_cards=[r for r in manual_cards if str(r.get('algorithm_version') or '').startswith(('HP1_','HP2_','HP3_'))]
+    legacy_cards=[r for r in manual_cards if not str(r.get('algorithm_version') or '').startswith(('HP1_','HP2_','HP3_'))]
+    lane_rows=db.fetchall("""
+        SELECT algorithm_version,system_type,bookmaker_key,status,result,
+               COUNT(*) AS cards,
+               SUM(CASE WHEN status='SETTLED' THEN 1 ELSE 0 END) AS settled,
+               SUM(CASE WHEN result='WIN' THEN 1 ELSE 0 END) AS wins,
+               SUM(CASE WHEN pnl_units IS NOT NULL THEN pnl_units ELSE 0 END) AS pnl_units,
+               AVG(CASE WHEN clv_quality IN ('A','B') THEN clv_pct END) AS avg_ab_clv_pct,
+               SUM(CASE WHEN clv_quality IN ('A','B') THEN 1 ELSE 0 END) AS ab_clv_samples
+        FROM manual_system_shadow_bets
+        WHERE algorithm_version LIKE 'HP1_%' OR algorithm_version LIKE 'HP2_%' OR algorithm_version LIKE 'HP3_%'
+        GROUP BY algorithm_version,system_type,bookmaker_key,status,result
+        ORDER BY algorithm_version,system_type,bookmaker_key,status,result
+    """)
+    return {
+        'read_only':True,
+        'multiples':{'scoreboard':multiples_scoreboard(db),'latest':latest_multiple_shadows(db,limit,include_legacy=True)},
+        'manual_systems':{'scoreboard':manual_systems_scoreboard(db),'latest_legacy':legacy_cards},
+        'high_payout':{'lane_breakdown':lane_rows,'latest':hp_cards},
+    }
+
 @app.get('/api/cohort-systems/status')
 def cohort_systems_status_api():
     
