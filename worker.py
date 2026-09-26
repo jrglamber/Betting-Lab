@@ -56,6 +56,99 @@ def _compact_evidence(score):
     return {key: score.get(key) for key in keys if key in score}
 
 
+
+def manual_system_unique_singles_diagnostic(db):
+    """Deduplicate settled manual-system legs to underlying selections and score one unit each."""
+    rows = db.fetchall(
+        """
+        SELECT l.*, b.bookmaker_key, b.source_cohort, b.algorithm_version,
+               e.league, e.sport_key
+        FROM manual_system_shadow_legs l
+        JOIN manual_system_shadow_bets b ON b.id=l.system_bet_id
+        JOIN events e ON e.event_id=l.event_id
+        WHERE b.status='SETTLED' AND l.result IS NOT NULL
+        ORDER BY l.id ASC
+        """
+    )
+    def key(r):
+        point = r.get("point")
+        try:
+            point = None if point is None else round(float(point), 8)
+        except Exception:
+            point = str(point)
+        return (
+            str(r.get("event_id") or ""), str(r.get("market_key") or ""),
+            str(r.get("selection") or ""), str(r.get("outcome_description") or ""), point,
+        )
+    grouped = {}
+    for raw in rows:
+        r = dict(raw)
+        grouped.setdefault(key(r), []).append(r)
+
+    unique = []
+    for appearances in grouped.values():
+        # Best actually observed entry quote across duplicate card/book/source appearances.
+        best = max(appearances, key=lambda x: float(x.get("entry_odds") or 0.0))
+        result = str(best.get("result") or "")
+        odds = float(best.get("entry_odds") or 0.0)
+        pnl = odds - 1.0 if result == "WIN" else 0.0 if result in {"PUSH", "VOID"} else -1.0
+        clvs = [
+            float(x["clv_pct"]) for x in appearances
+            if x.get("clv_pct") is not None and str(x.get("clv_quality") or "") in {"A", "B"}
+        ]
+        unique.append({
+            "odds": odds, "result": result, "pnl": pnl,
+            "market": str(best.get("market_key") or ""),
+            "league": str(best.get("league") or ""),
+            "sources": sorted({str(x.get("source_engine") or "") for x in appearances}),
+            "cohorts": sorted({str(x.get("source_cohort") or "") for x in appearances}),
+            "appearances": len(appearances),
+            "clv": (sum(clvs) / len(clvs)) if clvs else None,
+        })
+
+    def metrics(items):
+        items = list(items)
+        wins = sum(1 for x in items if x["result"] == "WIN")
+        pnl = sum(x["pnl"] for x in items)
+        clv = [x["clv"] for x in items if x["clv"] is not None]
+        return {
+            "selections": len(items), "wins": wins,
+            "hit_rate_pct": (wins / len(items) * 100.0) if items else None,
+            "pnl_units": pnl, "roi_pct": (pnl / len(items) * 100.0) if items else None,
+            "avg_odds": (sum(x["odds"] for x in items) / len(items)) if items else None,
+            "ab_clv_samples": len(clv),
+            "avg_clv_pct": (sum(clv) / len(clv)) if clv else None,
+        }
+
+    def segments(field):
+        vals = sorted({v for x in unique for v in (x[field] if isinstance(x[field], list) else [x[field]]) if v})
+        return {v: metrics([x for x in unique if v in (x[field] if isinstance(x[field], list) else [x[field]])]) for v in vals}
+
+    bands = {
+        "1.50-1.99": [x for x in unique if 1.5 <= x["odds"] < 2.0],
+        "2.00-2.99": [x for x in unique if 2.0 <= x["odds"] < 3.0],
+        "3.00-3.99": [x for x in unique if 3.0 <= x["odds"] < 4.0],
+        "4.00-4.99": [x for x in unique if 4.0 <= x["odds"] < 5.0],
+        "5.00-7.49": [x for x in unique if 5.0 <= x["odds"] < 7.5],
+        "7.50+": [x for x in unique if x["odds"] >= 7.5],
+    }
+    counts = {}
+    for x in unique:
+        counts[x["appearances"]] = counts.get(x["appearances"], 0) + 1
+    return {
+        "leg_appearances": len(rows),
+        "unique_selections": len(unique),
+        "duplicate_appearances_removed": len(rows) - len(unique),
+        "overall_best_observed_price": metrics(unique),
+        "appearance_count_distribution": counts,
+        "odds_band": {k: metrics(v) for k, v in bands.items() if v},
+        "market": segments("market"),
+        "league": segments("league"),
+        "source_engine": segments("sources"),
+        "source_cohort": segments("cohorts"),
+    }
+
+
 def record_phase3_evidence_snapshot(db):
     payload = {
         "execution": _compact_evidence(execution_scoreboard(db)),
@@ -71,7 +164,7 @@ def record_phase3_evidence_snapshot(db):
     # runtime log path so external analysis can inspect current research without
     # Railway Agent calls or database credentials. No secrets/raw odds payloads.
     payload["multiples"] = multiples_scoreboard(db)
-    payload["manual_systems"] = manual_systems_scoreboard(db)
+    payload["manual_systems"] = manual_systems_scoreboard(db)\n    payload["manual_unique_singles"] = manual_system_unique_singles_diagnostic(db)
     payload["cohort_systems"] = cohort_systems_scoreboard(db)
     payload["tennis"] = tennis_scoreboard(db)
     payload["multisport"] = multisport_scoreboard(db)
