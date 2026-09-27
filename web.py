@@ -1203,7 +1203,14 @@ def dashboard():
       <a href='/meta-edge'>Meta Edge</a><a href='/research'>Research Intelligence</a>
       <a href='/tennis'>Tennis</a><a href='/multisport'>Multi-Sport</a>
       <a href='/multiples'>Multiples</a><a href='/high-payout-shadow'>High-Payout Shadow</a><a href='/manual-systems'>Manual Systems</a>
-      <a href='/export/research.zip'>Research Export</a>
+    </div>
+
+    <div class='panel'>
+      <h2>Research Exports</h2>
+      <div class='muted' style='margin-bottom:14px'>Use the smaller exports on your phone. Full Historical is for occasional complete audits.</div>
+      <a class='button' href='/export/research-weekly.zip'>Weekly Export · Recommended</a>
+      <a class='button' href='/export/manual-systems.zip'>Manual Systems · Phone-friendly</a>
+      <a class='button secondary' href='/export/research.zip'>Full Historical · Large</a>
     </div>
     </body></html>""")
 
