@@ -28,6 +28,12 @@ HP_LANES = (
     ("HP2_ODDS_4_TO_4_99_FORWARD", 4.00, 5.00, HP2_SYSTEMS),
     ("HP3_ODDS_5_TO_7_49_FORWARD", 5.00, 7.50, HP3_SYSTEMS),
 )
+# Frozen forward lane discovered in the 2026-09-27 export review.
+# A card is only considered manually placeable when all six CONSENSUS H2H legs
+# have simultaneous qualifying quotes at the SAME bookmaker.  We deliberately
+# do not mix William Hill and Ladbrokes prices within one Heinz.
+FROZEN_CONSENSUS_H2H_HEINZ_VERSION = "CONSENSUS_H2H_4_TO_7_49_HEINZ_FORWARD_V1"
+FROZEN_CONSENSUS_H2H_HEINZ_BOOKS = ("williamhill", "ladbrokes_uk")
 DEFAULT_PLACEABLE_BOOKS = ("williamhill", "ladbrokes_uk")
 DEFAULT_COMPARISON_BOOKS = ("betfair_ex_uk", "matchbook", "smarkets")
 DEFAULT_COHORTS = ("MIXED_BEST", "CONSENSUS", "PRED1", "PRED2")
@@ -583,6 +589,148 @@ def generate_manual_system_shadows(
                         )
                     existing.add(key)
                     created += 1
+    return created
+
+
+def generate_frozen_consensus_h2h_heinz_shadows(
+    db: Database,
+    *,
+    now: Optional[datetime] = None,
+    bookmaker_keys: Sequence[str] = FROZEN_CONSENSUS_H2H_HEINZ_BOOKS,
+    quote_freshness_minutes: float = 45.0,
+    max_quote_spread_minutes: float = 15.0,
+    horizon_hours: float = 30.0,
+) -> int:
+    """Record realistic manual Heinz opportunities for the frozen 4.00-7.49 cohort.
+
+    This is research-only. Each Heinz uses six distinct fixtures, CONSENSUS H2H
+    selections only, and six quotes from one bookmaker (William Hill OR
+    Ladbrokes). A William Hill quote can never fill a missing Ladbrokes leg, or
+    vice versa.
+    """
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    else:
+        now = now.astimezone(timezone.utc)
+
+    rows = [
+        r for r in _source_rows(db, now=now, horizon_hours=horizon_hours)
+        if r["source_engine"] == "CONSENSUS" and str(r["market_key"]).lower() == "h2h"
+    ]
+    by_date: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        by_date[str(row["uk_kickoff_date"])].append(row)
+
+    existing = {
+        str(r["system_key"])
+        for r in db.fetchall("SELECT system_key FROM manual_system_shadow_bets")
+    }
+    created = 0
+    for kickoff_date, date_rows in sorted(by_date.items()):
+        if len({str(x["event_id"]) for x in date_rows}) < 6:
+            continue
+        for book in tuple(dict.fromkeys(str(x) for x in bookmaker_keys if str(x))):
+            eligible = _cohort_best_legs_for_book(
+                db, date_rows, bookmaker_key=book, now=now,
+                freshness_minutes=quote_freshness_minutes,
+            )
+            eligible = [x for x in eligible if 4.00 <= float(x["quote"]["price"]) < 7.50]
+            if len(eligible) < 6:
+                continue
+            chosen = eligible[:6]
+            quote_times = [parse_iso(str(x["quote"]["captured_at"])) for x in chosen]
+            spread = (max(quote_times) - min(quote_times)).total_seconds() / 60.0
+            if spread > float(max_quote_spread_minutes):
+                continue
+
+            key = f"{FROZEN_CONSENSUS_H2H_HEINZ_VERSION}|{kickoff_date}|{book}"
+            if key in existing:
+                continue
+            combos = _line_combos("HEINZ", tuple(range(1, 7)))
+            line_stake = 1.0 / 57.0
+            expected_return = all_win_return = 0.0
+            for combo in combos:
+                odds_product = prob_product = 1.0
+                for order in combo:
+                    leg = chosen[order - 1]
+                    odds_product *= float(leg["quote"]["price"])
+                    prob_product *= float(leg["fair_probability"])
+                expected_return += line_stake * prob_product * odds_product
+                all_win_return += line_stake * odds_product
+            singles_expected_return = sum(
+                float(x["fair_probability"]) * float(x["quote"]["price"]) for x in chosen
+            ) / 6.0
+            db.execute(
+                """
+                INSERT INTO manual_system_shadow_bets(
+                  system_key,created_at,algorithm_version,system_type,leg_count,line_count,
+                  bookmaker_key,bookmaker_title,placement_mode,manual_placeable,source_cohort,
+                  source_engines_json,kickoff_date,first_kickoff,last_kickoff,
+                  total_stake_units,line_stake_units,singles_control_stake_units,
+                  expected_return_units,expected_pnl_units,expected_roi_pct,
+                  singles_expected_return_units,singles_expected_pnl_units,singles_expected_roi_pct,
+                  all_win_return_units,entry_quote_time_spread_minutes,status,app_version
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    key, now.isoformat(), FROZEN_CONSENSUS_H2H_HEINZ_VERSION, "HEINZ", 6, 57,
+                    book, _book_title(chosen, book), "MANUAL_PLACEABLE", 1, "CONSENSUS_H2H_4_TO_7_49",
+                    json.dumps(["CONSENSUS"]), kickoff_date,
+                    min(x["kickoff_dt"] for x in chosen).isoformat(),
+                    max(x["kickoff_dt"] for x in chosen).isoformat(),
+                    1.0, line_stake, 1.0 / 6.0,
+                    expected_return, expected_return - 1.0, (expected_return - 1.0) * 100.0,
+                    singles_expected_return, singles_expected_return - 1.0,
+                    (singles_expected_return - 1.0) * 100.0,
+                    all_win_return, spread, "OPEN", APP_VERSION,
+                ),
+            )
+            parent = db.fetchone("SELECT id FROM manual_system_shadow_bets WHERE system_key=?", (key,))
+            if not parent:
+                continue
+            parent_id = int(parent["id"])
+            for order, leg in enumerate(chosen, start=1):
+                quote = leg["quote"]
+                db.execute(
+                    """
+                    INSERT INTO manual_system_shadow_legs(
+                      system_bet_id,leg_order,source_engine,source_table,source_id,event_id,
+                      market_key,selection,outcome_description,point,entry_odds,min_odds,
+                      fair_probability,fair_odds,source_edge_pct,venue_edge_pct,
+                      entry_quote_captured_at,entry_quote_age_minutes
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    """,
+                    (
+                        parent_id, order, leg["source_engine"], leg["source_table"], leg["source_id"],
+                        leg["event_id"], leg["market_key"], leg["selection"], leg.get("outcome_description"),
+                        leg.get("point"), float(quote["price"]), float(leg["min_odds"]),
+                        float(leg["fair_probability"]), float(leg["fair_odds"]),
+                        float(leg.get("edge_pct") or 0.0), float(quote["venue_edge_pct"]),
+                        quote["captured_at"], float(quote["quote_age_minutes"]),
+                    ),
+                )
+            for line_order, combo in enumerate(combos, start=1):
+                odds_product = prob_product = 1.0
+                for order in combo:
+                    leg = chosen[order - 1]
+                    odds_product *= float(leg["quote"]["price"])
+                    prob_product *= float(leg["fair_probability"])
+                db.execute(
+                    """
+                    INSERT INTO manual_system_shadow_lines(
+                      system_bet_id,line_order,line_size,leg_orders_json,entry_odds,
+                      fair_probability,expected_return_units,expected_pnl_units,stake_units
+                    ) VALUES(?,?,?,?,?,?,?,?,?)
+                    """,
+                    (
+                        parent_id, line_order, len(combo), json.dumps(list(combo)),
+                        odds_product, prob_product, line_stake * prob_product * odds_product,
+                        line_stake * (prob_product * odds_product - 1.0), line_stake,
+                    ),
+                )
+            existing.add(key)
+            created += 1
     return created
 
 
