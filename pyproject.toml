@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "project-exit-plan-betting-lab"
+version = "0.19.2"
+description = "Shadow-only betting research lab with automation-capable execution shadow"
+requires-python = ">=3.11"
+
+[tool.setuptools]
+py-modules = [
+  "app","web","config","db","quota","fair_value","cross_market","slow_book",
+  "the_odds_api","collector","signals","closing","worker","research","results",
+  "canonical","research_intelligence","execution_shadow","exporter",
+  "instrumentation","multiples_shadow","manual_systems_shadow","tennis_shadow","multisport_shadow",
+  "multisport_lines_shadow","predictive_football","predictive_football_pred2",
+  "predictive_football_pred3","predictive_football_pred4","predictive_historical",
+  "proxy_xg","outcome_edge","meta_edge","meta_edge_model","cohort_systems_shadow"
+]
