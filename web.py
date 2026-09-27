@@ -1103,114 +1103,136 @@ body{background:#0d1117;color:#e6edf3;font-family:Arial,sans-serif;margin:0;padd
 
 @app.get('/',response_class=HTMLResponse)
 def dashboard():
-    """Mobile-first one-page research cockpit. Detailed reports stay on their own pages."""
-    q = quota.state()
-    execution = execution_scoreboard(db)
-    predictive = predictive_scoreboard(db)
-    predictive2 = predictive2_scoreboard(db)
-    predictive3 = predictive3_scoreboard(db)
-    predictive4 = predictive4_scoreboard(db)
-    outcome = outcome_edge_report(db)
-    cohorts = cohort_systems_scoreboard(db)
+    """Decision-first, mobile-friendly Betting Lab research cockpit."""
+    q=quota.state()
+    execution=execution_scoreboard(db)
+    outcome=outcome_edge_report(db)
+    manual=manual_systems_scoreboard(db)
+    tennis=tennis_scoreboard(db)
+    multisport=multisport_scoreboard(db)
+    p1=predictive_scoreboard(db);p2=predictive2_scoreboard(db)
+    p3=predictive3_scoreboard(db);p4=predictive4_scoreboard(db)
+    meta=meta_model_status(db)
 
-    def pct(v):
-        return f"{_fmt(v)}%"
-
-    def tone(v, good_positive=True):
-        if v is None:
-            return ""
-        try:
-            n=float(v)
-        except Exception:
-            return ""
-        good = n >= 0 if good_positive else n <= 0
-        return "ok" if good else "bad"
-
-    def metric(label, value, css=""):
+    def pct(v): return "—" if v is None else f"{_fmt(v)}%"
+    def tone(v):
+        if v is None:return ""
+        try:return "ok" if float(v)>=0 else "bad"
+        except Exception:return ""
+    def metric(label,value,css=""):
         return f"<div class='card'><div class='label'>{escape(str(label))}</div><div class='value {css}'>{escape(str(value))}</div></div>"
 
-    provider = "configured" if settings.odds_api_key else "NOT CONFIGURED"
-    paused = bool(q.get("paid_polling_paused"))
-    health = "PAUSED" if paused else "COLLECTING"
-    health_css = "warn" if paused else "ok"
-
-    headline = "".join([
-        metric("Data collection", health, health_css),
-        metric("Bets until midnight", bets_until_midnight(db)),
-        metric("Executable bets", execution.get("bets",0)),
-        metric("Settled", execution.get("settled",0)),
-        metric("Net P&L", f"{_fmt(execution.get('net_pnl_units'))}u", tone(execution.get("net_pnl_units"))),
-        metric("Net ROI", pct(execution.get("net_roi_pct")), tone(execution.get("net_roi_pct"))),
-        metric("A/B CLV", pct(execution.get("avg_clv_pct")), tone(execution.get("avg_clv_pct"))),
-        metric("Beat close", pct(execution.get("beat_close_pct")), "ok" if (execution.get("beat_close_pct") or 0)>=50 else "bad"),
-        metric("Claimed edge", pct(execution.get("avg_edge_pct"))),
-        metric("CLV samples", execution.get("clv_samples",0)),
-        metric("Credits remaining", q.get("credits_remaining","—")),
+    paused=bool(q.get("paid_polling_paused"))
+    health="PAUSED" if paused else "COLLECTING"
+    health_css="warn" if paused else "ok"
+    headline="".join([
+        metric("Collection",health,health_css),
+        metric("Bets today",bets_until_midnight(db)),
+        metric("Settled singles",execution.get("settled",0)),
+        metric("Net P&L",f"{_fmt(execution.get('net_pnl_units'))}u",tone(execution.get("net_pnl_units"))),
+        metric("Net ROI",pct(execution.get("net_roi_pct")),tone(execution.get("net_roi_pct"))),
+        metric("A/B CLV",pct(execution.get("avg_clv_pct")),tone(execution.get("avg_clv_pct"))),
+        metric("Beat close",pct(execution.get("beat_close_pct")),"ok" if (execution.get("beat_close_pct") or 0)>=50 else "bad"),
+        metric("CLV samples",execution.get("clv_samples",0)),
+        metric("Credits left",q.get("credits_remaining","—")),
     ])
 
-    def model_row(name, score, href):
-        return (
-            f"<tr><td><a href='{href}'><strong>{name}</strong></a></td>"
-            f"<td>{score.get('predictions',0)}</td><td>{score.get('settled_predictions',0)}</td>"
-            f"<td>{_fmt(score.get('avg_brier_score'),4)}</td>"
-            f"<td class='{tone(score.get('avg_clv_pct'))}'>{pct(score.get('avg_clv_pct'))}</td>"
-            f"<td class='{tone(score.get('net_roi_pct'))}'>{pct(score.get('net_roi_pct'))}</td>"
-            f"<td>{score.get('clv_samples',0)}</td></tr>"
+    watch_rows=[]
+    for x in (outcome.get("frozen_watch_cohorts") or []):
+        fwd=x.get("forward_sample") or x.get("forward") or {}
+        alltime=x.get("all_time") or {}
+        watch_rows.append(
+            f"<tr><td><strong>{escape(str(x.get('label') or x.get('cohort_key') or 'Cohort'))}</strong></td>"
+            f"<td>{fwd.get('selections',0)}</td><td class='{tone(fwd.get('flat_stake_roi_pct'))}'>{pct(fwd.get('flat_stake_roi_pct'))}</td>"
+            f"<td class='{tone(fwd.get('avg_ab_clv_pct'))}'>{pct(fwd.get('avg_ab_clv_pct'))}</td><td>{fwd.get('ab_clv_samples',fwd.get('clv_samples',0))}</td>"
+            f"<td>{alltime.get('selections',0)}</td><td>{pct(alltime.get('flat_stake_roi_pct'))}</td></tr>"
         )
-    models = "".join([
-        model_row("PRED1",predictive,"/predictive-football"),
-        model_row("PRED2",predictive2,"/predictive-football-pred2"),
-        model_row("PRED3",predictive3,"/predictive-football-pred3"),
-        model_row("PRED4",predictive4,"/predictive-football-pred4"),
+    watch_html="".join(watch_rows) or "<tr><td colspan='7'>Frozen cohorts are waiting for forward evidence.</td></tr>"
+
+    focus=outcome.get("focus_4_to_7_49") or {}
+    focus_cards="".join([
+        metric("4–7.49 selections",focus.get("selections",0)),
+        metric("4–7.49 hit rate",pct(focus.get("hit_rate_pct"))),
+        metric("4–7.49 ROI",pct(focus.get("flat_stake_roi_pct")),tone(focus.get("flat_stake_roi_pct"))),
+        metric("4–7.49 A/B CLV",pct(focus.get("avg_ab_clv_pct")),tone(focus.get("avg_ab_clv_pct"))),
     ])
 
-    watched = outcome.get("frozen_watch_cohorts",[]) or []
-    cohort_rows=[]
-    for x in watched:
-        fwd=x.get("forward") or {}
-        cohort_rows.append(
-            f"<tr><td>{escape(str(x.get('label') or x.get('cohort_key') or 'Cohort'))}</td>"
-            f"<td>{fwd.get('selections',0)}</td><td>{_fmt(fwd.get('flat_stake_roi_pct'))}%</td>"
-            f"<td>{_fmt(fwd.get('avg_ab_clv_pct'))}%</td><td>{fwd.get('clv_samples',0)}</td></tr>"
+    band_rows=[]
+    for x in outcome.get("odds_bands",[]) or []:
+        band_rows.append(
+            f"<tr><td>{escape(str(x.get('odds_band')))}</td><td>{x.get('selections',0)}</td>"
+            f"<td>{pct(x.get('hit_rate_pct'))}</td><td>{pct(x.get('mean_implied_probability_pct'))}</td>"
+            f"<td class='{tone(x.get('flat_stake_roi_pct'))}'>{pct(x.get('flat_stake_roi_pct'))}</td>"
+            f"<td class='{tone(x.get('avg_ab_clv_pct'))}'>{pct(x.get('avg_ab_clv_pct'))}</td></tr>"
         )
-    cohort_html="".join(cohort_rows) or "<tr><td colspan='5'>Forward cohorts are frozen and waiting for evidence.</td></tr>"
+    bands="".join(band_rows) or "<tr><td colspan='6'>No settled odds-band evidence yet.</td></tr>"
+
+    system_rows=[]
+    for x in (manual.get("segments",{}).get("system_type",[]) or []):
+        system_rows.append(
+            f"<tr><td>{escape(str(x.get('label') or x.get('key')))}</td><td>{x.get('settled',0)}</td>"
+            f"<td class='{tone(x.get('system_roi_pct'))}'>{pct(x.get('system_roi_pct'))}</td>"
+            f"<td class='{tone(x.get('singles_roi_pct'))}'>{pct(x.get('singles_roi_pct'))}</td>"
+            f"<td class='{tone(x.get('system_minus_singles_units'))}'>{_fmt(x.get('system_minus_singles_units'))}u</td></tr>"
+        )
+    systems="".join(system_rows) or "<tr><td colspan='5'>No settled multiple-system evidence yet.</td></tr>"
+
+    def lane_row(name,score,href):
+        settled=score.get("settled_bets",score.get("settled",0))
+        return (f"<tr><td><a href='{href}'><strong>{name}</strong></a></td><td>{settled}</td>"
+                f"<td class='{tone(score.get('net_roi_pct'))}'>{pct(score.get('net_roi_pct'))}</td>"
+                f"<td class='{tone(score.get('avg_clv_pct'))}'>{pct(score.get('avg_clv_pct'))}</td>"
+                f"<td>{score.get('clv_samples',0)}</td></tr>")
+    lanes="".join([
+        lane_row("Tennis",tennis,"/tennis"),lane_row("Multi-sport H2H",multisport,"/multisport"),
+        lane_row("PRED1",p1,"/predictive-football"),lane_row("PRED2",p2,"/predictive-football-pred2"),
+        lane_row("PRED3",p3,"/predictive-football-pred3"),lane_row("PRED4",p4,"/predictive-football-pred4"),
+    ])
 
     return HTMLResponse(f"""<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
     <title>Betting Lab v{VERSION}</title><style>{BASE_STYLE}
-    .hero{{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap}}
-    .hero h1{{font-size:24px}}.compact{{margin:12px 0 18px}}.compact .card{{padding:13px}}
-    .compact .value{{font-size:21px}}.nav{{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0 20px}}
-    .nav a{{background:#21262d;border:1px solid #30363d;padding:8px 10px;border-radius:8px;font-size:13px}}
-    .summary{{font-size:14px;line-height:1.55}}.table-wrap{{overflow-x:auto}}
-    @media(max-width:600px){{body{{padding:14px}}.grid{{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:12px 0 18px}}.card{{padding:12px}}.value{{font-size:20px}}.panel{{padding:14px;margin-bottom:12px}}table{{min-width:620px}}}}
+    body{{max-width:1400px;margin:auto}}.hero{{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap}}
+    .hero h1{{font-size:26px}}.compact{{margin:12px 0 18px}}.compact .card{{padding:13px}}.compact .value{{font-size:21px}}
+    .nav{{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0 20px}}.nav a{{background:#21262d;border:1px solid #30363d;padding:8px 10px;border-radius:8px;font-size:13px}}
+    .summary{{font-size:14px;line-height:1.55}}.table-wrap{{overflow-x:auto}}.priority{{border-color:#388bfd}}.actions{{display:flex;gap:8px;flex-wrap:wrap}}
+    .eyebrow{{color:#8b949e;font-size:12px;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px}}
+    @media(max-width:600px){{body{{padding:14px}}.grid{{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:12px 0 18px}}.card{{padding:12px}}.value{{font-size:19px}}.panel{{padding:14px;margin-bottom:12px}}table{{min-width:590px}}.button{{margin:0;padding:10px 12px}}}}
     </style></head><body>
-    <div class='hero'><div><h1>Betting Lab</h1><div class='sub'>Forward evidence cockpit · v{VERSION}</div></div>
-    <span class='pill {health_css}'>{health}</span></div>
+    <div class='hero'><div><div class='eyebrow'>Project Exit Plan</div><h1>Betting Lab</h1><div class='sub'>Weekly evidence cockpit · v{VERSION} · shadow research only</div></div><span class='pill {health_css}'>{health}</span></div>
+
     <div class='grid compact'>{headline}</div>
 
-    <div class='panel summary'><strong>What matters now:</strong> claimed executable edge is {pct(execution.get('avg_edge_pct'))}, while A/B CLV is <span class='{tone(execution.get('avg_clv_pct'))}'>{pct(execution.get('avg_clv_pct'))}</span> and net ROI is <span class='{tone(execution.get('net_roi_pct'))}'>{pct(execution.get('net_roi_pct'))}</span>. The lab remains shadow-only; we are gathering forward evidence rather than promoting strategies.</div>
-
-    <div class='panel'><h2>Football models</h2><div class='muted'>Tap a model for its detailed research page.</div>
-    <div class='table-wrap'><table><thead><tr><th>Model</th><th>Pred</th><th>Settled</th><th>Brier</th><th>A/B CLV</th><th>ROI</th><th>CLV n</th></tr></thead><tbody>{models}</tbody></table></div></div>
-
-    <div class='panel'><h2>Frozen forward cohorts</h2><div class='muted'>Only post-freeze evidence counts here.</div>
-    <div class='table-wrap'><table><thead><tr><th>Cohort</th><th>Selections</th><th>ROI</th><th>A/B CLV</th><th>CLV n</th></tr></thead><tbody>{cohort_html}</tbody></table></div></div>
-
-    <div class='panel summary'><strong>Collection status:</strong> provider {provider}; paid polling <span class='{health_css}'>{'PAUSED' if paused else 'ACTIVE'}</span>. Cohort-system cards: {cohorts.get('cards',0)} · settled: {cohorts.get('settled',0)}.</div>
-
-    <div class='nav'>
-      <a href='/outcome-edge'>Outcome Edge</a><a href='/cohort-systems'>Cohort Systems</a>
-      <a href='/meta-edge'>Meta Edge</a><a href='/research'>Research Intelligence</a>
-      <a href='/tennis'>Tennis</a><a href='/multisport'>Multi-Sport</a>
-      <a href='/multiples'>Multiples</a><a href='/high-payout-shadow'>High-Payout Shadow</a><a href='/manual-systems'>Manual Systems</a>
+    <div class='panel priority'><h2>What we care about</h2>
+      <div class='summary'>The current job is simple: build the forward sample and see whether the interesting pockets survive. Broad executable performance is <strong class='{tone(execution.get("net_roi_pct"))}'>{pct(execution.get("net_roi_pct"))} ROI</strong> with <strong class='{tone(execution.get("avg_clv_pct"))}'>{pct(execution.get("avg_clv_pct"))} A/B CLV</strong>. No strategy is promoted from this dashboard.</div>
+      <div class='grid compact'>{focus_cards}</div>
+      <div class='muted'>4.00–7.49 is shown prominently because it is an existing research lead, not because the dashboard declares it an edge.</div>
     </div>
 
-    <div class='panel'>
-      <h2>Research Exports</h2>
-      <div class='muted' style='margin-bottom:14px'>Use the smaller exports on your phone. Full Historical is for occasional complete audits.</div>
-      <a class='button' href='/export/research-weekly.zip'>Weekly Export · Recommended</a>
-      <a class='button' href='/export/manual-systems.zip'>Manual Systems · Phone-friendly</a>
-      <a class='button secondary' href='/export/research.zip'>Full Historical · Large</a>
+    <div class='panel priority'><h2>Forward watchlist</h2><div class='muted'>Post-freeze evidence gets priority over discovery results.</div>
+      <div class='table-wrap'><table><thead><tr><th>Cohort</th><th>Forward n</th><th>Forward ROI</th><th>Forward CLV</th><th>CLV n</th><th>All-time n</th><th>All-time ROI</th></tr></thead><tbody>{watch_html}</tbody></table></div>
+    </div>
+
+    <div class='section-grid'>
+      <div class='panel'><h2>Odds-band scan</h2><div class='muted'>Fast view for pockets strengthening, fading or emerging. We still require forward confirmation.</div>
+        <div class='table-wrap'><table><thead><tr><th>Odds</th><th>n</th><th>Hit</th><th>Implied</th><th>ROI</th><th>A/B CLV</th></tr></thead><tbody>{bands}</tbody></table></div>
+      </div>
+      <div class='panel'><h2>Multiples vs singles</h2><div class='muted'>The key question: are systems adding anything beyond their component singles?</div>
+        <div class='table-wrap'><table><thead><tr><th>System</th><th>Settled</th><th>System ROI</th><th>Singles ROI</th><th>Δ P&L</th></tr></thead><tbody>{systems}</tbody></table></div>
+        <div class='summary' style='margin-top:12px'>Manual-placeable cards: <strong>{manual.get("manual_placeable_cards",0)}</strong> · Open cards: <strong>{manual.get("open",0)}</strong></div>
+      </div>
+    </div>
+
+    <div class='panel'><h2>Other research lanes</h2><div class='muted'>Secondary scan. These stay below the main watchlist unless evidence starts to stand out.</div>
+      <div class='table-wrap'><table><thead><tr><th>Lane</th><th>Settled</th><th>Net ROI</th><th>A/B CLV</th><th>CLV n</th></tr></thead><tbody>{lanes}</tbody></table></div>
+    </div>
+
+    <div class='panel'><h2>Tuesday review exports</h2><div class='muted' style='margin-bottom:14px'>These are the two files to upload for the weekly review. Full history stays available for occasional audits.</div>
+      <div class='actions'><a class='button' href='/export/research-weekly.zip'>Weekly Research ZIP</a><a class='button' href='/export/manual-systems.zip'>Manual Systems ZIP</a><a class='button secondary' href='/export/research.zip'>Full Historical ZIP</a></div>
+    </div>
+
+    <div class='panel'><h2>Deep dives</h2><div class='muted'>Detailed diagnostics are still available, but they no longer dominate the home page.</div>
+      <div class='nav'><a href='/outcome-edge'>Outcome Edge</a><a href='/manual-systems'>Manual Systems</a><a href='/high-payout-shadow'>High-Payout</a><a href='/cohort-systems'>Cohort Systems</a><a href='/research'>Research Intelligence</a><a href='/meta-edge'>Meta Edge</a><a href='/tennis'>Tennis</a><a href='/multisport'>Multi-Sport</a><a href='/multiples'>Multiples</a></div>
+      <div class='summary'>META2: <strong>{escape(str(meta.get("status","—")))}</strong> · Provider credits remaining: <strong>{escape(str(q.get("credits_remaining","—")))}</strong></div>
     </div>
     </body></html>""")
 
