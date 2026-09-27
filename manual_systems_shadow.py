@@ -1060,6 +1060,18 @@ class ManualSystemsShadowEngine:
                 min_leg_odds=min_leg_odds,
                 max_leg_odds=max_leg_odds,
             )
+        # Dedicated frozen research lane: only genuine same-book William Hill
+        # or Ladbrokes six-leg Heinz opportunities qualify.
+        frozen_books = tuple(
+            b for b in placeable if b in FROZEN_CONSENSUS_H2H_HEINZ_BOOKS
+        )
+        created += generate_frozen_consensus_h2h_heinz_shadows(
+            self.db, now=now,
+            bookmaker_keys=frozen_books or FROZEN_CONSENSUS_H2H_HEINZ_BOOKS,
+            quote_freshness_minutes=float(getattr(self.settings, "manual_systems_quote_freshness_minutes", 45.0)),
+            max_quote_spread_minutes=float(getattr(self.settings, "manual_systems_max_quote_spread_minutes", 15.0)),
+            horizon_hours=float(getattr(self.settings, "manual_systems_formation_horizon_hours", 30.0)),
+        )
         clv = finalize_manual_system_clv(self.db, now=now)
         settled = settle_manual_system_shadows(self.db)
         return {"enabled": True, "refresh": refresh, "created": created, "clv_finalized": clv, "settled": settled}
