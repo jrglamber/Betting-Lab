@@ -1198,6 +1198,13 @@ def dashboard():
 
     <div class='panel summary'><strong>Collection status:</strong> provider {provider}; paid polling <span class='{health_css}'>{'PAUSED' if paused else 'ACTIVE'}</span>. Cohort-system cards: {cohorts.get('cards',0)} · settled: {cohorts.get('settled',0)}.</div>
 
+    <div class='panel'><h2>Research Exports</h2><div class='muted'>Download research data exports directly from the dashboard.</div>
+    <div class='grid' style='grid-template-columns:repeat(auto-fit,minmax(220px,1fr));margin-top:14px'>
+      <a class='button' href='/export/research-weekly.zip' style='text-align:center'>Weekly Export (Recommended/Phone-friendly)</a>
+      <a class='button secondary' href='/export/manual-systems.zip' style='text-align:center'>Manual Systems Export (Targeted/Phone-friendly)</a>
+      <a class='button secondary' href='/export/research.zip' style='text-align:center'>Full Historical Export (Large/Occasional)</a>
+    </div></div>
+
     <div class='nav'>
       <a href='/outcome-edge'>Outcome Edge</a><a href='/cohort-systems'>Cohort Systems</a>
       <a href='/meta-edge'>Meta Edge</a><a href='/research'>Research Intelligence</a>
