@@ -98,7 +98,7 @@ from research import (
     event_price_history, signal_price_history, repair_premature_clv,
 )
 
-VERSION = "0.19.8"
+VERSION = "0.19.9"
 
 db = Database(settings.database_url, settings.db_path)
 api = TheOddsApi(settings.odds_api_key)
@@ -1126,6 +1126,30 @@ def dashboard():
     def metric(label,value,css=""):
         return f"<div class='card'><div class='label'>{escape(str(label))}</div><div class='value {css}'>{escape(str(value))}</div></div>"
 
+    credit_rows=db.fetchall("""
+        SELECT SUBSTR(started_at,1,10) AS day, COALESCE(SUM(actual_cost),0) AS credits
+        FROM collector_runs
+        WHERE started_at >= ?
+        GROUP BY SUBSTR(started_at,1,10)
+        ORDER BY day
+    """,((datetime.now(timezone.utc)-timedelta(days=7)).isoformat(),))
+    credit_by_day={str(r.get("day")):int(r.get("credits") or 0) for r in credit_rows}
+    today_utc=datetime.now(timezone.utc).date()
+    today_credits=credit_by_day.get(today_utc.isoformat(),0)
+    yesterday_credits=credit_by_day.get((today_utc-timedelta(days=1)).isoformat(),0)
+    completed=[credit_by_day.get((today_utc-timedelta(days=i)).isoformat(),0) for i in range(1,8)]
+    avg7=(sum(completed)/len(completed)) if completed else 0.0
+    projected30=avg7*30.0
+    monthly_budget=100000
+    budget_pct=(projected30/monthly_budget*100.0) if monthly_budget else 0.0
+    credit_cards="".join([
+        metric("Credits today",f"{today_credits:,}"),
+        metric("Yesterday",f"{yesterday_credits:,}"),
+        metric("7-day avg/day",f"{avg7:,.0f}"),
+        metric("30-day projection",f"{projected30:,.0f}","ok" if projected30<=monthly_budget else "bad"),
+        metric("100k budget used",f"{budget_pct:.1f}%","ok" if budget_pct<=100 else "bad"),
+    ])
+
     paused=bool(q.get("paid_polling_paused"))
     health="PAUSED" if paused else "COLLECTING"
     health_css="warn" if paused else "ok"
@@ -1263,6 +1287,10 @@ def dashboard():
     <div class='hero'><div><div class='eyebrow'>Project Exit Plan</div><h1>Betting Lab</h1><div class='sub'>Weekly evidence cockpit · v{VERSION} · shadow research only</div></div><span class='pill {health_css}'>{health}</span></div>
 
     <div class='grid compact'>{headline}</div>
+
+    <div class='panel'><h2>Provider credits</h2><div class='muted'>Actual recorded provider-call cost. The 7-day average uses the previous seven completed UTC days; the 30-day projection is compared with the 100,000-credit monthly budget.</div>
+      <div class='grid compact'>{credit_cards}</div>
+    </div>
 
     <div class='panel priority'><h2>What we care about</h2>
       <div class='summary'>The current job is simple: build the forward sample and see whether the interesting pockets survive. Broad executable performance is <strong class='{tone(execution.get("net_roi_pct"))}'>{pct(execution.get("net_roi_pct"))} ROI</strong> with <strong class='{tone(execution.get("avg_clv_pct"))}'>{pct(execution.get("avg_clv_pct"))} A/B CLV</strong>. No strategy is promoted from this dashboard.</div>
