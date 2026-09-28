@@ -98,7 +98,7 @@ from research import (
     event_price_history, signal_price_history, repair_premature_clv,
 )
 
-VERSION = "0.19.11"
+VERSION = "0.19.12"
 
 db = Database(settings.database_url, settings.db_path)
 api = TheOddsApi(settings.odds_api_key)
@@ -1214,7 +1214,7 @@ def dashboard():
     sport_labels={
         "BASEBALL":"Baseball","AMERICAN_FOOTBALL":"American Football",
         "BASKETBALL":"Basketball","ICE_HOCKEY":"Ice Hockey",
-        "AUSSIE_RULES":"Aussie Rules","RUGBY_LEAGUE":"Rugby League",
+        "AUSSIE_RULES":"Aussie Rules","RUGBY_LEAGUE":"Rugby League","CRICKET":"Cricket",
     }
     sport_rows=[]
     for x in multisport_by_sport:
@@ -1225,7 +1225,10 @@ def dashboard():
             f"<td class='{tone(x.get('net_roi_pct'))}'>{pct(x.get('net_roi_pct'))}</td>"
             f"<td class='{tone(x.get('avg_clv_pct'))}'>{pct(x.get('avg_clv_pct'))}</td><td>{x.get('clv_samples',0)}</td></tr>"
         )
-    sports_html="".join(sport_rows) or "<tr><td colspan='6'>New sport lanes are enabled and waiting for observations.</td></tr>"
+    cricket_rows=[r for r in sport_rows if ">Cricket<" in r]
+    core_sport_rows=[r for r in sport_rows if ">Cricket<" not in r]
+    sports_html="".join(core_sport_rows) or "<tr><td colspan='6'>New sport lanes are enabled and waiting for observations.</td></tr>"
+    cricket_summary_html="".join(cricket_rows) or "<tr><td colspan='6'>Cricket collection enabled; waiting for observations.</td></tr>"
     ms_band_rows=[]
     for x in multisport_by_odds:
         ms_band_rows.append(
@@ -1267,7 +1270,10 @@ def dashboard():
             avg_clv=(sum(clvs)/len(clvs)) if clvs else None
             rows.append(f"<tr><td><strong>{escape(band)}</strong></td><td>{len(items)}</td><td>{len(settled)}</td><td class='{tone(roi)}'>{pct(roi)}</td><td class='{tone(avg_clv)}'>{pct(avg_clv)}</td><td>{len(clvs)}</td></tr>")
         per_sport_sections.append(f"<h3 style='margin-top:20px'>{escape(label)}</h3><div class='table-wrap'><table><thead><tr><th>Odds</th><th>Bets</th><th>Settled</th><th>Net ROI</th><th>A/B CLV</th><th>CLV n</th></tr></thead><tbody>{''.join(rows)}</tbody></table></div>")
-    per_sport_bands_html="".join(per_sport_sections) or "<div class='muted'>Waiting for sport-level odds-band evidence.</div>"
+    cricket_band_sections=[x for x in per_sport_sections if ">Cricket<" in x]
+    core_band_sections=[x for x in per_sport_sections if ">Cricket<" not in x]
+    per_sport_bands_html="".join(core_band_sections) or "<div class='muted'>Waiting for sport-level odds-band evidence.</div>"
+    cricket_bands_html="".join(cricket_band_sections) or "<div class='muted'>Waiting for cricket odds-band evidence.</div>"
 
     lanes="".join([
         lane_row("Tennis",tennis,"/tennis"),
@@ -1317,6 +1323,11 @@ def dashboard():
       <h3 style='margin-top:20px'>Odds bands by sport</h3><div class='muted'>Each sport is split into the same price bands so sport-specific pockets are visible without assuming one universal odds effect. Descriptive research only.</div>
       {per_sport_bands_html}
       <div style='margin-top:12px'><a href='/multisport'>Open full Multi-Sport research →</a></div>
+    </div>
+
+    <div class='panel priority'><h2>Cricket</h2><div class='muted'>Dedicated H2H/match-winner research lane. Kept separate from the other sports so cricket-specific odds behaviour stays easy to read.</div>
+      <div class='table-wrap'><table><thead><tr><th>Sport</th><th>Bets</th><th>Settled</th><th>Net ROI</th><th>A/B CLV</th><th>CLV n</th></tr></thead><tbody>{cricket_summary_html}</tbody></table></div>
+      <h3 style='margin-top:20px'>Cricket odds bands</h3>{cricket_bands_html}
     </div>
 
     <div class='panel'><h2>Other research lanes</h2><div class='muted'>Tennis and football model challengers stay secondary unless forward evidence starts to stand out.</div>
