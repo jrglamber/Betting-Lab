@@ -98,7 +98,7 @@ from research import (
     event_price_history, signal_price_history, repair_premature_clv,
 )
 
-VERSION = "0.19.7"
+VERSION = "0.19.8"
 
 db = Database(settings.database_url, settings.db_path)
 api = TheOddsApi(settings.odds_api_key)
@@ -1113,6 +1113,7 @@ def dashboard():
     multisport_segments_data=multisport_segments(db)
     multisport_by_sport=(multisport_segments_data.get("sport") or [])
     multisport_by_odds=(multisport_segments_data.get("odds_band") or [])
+    multisport_bets_for_bands=latest_multisport_bets(db, limit=10000)
     p1=predictive_scoreboard(db);p2=predictive2_scoreboard(db)
     p3=predictive3_scoreboard(db);p4=predictive4_scoreboard(db)
     meta=meta_model_status(db)
@@ -1209,6 +1210,40 @@ def dashboard():
             f"<td class='{tone(x.get('avg_clv_pct'))}'>{pct(x.get('avg_clv_pct'))}</td><td>{x.get('clv_samples',0)}</td></tr>"
         )
     ms_bands_html="".join(ms_band_rows) or "<tr><td colspan='6'>Waiting for settled multi-sport odds-band evidence.</td></tr>"
+    def ms_price_band(row):
+        try:o=float(row.get("offered_odds") or 0)
+        except Exception:return "Unknown"
+        if o < 1.5:return "<1.50"
+        if o < 2.0:return "1.50–1.99"
+        if o < 3.0:return "2.00–2.99"
+        if o < 4.0:return "3.00–3.99"
+        if o < 5.0:return "4.00–4.99"
+        if o < 7.5:return "5.00–7.49"
+        if o < 10.0:return "7.50–9.99"
+        if o < 15.0:return "10.00–14.99"
+        return "15+"
+
+    sport_band_groups={}
+    for row in multisport_bets_for_bands:
+        family=str(row.get("sport_family") or "Other")
+        band=ms_price_band(row)
+        sport_band_groups.setdefault((family,band),[]).append(row)
+    band_order={"<1.50":0,"1.50–1.99":1,"2.00–2.99":2,"3.00–3.99":3,"4.00–4.99":4,"5.00–7.49":5,"7.50–9.99":6,"10.00–14.99":7,"15+":8,"Unknown":9}
+    per_sport_sections=[]
+    for family in sorted({k[0] for k in sport_band_groups}):
+        raw=family.replace("_"," ")
+        label=sport_labels.get(family.upper(),raw.title())
+        rows=[]
+        pairs=sorted([(k,v) for k,v in sport_band_groups.items() if k[0]==family],key=lambda kv:band_order.get(kv[0][1],99))
+        for (fam,band),items in pairs:
+            settled=[x for x in items if x.get("pnl_units") is not None and x.get("settlement_quality")!="UNVERIFIED_VENUE_RULE"]
+            net=sum(float(x.get("net_pnl_units") if x.get("net_pnl_units") is not None else x.get("pnl_units") or 0.0) for x in settled)
+            roi=(net/len(settled)*100.0) if settled else None
+            clvs=[float(x["clv_pct"]) for x in items if x.get("clv_pct") is not None and str(x.get("clv_quality") or "") in {"A","B"}]
+            avg_clv=(sum(clvs)/len(clvs)) if clvs else None
+            rows.append(f"<tr><td><strong>{escape(band)}</strong></td><td>{len(items)}</td><td>{len(settled)}</td><td class='{tone(roi)}'>{pct(roi)}</td><td class='{tone(avg_clv)}'>{pct(avg_clv)}</td><td>{len(clvs)}</td></tr>")
+        per_sport_sections.append(f"<h3 style='margin-top:20px'>{escape(label)}</h3><div class='table-wrap'><table><thead><tr><th>Odds</th><th>Bets</th><th>Settled</th><th>Net ROI</th><th>A/B CLV</th><th>CLV n</th></tr></thead><tbody>{''.join(rows)}</tbody></table></div>")
+    per_sport_bands_html="".join(per_sport_sections) or "<div class='muted'>Waiting for sport-level odds-band evidence.</div>"
 
     lanes="".join([
         lane_row("Tennis",tennis,"/tennis"),
@@ -1251,8 +1286,8 @@ def dashboard():
 
     <div class='panel priority'><h2>Multi-Sport lanes</h2><div class='muted'>Individual sport families are visible here so new pockets do not disappear inside one aggregate row. Tap Multi-Sport for league and odds-band detail.</div>
       <div class='table-wrap'><table><thead><tr><th>Sport</th><th>Bets</th><th>Settled</th><th>Net ROI</th><th>A/B CLV</th><th>CLV n</th></tr></thead><tbody>{sports_html}</tbody></table></div>
-      <h3 style='margin-top:20px'>Odds bands</h3><div class='muted'>Aggregate multi-sport entry-price bands. Read these alongside the individual sports; they are descriptive research, not selection rules.</div>
-      <div class='table-wrap'><table><thead><tr><th>Odds</th><th>Bets</th><th>Settled</th><th>Net ROI</th><th>A/B CLV</th><th>CLV n</th></tr></thead><tbody>{ms_bands_html}</tbody></table></div>
+      <h3 style='margin-top:20px'>Odds bands by sport</h3><div class='muted'>Each sport is split into the same price bands so sport-specific pockets are visible without assuming one universal odds effect. Descriptive research only.</div>
+      {per_sport_bands_html}
       <div style='margin-top:12px'><a href='/multisport'>Open full Multi-Sport research →</a></div>
     </div>
 
