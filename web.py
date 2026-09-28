@@ -98,7 +98,7 @@ from research import (
     event_price_history, signal_price_history, repair_premature_clv,
 )
 
-VERSION = "0.19.6"
+VERSION = "0.19.7"
 
 db = Database(settings.database_url, settings.db_path)
 api = TheOddsApi(settings.odds_api_key)
@@ -1110,7 +1110,9 @@ def dashboard():
     manual=manual_systems_scoreboard(db)
     tennis=tennis_scoreboard(db)
     multisport=multisport_scoreboard(db)
-    multisport_by_sport=(multisport_segments(db).get("sport") or [])
+    multisport_segments_data=multisport_segments(db)
+    multisport_by_sport=(multisport_segments_data.get("sport") or [])
+    multisport_by_odds=(multisport_segments_data.get("odds_band") or [])
     p1=predictive_scoreboard(db);p2=predictive2_scoreboard(db)
     p3=predictive3_scoreboard(db);p4=predictive4_scoreboard(db)
     meta=meta_model_status(db)
@@ -1199,6 +1201,14 @@ def dashboard():
             f"<td class='{tone(x.get('avg_clv_pct'))}'>{pct(x.get('avg_clv_pct'))}</td><td>{x.get('clv_samples',0)}</td></tr>"
         )
     sports_html="".join(sport_rows) or "<tr><td colspan='6'>New sport lanes are enabled and waiting for observations.</td></tr>"
+    ms_band_rows=[]
+    for x in multisport_by_odds:
+        ms_band_rows.append(
+            f"<tr><td><strong>{escape(str(x.get('label') or '—'))}</strong></td><td>{x.get('bets',0)}</td><td>{x.get('settled',0)}</td>"
+            f"<td class='{tone(x.get('net_roi_pct'))}'>{pct(x.get('net_roi_pct'))}</td>"
+            f"<td class='{tone(x.get('avg_clv_pct'))}'>{pct(x.get('avg_clv_pct'))}</td><td>{x.get('clv_samples',0)}</td></tr>"
+        )
+    ms_bands_html="".join(ms_band_rows) or "<tr><td colspan='6'>Waiting for settled multi-sport odds-band evidence.</td></tr>"
 
     lanes="".join([
         lane_row("Tennis",tennis,"/tennis"),
@@ -1241,6 +1251,8 @@ def dashboard():
 
     <div class='panel priority'><h2>Multi-Sport lanes</h2><div class='muted'>Individual sport families are visible here so new pockets do not disappear inside one aggregate row. Tap Multi-Sport for league and odds-band detail.</div>
       <div class='table-wrap'><table><thead><tr><th>Sport</th><th>Bets</th><th>Settled</th><th>Net ROI</th><th>A/B CLV</th><th>CLV n</th></tr></thead><tbody>{sports_html}</tbody></table></div>
+      <h3 style='margin-top:20px'>Odds bands</h3><div class='muted'>Aggregate multi-sport entry-price bands. Read these alongside the individual sports; they are descriptive research, not selection rules.</div>
+      <div class='table-wrap'><table><thead><tr><th>Odds</th><th>Bets</th><th>Settled</th><th>Net ROI</th><th>A/B CLV</th><th>CLV n</th></tr></thead><tbody>{ms_bands_html}</tbody></table></div>
       <div style='margin-top:12px'><a href='/multisport'>Open full Multi-Sport research →</a></div>
     </div>
 
