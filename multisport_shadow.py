@@ -13,7 +13,7 @@ from execution_shadow import clv_quality, commission_adjusted_pnl, is_headline_c
 from fair_value import clv_pct, devig_prices, edge_pct, fair_odds, min_odds_for_probability
 from quota import provider_actual_cost
 
-APP_VERSION = "0.8.1"
+APP_VERSION = "0.8.2"
 EXPERIMENT_VERSION = "MSP1_TWO_WAY_PRICE"
 MARKET_MODEL = "two_way_bookmaker_consensus"
 
@@ -24,6 +24,7 @@ SPORT_FAMILY_BY_PREFIX = (
     ("aussierules_", "AUSSIE_RULES"),
     ("rugbyleague_", "RUGBY_LEAGUE"),
     ("icehockey_", "ICE_HOCKEY"),
+    ("cricket_", "CRICKET"),
 )
 
 RESULT_DELAY_MINUTES = {
@@ -33,6 +34,7 @@ RESULT_DELAY_MINUTES = {
     "AUSSIE_RULES": 210,
     "RUGBY_LEAGUE": 180,
     "ICE_HOCKEY": 180,
+    "CRICKET": 360,
 }
 
 VERIFIED_AFL_DEAD_HEAT_BOOKS = {"betfair_ex_uk", "smarkets"}
