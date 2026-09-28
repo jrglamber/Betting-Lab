@@ -194,7 +194,12 @@ class Settings:
             "basketball_ncaab,"
             "icehockey_nhl,"
             "icehockey_sweden_hockey_league,"
-            "icehockey_sweden_allsvenskan"
+            "icehockey_sweden_allsvenskan,"
+            "cricket_test_match,"
+            "cricket_odi,"
+            "cricket_t20i,"
+            "cricket_ipl,"
+            "cricket_big_bash"
         ),
     )
     multisport_market: str = os.getenv("MULTISPORT_MARKET", "h2h")
