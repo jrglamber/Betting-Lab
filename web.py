@@ -98,7 +98,7 @@ from research import (
     event_price_history, signal_price_history, repair_premature_clv,
 )
 
-VERSION = "0.19.4"
+VERSION = "0.19.5"
 
 db = Database(settings.database_url, settings.db_path)
 api = TheOddsApi(settings.odds_api_key)
@@ -1183,8 +1183,24 @@ def dashboard():
                 f"<td class='{tone(score.get('net_roi_pct'))}'>{pct(score.get('net_roi_pct'))}</td>"
                 f"<td class='{tone(score.get('avg_clv_pct'))}'>{pct(score.get('avg_clv_pct'))}</td>"
                 f"<td>{score.get('clv_samples',0)}</td></tr>")
+    sport_labels={
+        "BASEBALL":"Baseball","AMERICAN_FOOTBALL":"American Football",
+        "BASKETBALL":"Basketball","ICE_HOCKEY":"Ice Hockey",
+        "AUSSIE_RULES":"Aussie Rules","RUGBY_LEAGUE":"Rugby League",
+    }
+    sport_rows=[]
+    for x in multisport_by_sport:
+        raw=str(x.get("label") or "Other").replace("_"," ")
+        label=sport_labels.get(str(x.get("label") or "").upper(),raw.title())
+        sport_rows.append(
+            f"<tr><td><strong>{escape(label)}</strong></td><td>{x.get('bets',0)}</td><td>{x.get('settled',0)}</td>"
+            f"<td class='{tone(x.get('net_roi_pct'))}'>{pct(x.get('net_roi_pct'))}</td>"
+            f"<td class='{tone(x.get('avg_clv_pct'))}'>{pct(x.get('avg_clv_pct'))}</td><td>{x.get('clv_samples',0)}</td></tr>"
+        )
+    sports_html="".join(sport_rows) or "<tr><td colspan='6'>New sport lanes are enabled and waiting for observations.</td></tr>"
+
     lanes="".join([
-        lane_row("Tennis",tennis,"/tennis"),lane_row("Multi-sport H2H",multisport,"/multisport"),
+        lane_row("Tennis",tennis,"/tennis"),
         lane_row("PRED1",p1,"/predictive-football"),lane_row("PRED2",p2,"/predictive-football-pred2"),
         lane_row("PRED3",p3,"/predictive-football-pred3"),lane_row("PRED4",p4,"/predictive-football-pred4"),
     ])
@@ -1222,7 +1238,12 @@ def dashboard():
       </div>
     </div>
 
-    <div class='panel'><h2>Other research lanes</h2><div class='muted'>Secondary scan. These stay below the main watchlist unless evidence starts to stand out.</div>
+    <div class='panel priority'><h2>Multi-Sport lanes</h2><div class='muted'>Individual sport families are visible here so new pockets do not disappear inside one aggregate row. Tap Multi-Sport for league and odds-band detail.</div>
+      <div class='table-wrap'><table><thead><tr><th>Sport</th><th>Bets</th><th>Settled</th><th>Net ROI</th><th>A/B CLV</th><th>CLV n</th></tr></thead><tbody>{sports_html}</tbody></table></div>
+      <div style='margin-top:12px'><a href='/multisport'>Open full Multi-Sport research →</a></div>
+    </div>
+
+    <div class='panel'><h2>Other research lanes</h2><div class='muted'>Tennis and football model challengers stay secondary unless forward evidence starts to stand out.</div>
       <div class='table-wrap'><table><thead><tr><th>Lane</th><th>Settled</th><th>Net ROI</th><th>A/B CLV</th><th>CLV n</th></tr></thead><tbody>{lanes}</tbody></table></div>
     </div>
 
