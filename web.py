@@ -98,7 +98,7 @@ from research import (
     event_price_history, signal_price_history, repair_premature_clv,
 )
 
-VERSION = "0.19.5"
+VERSION = "0.19.6"
 
 db = Database(settings.database_url, settings.db_path)
 api = TheOddsApi(settings.odds_api_key)
@@ -1110,6 +1110,7 @@ def dashboard():
     manual=manual_systems_scoreboard(db)
     tennis=tennis_scoreboard(db)
     multisport=multisport_scoreboard(db)
+    multisport_by_sport=(multisport_segments(db).get("sport") or [])
     p1=predictive_scoreboard(db);p2=predictive2_scoreboard(db)
     p3=predictive3_scoreboard(db);p4=predictive4_scoreboard(db)
     meta=meta_model_status(db)
