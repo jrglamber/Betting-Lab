@@ -248,3 +248,39 @@ def run_cross_sport_systems_maintenance(db: Database, now: Optional[datetime]=No
     created=generate_cross_sport_systems(db,now=now)
     return {"algorithm_version":ALGORITHM_VERSION,"created":created,"settled":settled,
             "systems":list(SYSTEM_SPECS),"shadow_only":True}
+
+
+def cross_sport_systems_scoreboard(db: Database) -> Dict[str, Any]:
+    _ensure_schema(db)
+    state = db.fetchone("SELECT * FROM cross_sport_system_state WHERE singleton_id=1") or {}
+    rows = db.fetchall("""SELECT system_type,status,system_pnl_units,singles_pnl_units,
+                                system_roi_pct,singles_roi_pct,avg_leg_clv_pct
+                         FROM cross_sport_system_bets""")
+    def summarize(items: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+        settled=[r for r in items if str(r.get("status") or "")=="SETTLED"]
+        return {
+            "cards": len(items), "open": sum(1 for r in items if str(r.get("status") or "")=="OPEN"),
+            "settled": len(settled),
+            "system_pnl_units": sum(float(r.get("system_pnl_units") or 0) for r in settled),
+            "singles_pnl_units": sum(float(r.get("singles_pnl_units") or 0) for r in settled),
+            "system_roi_pct": (sum(float(r.get("system_pnl_units") or 0) for r in settled)/len(settled)*100) if settled else None,
+            "singles_roi_pct": (sum(float(r.get("singles_pnl_units") or 0) for r in settled)/len(settled)*100) if settled else None,
+            "avg_leg_clv_pct": (sum(float(r["avg_leg_clv_pct"]) for r in settled if r.get("avg_leg_clv_pct") is not None) /
+                                sum(1 for r in settled if r.get("avg_leg_clv_pct") is not None)) if any(r.get("avg_leg_clv_pct") is not None for r in settled) else None,
+        }
+    return {"algorithm_version": ALGORITHM_VERSION, "started_at": state.get("started_at"),
+            "shadow_only": True, "overall": summarize(rows),
+            "by_system": {k:summarize([r for r in rows if str(r.get("system_type"))==k]) for k in SYSTEM_SPECS}}
+
+
+def latest_cross_sport_system_cards(db: Database, limit: int=100) -> List[Dict[str, Any]]:
+    _ensure_schema(db)
+    cards=db.fetchall("SELECT * FROM cross_sport_system_bets ORDER BY id DESC LIMIT ?",(int(limit),))
+    out=[]
+    for card in cards:
+        row=dict(card)
+        row["legs"]=db.fetchall("""SELECT leg_order,source_family,sport_key,event_id,market_key,selection,
+                                         entry_odds,result,clv_pct FROM cross_sport_system_legs
+                                  WHERE system_bet_id=? ORDER BY leg_order""",(card["id"],))
+        out.append(row)
+    return out
