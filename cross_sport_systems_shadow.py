@@ -9,7 +9,7 @@ from db import Database, utc_now_iso
 
 APP_VERSION = "0.19.2"
 ALGORITHM_VERSION = "XS1_CROSS_SPORT_SAME_BOOK_V2"
-SYSTEM_SPECS = {"HEINZ": (6, 57), "GOLIATH": (8, 247)}
+SYSTEM_SPECS = {"YANKEE": (4, 11), "HEINZ": (6, 57), "GOLIATH": (8, 247)}
 FORMATION_HORIZON_HOURS = 30.0
 MAX_SOURCE_AGE_MINUTES = 45.0
 MAX_CARD_QUOTE_SPREAD_MINUTES = 15.0
@@ -133,7 +133,9 @@ def _candidates(db: Database, now: datetime, started_at: datetime) -> List[Dict[
 
 
 def _line_combos(system_type: str, n: int) -> List[Tuple[int,...]]:
-    if system_type == "HEINZ" and n == 6:
+    if system_type == "YANKEE" and n == 4:
+        sizes = range(2,5)
+    elif system_type == "HEINZ" and n == 6:
         sizes = range(2,7)
     elif system_type == "GOLIATH" and n == 8:
         sizes = range(2,9)
