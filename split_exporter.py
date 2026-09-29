@@ -33,6 +33,7 @@ WEEKLY_TABLES = (
     "manual_system_shadow_bets", "manual_system_shadow_legs", "manual_system_shadow_lines",
     "cohort_system_shadow_state", "cohort_system_shadow_bets",
     "cohort_system_shadow_legs", "cohort_system_shadow_lines",
+    "cross_sport_system_state", "cross_sport_system_bets", "cross_sport_system_legs", "cross_sport_system_lines",
     "event_results", "research_reports",
     "tennis_execution_bets", "tennis_results",
     "multisport_execution_bets", "multisport_results",
@@ -52,7 +53,8 @@ WEEKLY_TABLES = (
 
 MANUAL_TABLES = (
     "manual_system_shadow_bets", "manual_system_shadow_legs",
-    "manual_system_shadow_lines", "events", "event_results",
+    "manual_system_shadow_lines", "cross_sport_system_state", "cross_sport_system_bets",
+    "cross_sport_system_legs", "cross_sport_system_lines", "events", "event_results",
 )
 
 def _secrets(settings):
