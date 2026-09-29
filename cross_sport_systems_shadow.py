@@ -8,10 +8,11 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 from db import Database, utc_now_iso
 
 APP_VERSION = "0.19.2"
-ALGORITHM_VERSION = "XS1_CROSS_SPORT_DEDUP_V1"
+ALGORITHM_VERSION = "XS1_CROSS_SPORT_SAME_BOOK_V2"
 SYSTEM_SPECS = {"HEINZ": (6, 57), "GOLIATH": (8, 247)}
 FORMATION_HORIZON_HOURS = 30.0
-MAX_SOURCE_AGE_MINUTES = 360.0
+MAX_SOURCE_AGE_MINUTES = 45.0
+MAX_CARD_QUOTE_SPREAD_MINUTES = 15.0
 
 
 def _parse_iso(value: str) -> datetime:
@@ -114,14 +115,17 @@ def _candidates(db: Database, now: datetime, started_at: datetime) -> List[Dict[
     # highest source edge, then best price, then earliest source row.
     exact: Dict[str, Dict[str, Any]] = {}
     for row in out:
-        key = str(row["selection_key"])
+        book = str(row.get("bookmaker_key") or "")
+        if not book:
+            continue
+        key = book + "|" + str(row["selection_key"])
         prev = exact.get(key)
         rank = (float(row.get("edge_pct") or 0), float(row["entry_odds"]), -int(row["source_id"]))
         if prev is None or rank > (float(prev.get("edge_pct") or 0), float(prev["entry_odds"]), -int(prev["source_id"])):
             exact[key] = row
     by_event: Dict[str, Dict[str, Any]] = {}
     for row in exact.values():
-        key = f"{row['source_family']}|{row['event_id']}"
+        key = str(row.get("bookmaker_key") or "") + "|" + str(row["source_family"]) + "|" + str(row["event_id"])
         prev = by_event.get(key)
         if prev is None or (float(row.get("edge_pct") or 0), float(row["entry_odds"])) > (float(prev.get("edge_pct") or 0), float(prev["entry_odds"])):
             by_event[key] = row
@@ -155,14 +159,23 @@ def generate_cross_sport_systems(db: Database, now: Optional[datetime]=None) -> 
     created = 0
     for system_type, (n, expected_lines) in SYSTEM_SPECS.items():
         eligible = [r for r in pool if str(r["selection_key"]) not in used]
+        books = sorted({str(r.get("bookmaker_key") or "") for r in eligible if r.get("bookmaker_key")})
+        book_pools = [(b,[r for r in eligible if str(r.get("bookmaker_key") or "")==b]) for b in books]
+        book_pools = [(b,p) for b,p in book_pools if len(p) >= n]
+        if not book_pools:
+            continue
+        book, eligible = max(book_pools, key=lambda bp: sum(float(r.get("edge_pct") or 0) for r in bp[1][:n]))
         if len(eligible) < n:
             continue
         chosen = eligible[:n]
+        quote_times=[_parse_iso(str(r["created_at"])) for r in chosen]
+        if (max(quote_times)-min(quote_times)).total_seconds()/60.0 > MAX_CARD_QUOTE_SPREAD_MINUTES:
+            continue
         # Cross-sport means at least two sport keys. No sport quotas are fitted.
         if len({str(r["sport_key"]) for r in chosen}) < 2:
             continue
         signature = "|".join(sorted(str(r["selection_key"]) for r in chosen))
-        key = f"{ALGORITHM_VERSION}|{system_type}|{signature}"
+        key = f"{ALGORITHM_VERSION}|{book}|{system_type}|{signature}"
         if key in existing:
             continue
         combos = _line_combos(system_type,n)
@@ -177,7 +190,7 @@ def generate_cross_sport_systems(db: Database, now: Optional[datetime]=None) -> 
             total_stake_units,line_stake_units,singles_control_stake_units,first_kickoff,last_kickoff,
             sports_json,status,app_version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'OPEN',?)""",
             (key,utc_now_iso(),ALGORITHM_VERSION,system_type,n,expected_lines,
-             "SYNTHETIC_EXECUTABLE_CONSTITUENT_PRICES",1.0,line_stake,1.0,first_kickoff,last_kickoff,
+             f"SAME_BOOK_SIMULTANEOUS:{book}",1.0,line_stake,1.0,first_kickoff,last_kickoff,
              json.dumps(sports,separators=(",",":")),APP_VERSION))
         bet_id=int(db.fetchone("SELECT id FROM cross_sport_system_bets WHERE system_key=?",(key,))["id"])
         for i,row in enumerate(chosen,1):
