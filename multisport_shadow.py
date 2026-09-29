@@ -803,8 +803,17 @@ class MultiSportShadowEngine:
 
     def one_cycle(self,now:Optional[datetime]=None)->Dict[str,Any]:
         if not self.enabled:return {"enabled":False,"mode":"disabled","polled":0}
-        now=now or datetime.now(timezone.utc);self._maybe_discover(now);due=self._due_lanes(now);odds_result={"mode":"idle","polled":0,"reason":"no_due_multisport_lane"}
-        if due:
-            odds_result=self._poll_breadth(due[0],now) if due[0]["mode"]=="breadth" else self._poll_convergence(due[0],now)
+        now=now or datetime.now(timezone.utc);self._maybe_discover(now);due=self._due_lanes(now)
+        # Drain a small batch of due lanes each worker tick. With broad sport coverage,
+        # servicing only one lane per cycle leaves useful observations queued while the
+        # daily research budget remains materially under-used. The existing per-lane
+        # adaptive intervals and quota guard still control duplication and total spend.
+        odds_results=[]
+        for target in due[:4]:
+            result=self._poll_breadth(target,now) if target["mode"]=="breadth" else self._poll_convergence(target,now)
+            odds_results.append(result)
+            if result.get("reason") in ("multisport_daily_paid_credit_budget","protected_quota_reserve"):
+                break
+        odds_result=odds_results[0] if len(odds_results)==1 else ({"mode":"batch","polled":sum(int(x.get("polled") or 0) for x in odds_results),"lanes":odds_results} if odds_results else {"mode":"idle","polled":0,"reason":"no_due_multisport_lane"})
         maint=self.maintenance(now);results=self.collect_results(now)
         return {"enabled":True,"odds":odds_result,"maintenance":maint,"results":results,"paid_credits_today":self.quota.today_paid_cost(now),"daily_budget":self.quota.daily_budget}
