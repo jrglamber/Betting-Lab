@@ -81,6 +81,7 @@ from predictive_historical import (
 )
 from proxy_xg import ProxyXgEngine, proxy_xg_status
 from outcome_edge import outcome_edge_report, ensure_watch_cohorts
+from cross_sport_systems_shadow import cross_sport_systems_scoreboard, latest_cross_sport_system_cards
 from cohort_systems_shadow import (
     ensure_cohort_system_state, run_cohort_systems_maintenance, cohort_systems_scoreboard,
     latest_cohort_system_cards, settle_cohort_system_shadows,
@@ -98,7 +99,7 @@ from research import (
     event_price_history, signal_price_history, repair_premature_clv,
 )
 
-VERSION = "0.19.13"
+VERSION = "0.19.14"
 
 db = Database(settings.database_url, settings.db_path)
 api = TheOddsApi(settings.odds_api_key)
@@ -1339,7 +1340,7 @@ def dashboard():
     </div>
 
     <div class='panel'><h2>Deep dives</h2><div class='muted'>Detailed diagnostics are still available, but they no longer dominate the home page.</div>
-      <div class='nav'><a href='/outcome-edge'>Outcome Edge</a><a href='/manual-systems'>Manual Systems</a><a href='/high-payout-shadow'>High-Payout</a><a href='/cohort-systems'>Cohort Systems</a><a href='/research'>Research Intelligence</a><a href='/meta-edge'>Meta Edge</a><a href='/tennis'>Tennis</a><a href='/multisport'>Multi-Sport</a><a href='/multiples'>Multiples</a></div>
+      <div class='nav'><a href='/outcome-edge'>Outcome Edge</a><a href='/manual-systems'>Manual Systems</a><a href='/high-payout-shadow'>High-Payout</a><a href='/cohort-systems'>Cohort Systems</a><a href='/xs1'>XS1</a><a href='/research'>Research Intelligence</a><a href='/meta-edge'>Meta Edge</a><a href='/tennis'>Tennis</a><a href='/multisport'>Multi-Sport</a><a href='/multiples'>Multiples</a></div>
       <div class='summary'>META2: <strong>{escape(str(meta.get("status","—")))}</strong> · Provider credits remaining: <strong>{escape(str(q.get("credits_remaining","—")))}</strong></div>
     </div>
     </body></html>""")
@@ -2000,6 +2001,27 @@ def manual_systems_page():
       <div class='panel'><h2>By source cohort</h2><table><thead><tr><th>Cohort</th><th>Cards</th><th>Settled</th><th>System P&L</th><th>System ROI</th><th>Singles P&L</th><th>Singles ROI</th><th>Δ u</th><th>A/B n</th><th>CLV</th></tr></thead><tbody>{seg_rows(score['segments']['source_cohort'])}</tbody></table></div>
     </div>
     <div class='panel'><h2>Latest MS3 activity</h2><table><thead><tr><th>ID</th><th>Formed</th><th>Type</th><th>Book</th><th>Mode</th><th>Cohort</th><th>Legs</th><th>Lines</th><th>Exp system ROI</th><th>Exp singles ROI</th><th>CLV q</th><th>CLV</th><th>System P&L</th><th>Singles P&L</th><th>Δ</th></tr></thead><tbody>{recent_html}</tbody></table></div>
+    </body></html>""")
+
+@app.get('/xs1',response_class=HTMLResponse)
+def xs1_page():
+    score=cross_sport_systems_scoreboard(db)
+    recent=latest_cross_sport_system_cards(db,150)
+    def fmt(v):
+        return "—" if v is None else f"{float(v):.2f}"
+    rows=[]
+    for m in recent:
+        sports=", ".join(sorted({str(x.get("sport_key") or "") for x in m.get("legs",[]) if x.get("sport_key")}))
+        legs="<br>".join(f"{escape(str(x.get('sport_key') or ''))}: {escape(str(x.get('selection') or ''))} @ {fmt(x.get('entry_odds'))}" for x in m.get("legs",[]))
+        rows.append(f"<tr><td>{m['id']}</td><td>{escape(str(m['created_at']))[:16]}</td><td>{escape(str(m['system_type']))}</td><td>{escape(sports)}</td><td>{legs}</td><td>{escape(str(m['status']))}</td><td>{fmt(m.get('system_pnl_units'))}</td><td>{fmt(m.get('singles_pnl_units'))}</td></tr>")
+    seg=[]
+    for name,s in score.get("by_system",{}).items():
+        seg.append(f"<tr><td>{escape(name)}</td><td>{s['cards']}</td><td>{s['open']}</td><td>{s['settled']}</td><td>{fmt(s.get('system_pnl_units'))}</td><td>{fmt(s.get('system_roi_pct'))}%</td><td>{fmt(s.get('singles_pnl_units'))}</td><td>{fmt(s.get('singles_roi_pct'))}%</td><td>{fmt(s.get('avg_leg_clv_pct'))}%</td></tr>")
+    return HTMLResponse(f"""<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>XS1 v{VERSION}</title><style>{BASE_STYLE}</style></head><body>
+    <a href='/'>← Betting Lab</a><h1>XS1 Cross-Sport Systems <span class='pill'>SHADOW · FORWARD ONLY</span></h1>
+    <div class='panel'><strong>Frozen rules:</strong> deduplicated executable selections, one selection per event, minimum two sports per card. Heinz = 6 legs / 57 lines; Goliath = 8 legs / 247 lines. No fitted sport quotas or odds-band recipe. Each 1u system is compared with the identical selections as 1u equal-stake singles. Synthetic constituent prices only; no execution authority. Forward start: {escape(str(score.get('started_at') or '—'))}.</div>
+    <div class='panel'><h2>XS1 scorecard</h2><table><thead><tr><th>System</th><th>Cards</th><th>Open</th><th>Settled</th><th>System P&L</th><th>System ROI</th><th>Singles P&L</th><th>Singles ROI</th><th>Leg CLV</th></tr></thead><tbody>{''.join(seg)}</tbody></table></div>
+    <div class='panel'><h2>Latest prospective cards</h2><table><thead><tr><th>ID</th><th>Formed</th><th>System</th><th>Sports</th><th>Selections</th><th>Status</th><th>System P&L</th><th>Singles P&L</th></tr></thead><tbody>{''.join(rows) or "<tr><td colspan='8'>Waiting for the first qualifying cross-sport card.</td></tr>"}</tbody></table></div>
     </body></html>""")
 
 @app.get('/cohort-systems',response_class=HTMLResponse)
