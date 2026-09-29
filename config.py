@@ -197,9 +197,19 @@ class Settings:
             "icehockey_sweden_allsvenskan,"
             "cricket_test_match,"
             "cricket_odi,"
-            "cricket_t20i,"
+            "cricket_international_t20,"
             "cricket_ipl,"
-            "cricket_big_bash"
+            "cricket_big_bash,"
+            "cricket_asia_cup,"
+            "cricket_caribbean_premier_league,"
+            "cricket_icc_world_cup,"
+            "cricket_icc_world_cup_womens,"
+            "cricket_psl,"
+            "cricket_t20_blast,"
+            "cricket_t20_world_cup,"
+            "cricket_t20_world_cup_womens,"
+            "cricket_the_hundred,"
+            "cricket_the_hundred_womens"
         ),
     )
     multisport_market: str = os.getenv("MULTISPORT_MARKET", "h2h")
