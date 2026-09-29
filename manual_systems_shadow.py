@@ -13,6 +13,7 @@ from db import Database, sanitize_sensitive_text, utc_now_iso
 from execution_shadow import clv_quality, parse_iso
 from quota import provider_actual_cost
 from results import grade_signal
+from cross_sport_systems_shadow import run_cross_sport_systems_maintenance
 
 ALGORITHM_VERSION = "HP1_HIGH_PAYOUT_FORWARD"
 APP_VERSION = "0.16.1"
@@ -1074,4 +1075,6 @@ class ManualSystemsShadowEngine:
         )
         clv = finalize_manual_system_clv(self.db, now=now)
         settled = settle_manual_system_shadows(self.db)
-        return {"enabled": True, "refresh": refresh, "created": created, "clv_finalized": clv, "settled": settled}
+        cross_sport = run_cross_sport_systems_maintenance(self.db, now=now)
+        return {"enabled": True, "refresh": refresh, "created": created, "clv_finalized": clv,
+                "settled": settled, "cross_sport_systems": cross_sport}
