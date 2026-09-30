@@ -1170,13 +1170,13 @@ def dashboard():
     multisport_rates={}
     for sr in multisport_by_sport:
         fam=str(sr.get("label") or "")
-        multisport_rates[fam.upper()]=bet_rate("multisport_shadow_bets","WHERE UPPER(sport_family)=?",(fam.upper(),))
-    tennis_rate=bet_rate("tennis_shadow_bets")
+        multisport_rates[fam.upper()]=bet_rate("multisport_execution_bets","WHERE UPPER(sport_family)=?",(fam.upper(),))
+    tennis_rate=bet_rate("tennis_execution_bets")
     pred_rates={
-        "PRED1":bet_rate("football_predictive_bets"),
-        "PRED2":bet_rate("football_predictive2_bets"),
-        "PRED3":bet_rate("football_predictive3_bets"),
-        "PRED4":bet_rate("football_predictive4_bets"),
+        "PRED1":bet_rate("(SELECT created_at FROM football_predictive_bets UNION ALL SELECT created_at FROM football_predictive_market_bets)"),
+        "PRED2":bet_rate("(SELECT created_at FROM football_predictive2_bets UNION ALL SELECT created_at FROM football_predictive2_market_bets)"),
+        "PRED3":bet_rate("(SELECT created_at FROM football_predictive3_bets UNION ALL SELECT created_at FROM football_predictive3_market_bets)"),
+        "PRED4":bet_rate("(SELECT created_at FROM football_predictive4_bets UNION ALL SELECT created_at FROM football_predictive4_market_bets)"),
     }
     headline="".join([
         metric("Collection",health,health_css),
