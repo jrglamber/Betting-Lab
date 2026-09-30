@@ -1126,16 +1126,28 @@ def dashboard():
         except Exception:return ""
     def metric(label,value,css=""):
         return f"<div class='card'><div class='label'>{escape(str(label))}</div><div class='value {css}'>{escape(str(value))}</div></div>"
-    def bet_rate(table, where="", params=()):
-        try:
-            row=db.fetchone(f"SELECT COUNT(*) AS n, MIN(created_at) AS first_at FROM {table} {where}", params) or {}
-            n=int(row.get("n") or 0); first=row.get("first_at")
-            if not n or not first:return {"bets":n,"per_day":0.0,"per_week":0.0}
-            start=parse_iso(str(first)); now=datetime.now(timezone.utc)
-            days=max((now-start).total_seconds()/86400.0,1.0)
-            return {"bets":n,"per_day":n/days,"per_week":n/days*7.0}
-        except Exception:
-            return {"bets":0,"per_day":0.0,"per_week":0.0}
+    def rate_from_row(row):
+        n=int((row or {}).get("n") or 0); first=(row or {}).get("first_at")
+        if not n or not first:return {"bets":n,"per_day":0.0,"per_week":0.0}
+        start=parse_iso(str(first)); now=datetime.now(timezone.utc)
+        days=max((now-start).total_seconds()/86400.0,1.0)
+        return {"bets":n,"per_day":n/days,"per_week":n/days*7.0}
+    def bet_rate(table):
+        return rate_from_row(db.fetchone(f"SELECT COUNT(*) AS n, MIN(created_at) AS first_at FROM {table}") or {})
+    def multisport_family_rate(family):
+        return rate_from_row(db.fetchone("""
+            SELECT COUNT(*) AS n, MIN(b.created_at) AS first_at
+            FROM multisport_execution_bets b
+            JOIN multisport_events e ON e.event_id=b.event_id
+            WHERE UPPER(e.sport_family)=?
+        """,(str(family).upper(),)) or {})
+    def combined_bet_rate(table_a,table_b):
+        a=db.fetchone(f"SELECT COUNT(*) AS n, MIN(created_at) AS first_at FROM {table_a}") or {}
+        b=db.fetchone(f"SELECT COUNT(*) AS n, MIN(created_at) AS first_at FROM {table_b}") or {}
+        n=int(a.get("n") or 0)+int(b.get("n") or 0)
+        firsts=[str(x.get("first_at")) for x in (a,b) if x.get("first_at")]
+        return rate_from_row({"n":n,"first_at":min(firsts) if firsts else None})
+
     def rate_text(rate):
         return f"{rate['per_day']:.1f}/day · {rate['per_week']:.1f}/week"
 
@@ -1170,13 +1182,13 @@ def dashboard():
     multisport_rates={}
     for sr in multisport_by_sport:
         fam=str(sr.get("label") or "")
-        multisport_rates[fam.upper()]=bet_rate("multisport_execution_bets","WHERE UPPER(sport_family)=?",(fam.upper(),))
+        multisport_rates[fam.upper()]=multisport_family_rate(fam)
     tennis_rate=bet_rate("tennis_execution_bets")
     pred_rates={
-        "PRED1":bet_rate("(SELECT created_at FROM football_predictive_bets UNION ALL SELECT created_at FROM football_predictive_market_bets)"),
-        "PRED2":bet_rate("(SELECT created_at FROM football_predictive2_bets UNION ALL SELECT created_at FROM football_predictive2_market_bets)"),
-        "PRED3":bet_rate("(SELECT created_at FROM football_predictive3_bets UNION ALL SELECT created_at FROM football_predictive3_market_bets)"),
-        "PRED4":bet_rate("(SELECT created_at FROM football_predictive4_bets UNION ALL SELECT created_at FROM football_predictive4_market_bets)"),
+        "PRED1":combined_bet_rate("football_predictive_bets","football_predictive_market_bets"),
+        "PRED2":combined_bet_rate("football_predictive2_bets","football_predictive2_market_bets"),
+        "PRED3":combined_bet_rate("football_predictive3_bets","football_predictive3_market_bets"),
+        "PRED4":combined_bet_rate("football_predictive4_bets","football_predictive4_market_bets"),
     }
     headline="".join([
         metric("Collection",health,health_css),
