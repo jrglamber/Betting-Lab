@@ -1126,6 +1126,18 @@ def dashboard():
         except Exception:return ""
     def metric(label,value,css=""):
         return f"<div class='card'><div class='label'>{escape(str(label))}</div><div class='value {css}'>{escape(str(value))}</div></div>"
+    def bet_rate(table, where="", params=()):
+        try:
+            row=db.fetchone(f"SELECT COUNT(*) AS n, MIN(created_at) AS first_at FROM {table} {where}", params) or {}
+            n=int(row.get("n") or 0); first=row.get("first_at")
+            if not n or not first:return {"bets":n,"per_day":0.0,"per_week":0.0}
+            start=parse_iso(str(first)); now=datetime.now(timezone.utc)
+            days=max((now-start).total_seconds()/86400.0,1.0)
+            return {"bets":n,"per_day":n/days,"per_week":n/days*7.0}
+        except Exception:
+            return {"bets":0,"per_day":0.0,"per_week":0.0}
+    def rate_text(rate):
+        return f"{rate['per_day']:.1f}/day · {rate['per_week']:.1f}/week"
 
     credit_rows=db.fetchall("""
         SELECT SUBSTR(started_at,1,10) AS day, COALESCE(SUM(actual_cost),0) AS credits
@@ -1154,10 +1166,22 @@ def dashboard():
     paused=bool(q.get("paid_polling_paused"))
     health="PAUSED" if paused else "COLLECTING"
     health_css="warn" if paused else "ok"
+    football_rate=bet_rate("execution_shadow_bets")
+    multisport_rates={}
+    for sr in multisport_by_sport:
+        fam=str(sr.get("label") or "")
+        multisport_rates[fam.upper()]=bet_rate("multisport_shadow_bets","WHERE UPPER(sport_family)=?",(fam.upper(),))
+    tennis_rate=bet_rate("tennis_shadow_bets")
+    pred_rates={
+        "PRED1":bet_rate("football_predictive_bets"),
+        "PRED2":bet_rate("football_predictive2_bets"),
+        "PRED3":bet_rate("football_predictive3_bets"),
+        "PRED4":bet_rate("football_predictive4_bets"),
+    }
     headline="".join([
         metric("Collection",health,health_css),
         metric("Bets today",bets_until_midnight(db)),
-        metric("Settled singles",execution.get("settled",0)),
+        metric("Settled football singles",f"{execution.get('settled',0)} · {rate_text(football_rate)}"),
         metric("Net P&L",f"{_fmt(execution.get('net_pnl_units'))}u",tone(execution.get("net_pnl_units"))),
         metric("Net ROI",pct(execution.get("net_roi_pct")),tone(execution.get("net_roi_pct"))),
         metric("A/B CLV",pct(execution.get("avg_clv_pct")),tone(execution.get("avg_clv_pct"))),
@@ -1206,9 +1230,9 @@ def dashboard():
         )
     systems="".join(system_rows) or "<tr><td colspan='5'>No settled multiple-system evidence yet.</td></tr>"
 
-    def lane_row(name,score,href):
+    def lane_row(name,score,href,rate):
         settled=score.get("settled_bets",score.get("settled",0))
-        return (f"<tr><td><a href='{href}'><strong>{name}</strong></a></td><td>{settled}</td>"
+        return (f"<tr><td><a href='{href}'><strong>{name}</strong></a></td><td>{settled}</td><td>{rate_text(rate)}</td>"
                 f"<td class='{tone(score.get('net_roi_pct'))}'>{pct(score.get('net_roi_pct'))}</td>"
                 f"<td class='{tone(score.get('avg_clv_pct'))}'>{pct(score.get('avg_clv_pct'))}</td>"
                 f"<td>{score.get('clv_samples',0)}</td></tr>")
@@ -1222,7 +1246,7 @@ def dashboard():
         raw=str(x.get("label") or "Other").replace("_"," ")
         label=sport_labels.get(str(x.get("label") or "").upper(),raw.title())
         sport_rows.append(
-            f"<tr><td><strong>{escape(label)}</strong></td><td>{x.get('bets',0)}</td><td>{x.get('settled',0)}</td>"
+            f"<tr><td><strong>{escape(label)}</strong></td><td>{x.get('bets',0)}</td><td>{rate_text(multisport_rates.get(str(x.get('label') or '').upper(),{'per_day':0.0,'per_week':0.0}))}</td><td>{x.get('settled',0)}</td>"
             f"<td class='{tone(x.get('net_roi_pct'))}'>{pct(x.get('net_roi_pct'))}</td>"
             f"<td class='{tone(x.get('avg_clv_pct'))}'>{pct(x.get('avg_clv_pct'))}</td><td>{x.get('clv_samples',0)}</td></tr>"
         )
@@ -1277,9 +1301,9 @@ def dashboard():
     cricket_bands_html="".join(cricket_band_sections) or "<div class='muted'>Waiting for cricket odds-band evidence.</div>"
 
     lanes="".join([
-        lane_row("Tennis",tennis,"/tennis"),
-        lane_row("PRED1",p1,"/predictive-football"),lane_row("PRED2",p2,"/predictive-football-pred2"),
-        lane_row("PRED3",p3,"/predictive-football-pred3"),lane_row("PRED4",p4,"/predictive-football-pred4"),
+        lane_row("Tennis",tennis,"/tennis",tennis_rate),
+        lane_row("PRED1",p1,"/predictive-football",pred_rates["PRED1"]),lane_row("PRED2",p2,"/predictive-football-pred2",pred_rates["PRED2"]),
+        lane_row("PRED3",p3,"/predictive-football-pred3",pred_rates["PRED3"]),lane_row("PRED4",p4,"/predictive-football-pred4",pred_rates["PRED4"]),
     ])
 
     return HTMLResponse(f"""<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
@@ -1291,7 +1315,7 @@ def dashboard():
     .eyebrow{{color:#8b949e;font-size:12px;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px}}
     @media(max-width:600px){{body{{padding:14px}}.grid{{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:12px 0 18px}}.card{{padding:12px}}.value{{font-size:19px}}.panel{{padding:14px;margin-bottom:12px}}table{{min-width:590px}}.button{{margin:0;padding:10px 12px}}}}
     </style></head><body>
-    <div class='hero'><div><div class='eyebrow'>Project Exit Plan</div><h1>Betting Lab</h1><div class='sub'>Weekly evidence cockpit · v{VERSION} · shadow research only</div></div><span class='pill {health_css}'>{health}</span></div>
+    <div class='hero'><div><div class='eyebrow'>Project Exit Plan</div><h1>Betting Lab</h1><div class='sub'>Weekly evidence cockpit · v{VERSION} · shadow research only · top performance tiles = core football</div></div><span class='pill {health_css}'>{health}</span></div>
 
     <div class='grid compact'>{headline}</div>
 
@@ -1320,7 +1344,7 @@ def dashboard():
     </div>
 
     <div class='panel priority'><h2>Multi-Sport lanes</h2><div class='muted'>Individual sport families are visible here so new pockets do not disappear inside one aggregate row. Tap Multi-Sport for league and odds-band detail.</div>
-      <div class='table-wrap'><table><thead><tr><th>Sport</th><th>Bets</th><th>Settled</th><th>Net ROI</th><th>A/B CLV</th><th>CLV n</th></tr></thead><tbody>{sports_html}</tbody></table></div>
+      <div class='table-wrap'><table><thead><tr><th>Sport</th><th>Bets</th><th>Avg bets</th><th>Settled</th><th>Net ROI</th><th>A/B CLV</th><th>CLV n</th></tr></thead><tbody>{sports_html}</tbody></table></div>
       <h3 style='margin-top:20px'>Odds bands by sport</h3><div class='muted'>Each sport is split into the same price bands so sport-specific pockets are visible without assuming one universal odds effect. Descriptive research only.</div>
       {per_sport_bands_html}
       <div style='margin-top:12px'><a href='/multisport'>Open full Multi-Sport research →</a></div>
@@ -1332,7 +1356,7 @@ def dashboard():
     </div>
 
     <div class='panel'><h2>Other research lanes</h2><div class='muted'>Tennis and football model challengers stay secondary unless forward evidence starts to stand out.</div>
-      <div class='table-wrap'><table><thead><tr><th>Lane</th><th>Settled</th><th>Net ROI</th><th>A/B CLV</th><th>CLV n</th></tr></thead><tbody>{lanes}</tbody></table></div>
+      <div class='table-wrap'><table><thead><tr><th>Lane</th><th>Settled</th><th>Avg bets</th><th>Net ROI</th><th>A/B CLV</th><th>CLV n</th></tr></thead><tbody>{lanes}</tbody></table></div>
     </div>
 
     <div class='panel'><h2>Tuesday review exports</h2><div class='muted' style='margin-bottom:14px'>These are the two files to upload for the weekly review. Full history stays available for occasional audits.</div>
