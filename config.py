@@ -39,7 +39,7 @@ class Settings:
     odds_api_key: str = os.getenv("ODDS_API_KEY", "")
 
     sport_keys: Tuple[str, ...] = _csv(
-        "SPORT_KEYS", "soccer_epl,soccer_efl_champ,soccer_fa_cup"
+        "SPORT_KEYS", "soccer_epl,soccer_efl_champ,soccer_england_league1,soccer_england_league2,soccer_fa_cup"
     )
     odds_region: str = os.getenv("ODDS_REGION", "uk")
     configured_odds_markets: Tuple[str, ...] = _csv(
