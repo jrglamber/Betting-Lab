@@ -274,10 +274,12 @@ def outcome_edge_report(db: Database) -> Dict[str, Any]:
         row.update(_aggregate(subset))
         sources.append(row)
 
+    focus_4_to_4_99 = [r for r in unique if 4.0 <= float(r["offered_odds"]) < 5.0]
     focus = [r for r in unique if 4.0 <= float(r["offered_odds"]) < 7.5]
     return {
         "definition": "Unique settled event/market/selection/point; best stored executable entry price retained across CONSENSUS/PRED1/PRED2/PRED3/PRED4 duplicates.",
         "overall": overall,
+        "focus_4_to_4_99": _aggregate(focus_4_to_4_99),
         "focus_4_to_7_49": _aggregate(focus),
         "odds_bands": bands,
         "markets": markets,
