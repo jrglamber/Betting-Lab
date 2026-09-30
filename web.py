@@ -1126,33 +1126,43 @@ def dashboard():
         except Exception:return ""
     def metric(label,value,css=""):
         return f"<div class='card'><div class='label'>{escape(str(label))}</div><div class='value {css}'>{escape(str(value))}</div></div>"
-    def rate_from_row(row):
-        n=int((row or {}).get("n") or 0); first=(row or {}).get("first_at")
-        if not n or not first:return {"bets":n,"per_day":0.0,"per_week":0.0}
-        raw=str(first).replace("Z","+00:00")
-        start=datetime.fromisoformat(raw)
-        if start.tzinfo is None:start=start.replace(tzinfo=timezone.utc)
-        now=datetime.now(timezone.utc)
-        days=max((now-start.astimezone(timezone.utc)).total_seconds()/86400.0,1.0)
-        return {"bets":n,"per_day":n/days,"per_week":n/days*7.0}
-    def bet_rate(table):
-        return rate_from_row(db.fetchone(f"SELECT COUNT(*) AS n, MIN(created_at) AS first_at FROM {table}") or {})
-    def multisport_family_rate(family):
-        return rate_from_row(db.fetchone("""
-            SELECT COUNT(*) AS n, MIN(b.created_at) AS first_at
-            FROM multisport_execution_bets b
-            JOIN multisport_events e ON e.event_id=b.event_id
+    def _iso_dt(v):
+        if not v:return None
+        dt=datetime.fromisoformat(str(v).replace("Z","+00:00"))
+        return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
+    def pace_from_counts(total,first,recent):
+        total=int(total or 0); recent=int(recent or 0); start=_iso_dt(first); now=datetime.now(timezone.utc)
+        if not start or total<=0:return {"recent":recent,"baseline":None,"pct":None}
+        age_days=max((now-start).total_seconds()/86400.0,0.0)
+        # Need at least 21 days so the baseline has >=2 full weeks outside the recent 7-day window.
+        if age_days < 21:return {"recent":recent,"baseline":None,"pct":None}
+        historical=max(total-recent,0); historical_days=max(age_days-7.0,1.0)
+        baseline=historical/historical_days*7.0
+        return {"recent":recent,"baseline":baseline,"pct":(recent/baseline*100.0) if baseline>0 else None}
+    def table_pace(table):
+        cutoff=(datetime.now(timezone.utc)-timedelta(days=7)).isoformat()
+        row=db.fetchone(f"SELECT COUNT(*) AS n, MIN(created_at) AS first_at, SUM(CASE WHEN created_at>=? THEN 1 ELSE 0 END) AS recent FROM {table}",(cutoff,)) or {}
+        return pace_from_counts(row.get("n"),row.get("first_at"),row.get("recent"))
+    def multisport_family_pace(family):
+        cutoff=(datetime.now(timezone.utc)-timedelta(days=7)).isoformat()
+        row=db.fetchone("""
+            SELECT COUNT(*) AS n, MIN(b.created_at) AS first_at,
+                   SUM(CASE WHEN b.created_at>=? THEN 1 ELSE 0 END) AS recent
+            FROM multisport_execution_bets b JOIN multisport_events e ON e.event_id=b.event_id
             WHERE UPPER(e.sport_family)=?
-        """,(str(family).upper(),)) or {})
-    def combined_bet_rate(table_a,table_b):
-        a=db.fetchone(f"SELECT COUNT(*) AS n, MIN(created_at) AS first_at FROM {table_a}") or {}
-        b=db.fetchone(f"SELECT COUNT(*) AS n, MIN(created_at) AS first_at FROM {table_b}") or {}
-        n=int(a.get("n") or 0)+int(b.get("n") or 0)
-        firsts=[str(x.get("first_at")) for x in (a,b) if x.get("first_at")]
-        return rate_from_row({"n":n,"first_at":min(firsts) if firsts else None})
-
-    def rate_text(rate):
-        return f"{rate['per_day']:.1f}/day · {rate['per_week']:.1f}/week"
+        """,(cutoff,str(family).upper())) or {}
+        return pace_from_counts(row.get("n"),row.get("first_at"),row.get("recent"))
+    def combined_pace(table_a,table_b):
+        cutoff=(datetime.now(timezone.utc)-timedelta(days=7)).isoformat()
+        rows=[]
+        for table in (table_a,table_b):
+            rows.append(db.fetchone(f"SELECT COUNT(*) AS n, MIN(created_at) AS first_at, SUM(CASE WHEN created_at>=? THEN 1 ELSE 0 END) AS recent FROM {table}",(cutoff,)) or {})
+        total=sum(int(x.get("n") or 0) for x in rows); recent=sum(int(x.get("recent") or 0) for x in rows)
+        firsts=[_iso_dt(x.get("first_at")) for x in rows if x.get("first_at")]
+        return pace_from_counts(total,min(firsts).isoformat() if firsts else None,recent)
+    def pace_text(p):
+        if p.get("baseline") is None:return f"{p.get('recent',0)}/wk · building baseline"
+        return f"{p.get('recent',0)}/wk vs {p['baseline']:.1f} normal · {p['pct']:.0f}%"
 
     credit_rows=db.fetchall("""
         SELECT SUBSTR(started_at,1,10) AS day, COALESCE(SUM(actual_cost),0) AS credits
@@ -1181,22 +1191,22 @@ def dashboard():
     paused=bool(q.get("paid_polling_paused"))
     health="PAUSED" if paused else "COLLECTING"
     health_css="warn" if paused else "ok"
-    football_rate=bet_rate("execution_shadow_bets")
+    football_rate=table_pace("execution_shadow_bets")
     multisport_rates={}
     for sr in multisport_by_sport:
         fam=str(sr.get("label") or "")
-        multisport_rates[fam.upper()]=multisport_family_rate(fam)
-    tennis_rate=bet_rate("tennis_execution_bets")
+        multisport_rates[fam.upper()]=multisport_family_pace(fam)
+    tennis_rate=table_pace("tennis_execution_bets")
     pred_rates={
-        "PRED1":combined_bet_rate("football_predictive_bets","football_predictive_market_bets"),
-        "PRED2":combined_bet_rate("football_predictive2_bets","football_predictive2_market_bets"),
-        "PRED3":combined_bet_rate("football_predictive3_bets","football_predictive3_market_bets"),
-        "PRED4":combined_bet_rate("football_predictive4_bets","football_predictive4_market_bets"),
+        "PRED1":combined_pace("football_predictive_bets","football_predictive_market_bets"),
+        "PRED2":combined_pace("football_predictive2_bets","football_predictive2_market_bets"),
+        "PRED3":combined_pace("football_predictive3_bets","football_predictive3_market_bets"),
+        "PRED4":combined_pace("football_predictive4_bets","football_predictive4_market_bets"),
     }
     headline="".join([
         metric("Collection",health,health_css),
         metric("Bets today",bets_until_midnight(db)),
-        metric("Settled football singles",f"{execution.get('settled',0)} · {rate_text(football_rate)}"),
+        metric("Settled football singles",f"{execution.get('settled',0)} · {pace_text(football_rate)}"),
         metric("Net P&L",f"{_fmt(execution.get('net_pnl_units'))}u",tone(execution.get("net_pnl_units"))),
         metric("Net ROI",pct(execution.get("net_roi_pct")),tone(execution.get("net_roi_pct"))),
         metric("A/B CLV",pct(execution.get("avg_clv_pct")),tone(execution.get("avg_clv_pct"))),
@@ -1247,7 +1257,7 @@ def dashboard():
 
     def lane_row(name,score,href,rate):
         settled=score.get("settled_bets",score.get("settled",0))
-        return (f"<tr><td><a href='{href}'><strong>{name}</strong></a></td><td>{settled}</td><td>{rate_text(rate)}</td>"
+        return (f"<tr><td><a href='{href}'><strong>{name}</strong></a></td><td>{settled}</td><td>{pace_text(rate)}</td>"
                 f"<td class='{tone(score.get('net_roi_pct'))}'>{pct(score.get('net_roi_pct'))}</td>"
                 f"<td class='{tone(score.get('avg_clv_pct'))}'>{pct(score.get('avg_clv_pct'))}</td>"
                 f"<td>{score.get('clv_samples',0)}</td></tr>")
@@ -1261,7 +1271,7 @@ def dashboard():
         raw=str(x.get("label") or "Other").replace("_"," ")
         label=sport_labels.get(str(x.get("label") or "").upper(),raw.title())
         sport_rows.append(
-            f"<tr><td><strong>{escape(label)}</strong></td><td>{x.get('bets',0)}</td><td>{rate_text(multisport_rates.get(str(x.get('label') or '').upper(),{'per_day':0.0,'per_week':0.0}))}</td><td>{x.get('settled',0)}</td>"
+            f"<tr><td><strong>{escape(label)}</strong></td><td>{x.get('bets',0)}</td><td>{pace_text(multisport_rates.get(str(x.get('label') or '').upper(),{'per_day':0.0,'per_week':0.0}))}</td><td>{x.get('settled',0)}</td>"
             f"<td class='{tone(x.get('net_roi_pct'))}'>{pct(x.get('net_roi_pct'))}</td>"
             f"<td class='{tone(x.get('avg_clv_pct'))}'>{pct(x.get('avg_clv_pct'))}</td><td>{x.get('clv_samples',0)}</td></tr>"
         )
@@ -1359,7 +1369,7 @@ def dashboard():
     </div>
 
     <div class='panel priority'><h2>Multi-Sport lanes</h2><div class='muted'>Individual sport families are visible here so new pockets do not disappear inside one aggregate row. Tap Multi-Sport for league and odds-band detail.</div>
-      <div class='table-wrap'><table><thead><tr><th>Sport</th><th>Bets</th><th>Avg bets</th><th>Settled</th><th>Net ROI</th><th>A/B CLV</th><th>CLV n</th></tr></thead><tbody>{sports_html}</tbody></table></div>
+      <div class='table-wrap'><table><thead><tr><th>Sport</th><th>Bets</th><th>Frequency</th><th>Settled</th><th>Net ROI</th><th>A/B CLV</th><th>CLV n</th></tr></thead><tbody>{sports_html}</tbody></table></div>
       <h3 style='margin-top:20px'>Odds bands by sport</h3><div class='muted'>Each sport is split into the same price bands so sport-specific pockets are visible without assuming one universal odds effect. Descriptive research only.</div>
       {per_sport_bands_html}
       <div style='margin-top:12px'><a href='/multisport'>Open full Multi-Sport research →</a></div>
@@ -1371,7 +1381,7 @@ def dashboard():
     </div>
 
     <div class='panel'><h2>Other research lanes</h2><div class='muted'>Tennis and football model challengers stay secondary unless forward evidence starts to stand out.</div>
-      <div class='table-wrap'><table><thead><tr><th>Lane</th><th>Settled</th><th>Avg bets</th><th>Net ROI</th><th>A/B CLV</th><th>CLV n</th></tr></thead><tbody>{lanes}</tbody></table></div>
+      <div class='table-wrap'><table><thead><tr><th>Lane</th><th>Settled</th><th>Frequency</th><th>Net ROI</th><th>A/B CLV</th><th>CLV n</th></tr></thead><tbody>{lanes}</tbody></table></div>
     </div>
 
     <div class='panel'><h2>Tuesday review exports</h2><div class='muted' style='margin-bottom:14px'>These are the two files to upload for the weekly review. Full history stays available for occasional audits.</div>
