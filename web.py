@@ -1180,10 +1180,10 @@ def dashboard():
 
     focus=outcome.get("focus_4_to_7_49") or {}
     focus_cards="".join([
-        metric("4–7.49 selections",focus.get("selections",0)),
-        metric("4–7.49 hit rate",pct(focus.get("hit_rate_pct"))),
-        metric("4–7.49 ROI",pct(focus.get("flat_stake_roi_pct")),tone(focus.get("flat_stake_roi_pct"))),
-        metric("4–7.49 A/B CLV",pct(focus.get("avg_ab_clv_pct")),tone(focus.get("avg_ab_clv_pct"))),
+        metric("4–4.99 selections",focus.get("selections",0)),
+        metric("4–4.99 hit rate",pct(focus.get("hit_rate_pct"))),
+        metric("4–4.99 ROI",pct(focus.get("flat_stake_roi_pct")),tone(focus.get("flat_stake_roi_pct"))),
+        metric("4–4.99 A/B CLV",pct(focus.get("avg_ab_clv_pct")),tone(focus.get("avg_ab_clv_pct"))),
     ])
 
     band_rows=[]
@@ -1302,7 +1302,7 @@ def dashboard():
     <div class='panel priority'><h2>What we care about</h2>
       <div class='summary'>The current job is simple: build the forward sample and see whether the interesting pockets survive. Broad executable performance is <strong class='{tone(execution.get("net_roi_pct"))}'>{pct(execution.get("net_roi_pct"))} ROI</strong> with <strong class='{tone(execution.get("avg_clv_pct"))}'>{pct(execution.get("avg_clv_pct"))} A/B CLV</strong>. No strategy is promoted from this dashboard.</div>
       <div class='grid compact'>{focus_cards}</div>
-      <div class='muted'>4.00–7.49 is shown prominently because it is an existing research lead, not because the dashboard declares it an edge.</div>
+      <div class='muted'>4.00–4.99 is shown prominently because it is an existing research lead, not because the dashboard declares it an edge.</div>
     </div>
 
     <div class='panel priority'><h2>Forward watchlist</h2><div class='muted'>Post-freeze evidence gets priority over discovery results.</div>
