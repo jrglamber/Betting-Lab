@@ -1,4 +1,4 @@
-# Project Exit Plan — Betting Lab v0.19.2
+# Project Exit Plan — Betting Lab v0.19.15
 
 Execution Shadow release.
 
