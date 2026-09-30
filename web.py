@@ -1129,8 +1129,11 @@ def dashboard():
     def rate_from_row(row):
         n=int((row or {}).get("n") or 0); first=(row or {}).get("first_at")
         if not n or not first:return {"bets":n,"per_day":0.0,"per_week":0.0}
-        start=parse_iso(str(first)); now=datetime.now(timezone.utc)
-        days=max((now-start).total_seconds()/86400.0,1.0)
+        raw=str(first).replace("Z","+00:00")
+        start=datetime.fromisoformat(raw)
+        if start.tzinfo is None:start=start.replace(tzinfo=timezone.utc)
+        now=datetime.now(timezone.utc)
+        days=max((now-start.astimezone(timezone.utc)).total_seconds()/86400.0,1.0)
         return {"bets":n,"per_day":n/days,"per_week":n/days*7.0}
     def bet_rate(table):
         return rate_from_row(db.fetchone(f"SELECT COUNT(*) AS n, MIN(created_at) AS first_at FROM {table}") or {})
