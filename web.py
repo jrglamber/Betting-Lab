@@ -1178,7 +1178,7 @@ def dashboard():
         )
     watch_html="".join(watch_rows) or "<tr><td colspan='7'>Frozen cohorts are waiting for forward evidence.</td></tr>"
 
-    focus=outcome.get("focus_4_to_7_49") or {}
+    focus=outcome.get("focus_4_to_4_99") or {}
     focus_cards="".join([
         metric("4–4.99 selections",focus.get("selections",0)),
         metric("4–4.99 hit rate",pct(focus.get("hit_rate_pct"))),
