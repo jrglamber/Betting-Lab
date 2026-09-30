@@ -99,7 +99,7 @@ from research import (
     event_price_history, signal_price_history, repair_premature_clv,
 )
 
-VERSION = "0.19.16"
+VERSION = "0.19.17"
 
 db = Database(settings.database_url, settings.db_path)
 api = TheOddsApi(settings.odds_api_key)
@@ -1774,7 +1774,7 @@ def multisport_page():
         "SELECT * FROM multisport_execution_evaluations ORDER BY id DESC LIMIT 100"
     )
     cards=[
-        ("Events",score["events"]),("Active leagues",score["active_leagues"]),
+        ("Events",score["events"]),("Configured competitions",len(settings.multisport_sport_keys)),("Active leagues",score["active_leagues"]),
         ("Executable shadows",score["bets"]),("Settled",score["settled"]),
         ("Settlement excluded",score["settlement_excluded"]),
         ("A/B CLV samples",score["clv_samples"]),
@@ -1800,12 +1800,32 @@ def multisport_page():
         f"<td>{escape(str(x.get('result') or 'PENDING'))}</td><td>{_fmt(x.get('net_pnl_units'))}</td></tr>"
         for x in bets
     ) or "<tr><td colspan='15'>No Multi-Sport Shadow executions yet.</td></tr>"
+    league_by_key={str(x.get("sport_key") or ""):x for x in leagues}
+    configured_leagues=[]
+    for key in settings.multisport_sport_keys:
+        found=league_by_key.get(str(key))
+        family=(found or {}).get("sport_family") or (
+            "AMERICAN_FOOTBALL" if str(key).startswith("americanfootball_") else
+            "BASKETBALL" if str(key).startswith("basketball_") else
+            "BASEBALL" if str(key).startswith("baseball_") else
+            "ICE_HOCKEY" if str(key).startswith("icehockey_") else
+            "AUSSIE_RULES" if str(key).startswith("aussierules_") else
+            "RUGBY_LEAGUE" if str(key).startswith("rugbyleague_") else
+            "CRICKET" if str(key).startswith("cricket_") else "OTHER"
+        )
+        title=(found or {}).get("title") or str(key).replace("_"," ").title()
+        configured_leagues.append({
+            "configured":"YES","active":"YES" if int((found or {}).get("active") or 0)==1 else "NO",
+            "sport_family":family,"title":title,"sport_key":str(key),
+            "last_broad_poll_at":(found or {}).get("last_broad_poll_at"),
+            "last_convergence_poll_at":(found or {}).get("last_convergence_poll_at"),
+        })
     lrows=''.join(
-        f"<tr><td>{escape(str(x['active']))}</td><td>{escape(x['sport_family'])}</td><td>{escape(x['title'])}</td>"
+        f"<tr><td>{escape(x['configured'])}</td><td>{escape(x['active'])}</td><td>{escape(str(x['sport_family']).replace('_',' ').title())}</td><td>{escape(x['title'])}</td>"
         f"<td>{escape(x['sport_key'])}</td><td>{escape(str(x.get('last_broad_poll_at') or '—'))}</td>"
         f"<td>{escape(str(x.get('last_convergence_poll_at') or '—'))}</td></tr>"
-        for x in leagues
-    ) or "<tr><td colspan='6'>No target sports discovered yet.</td></tr>"
+        for x in configured_leagues
+    ) or "<tr><td colspan='7'>No Multi-Sport targets configured.</td></tr>"
     erows=''.join(
         f"<tr><td>{escape(x['evaluated_at'])}</td><td>{escape(x['sport_key'])}</td><td>{escape(x['selection'])}</td>"
         f"<td>{_fmt(x.get('best_executable_odds'))}</td><td>{_fmt(x.get('min_required_odds'))}</td>"
@@ -1832,7 +1852,7 @@ def multisport_page():
     <div class='panel'><h2>Latest executable shadows</h2><table><thead><tr><th>ID</th><th>Sport</th><th>League</th><th>Event</th><th>Selection</th><th>Venue</th><th>Entry</th><th>Fair</th><th>Edge</th><th>Min</th><th>Move</th><th>CLV</th><th>Quality</th><th>Result</th><th>Net P&L</th></tr></thead><tbody>{brows}</tbody></table></div>
     <div class='section-grid'><div class='panel'><h2>By sport</h2>{seg_table(segments['sport'])}</div><div class='panel'><h2>By league</h2>{seg_table(segments['league'])}</div></div>
     <div class='section-grid'><div class='panel'><h2>By odds band</h2>{seg_table(segments['odds_band'])}</div><div class='panel'><h2>Favourite vs outsider</h2>{seg_table(segments['side'])}</div></div>
-    <div class='panel'><h2>Target / active leagues</h2><table><thead><tr><th>Active</th><th>Sport</th><th>League</th><th>Provider key</th><th>Last breadth</th><th>Last convergence</th></tr></thead><tbody>{lrows}</tbody></table></div>
+    <div class='panel'><h2>Configured / active competitions</h2><div class='muted'>Every configured Multi-Sport competition is listed here. Active now = currently returned by provider discovery; inactive targets remain configured and will begin collecting automatically when the provider activates them.</div><table><thead><tr><th>Configured</th><th>Active now</th><th>Sport</th><th>Competition</th><th>Provider key</th><th>Last breadth</th><th>Last convergence</th></tr></thead><tbody>{lrows}</tbody></table></div>
     <div class='panel'><h2>Moneyline execution funnel</h2><table><thead><tr><th>Decision</th><th>Reason</th><th>Count</th></tr></thead><tbody>{funnel_rows}</tbody></table></div>
     <div class='panel'><h2>Latest execution audit</h2><table><thead><tr><th>Evaluated</th><th>League key</th><th>Selection</th><th>Executable</th><th>Min</th><th>Fair</th><th>Edge</th><th>Decision</th><th>Reason</th></tr></thead><tbody>{erows}</tbody></table></div>
     <p><a class='button secondary' href='/multisport-lines'>Open spreads / totals shadow →</a></p>
