@@ -99,7 +99,7 @@ from research import (
     event_price_history, signal_price_history, repair_premature_clv,
 )
 
-VERSION = "0.19.17"
+VERSION = "0.19.18"
 
 db = Database(settings.database_url, settings.db_path)
 api = TheOddsApi(settings.odds_api_key)
@@ -265,6 +265,62 @@ def bets_until_midnight(db: Database, now: Optional[datetime] = None) -> int:
     return count
 
 
+def primary_bets_today(db: Database, now: Optional[datetime] = None) -> dict:
+    """Primary shadow bets on fixtures occurring today in Europe/London.
+
+    Counts independent research ledgers (core/PRED football, Multi-Sport H2H +
+    lines, Tennis). Derivative system/multiple cards are excluded so constituent
+    selections are not counted again.
+    """
+    london = ZoneInfo("Europe/London")
+    now_local = (now or datetime.now(london))
+    if now_local.tzinfo is None:
+        now_local = now_local.replace(tzinfo=london)
+    else:
+        now_local = now_local.astimezone(london)
+    start_local = datetime(now_local.year, now_local.month, now_local.day, tzinfo=london)
+    end_local = start_local + timedelta(days=1)
+    start_utc = start_local.astimezone(timezone.utc).isoformat()
+    end_utc = end_local.astimezone(timezone.utc).isoformat()
+
+    def joined_count(table, event_table, bet_alias="b", event_alias="e"):
+        try:
+            row=db.fetchone(
+                f"""SELECT COUNT(*) AS n
+                    FROM {table} {bet_alias}
+                    JOIN {event_table} {event_alias} ON {event_alias}.event_id={bet_alias}.event_id
+                    WHERE {event_alias}.commence_time>=? AND {event_alias}.commence_time<?""",
+                (start_utc,end_utc),
+            ) or {}
+            return int(row.get("n") or 0)
+        except Exception:
+            return 0
+
+    football = sum([
+        joined_count("execution_shadow_bets","events"),
+        joined_count("football_predictive_bets","events"),
+        joined_count("football_predictive_market_bets","events"),
+        joined_count("football_predictive2_bets","events"),
+        joined_count("football_predictive2_market_bets","events"),
+        joined_count("football_predictive3_bets","events"),
+        joined_count("football_predictive3_market_bets","events"),
+        joined_count("football_predictive4_bets","events"),
+        joined_count("football_predictive4_market_bets","events"),
+    ])
+    multisport = (
+        joined_count("multisport_execution_bets","multisport_events")
+        + joined_count("multisport_line_bets","multisport_events")
+    )
+    tennis = joined_count("tennis_execution_bets","tennis_events")
+    return {
+        "total":football+multisport+tennis,
+        "football":football,
+        "multisport":multisport,
+        "tennis":tennis,
+        "timezone":"Europe/London",
+    }
+
+
 @app.get('/health')
 def health():
     return {"ok":True,"app":"Betting Lab","version":VERSION,"shadow_only":True,"provider_configured":bool(settings.odds_api_key)}
@@ -293,6 +349,7 @@ def status():
     meta_edge=meta_edge_scoreboard(db,settings.meta_edge_min_clean_labels)
     meta_edge_model=meta_model_status(db)
     until_midnight=bets_until_midnight(db)
+    today_primary=primary_bets_today(db)
     clv_samples=int(execution['clv_samples'])
     return {
         "app":"Betting Lab","version":VERSION,"shadow_only":True,
@@ -330,6 +387,7 @@ def status():
         "avg_clv_pct":execution['avg_clv_pct'],
         "bets_until_midnight":until_midnight,
         "bets_until_midnight_timezone":"Europe/London",
+        "primary_bets_today":today_primary,
         "clv_samples":clv_samples,"scoreboard":scoreboard,
         "canonical_scoreboard":canonical,"execution_scoreboard":execution,"execution_funnel":funnel,
         "multiples_shadow":multiples,
@@ -1203,16 +1261,23 @@ def dashboard():
         "PRED3":combined_pace("football_predictive3_bets","football_predictive3_market_bets"),
         "PRED4":combined_pace("football_predictive4_bets","football_predictive4_market_bets"),
     }
+    today=primary_bets_today(db)
     headline="".join([
         metric("Collection",health,health_css),
-        metric("Bets today",bets_until_midnight(db)),
-        metric("Settled football singles",f"{execution.get('settled',0)} · {pace_text(football_rate)}"),
+        metric("Bets today · all",today["total"]),
+        metric("Football today",today["football"]),
+        metric("Multi-Sport today",today["multisport"]),
+        metric("Tennis today",today["tennis"]),
+        metric("Credits left",q.get("credits_remaining","—")),
+    ])
+    football_headline="".join([
+        metric("Settled core singles",f"{execution.get('settled',0)}"),
+        metric("Frequency",pace_text(football_rate)),
         metric("Net P&L",f"{_fmt(execution.get('net_pnl_units'))}u",tone(execution.get("net_pnl_units"))),
         metric("Net ROI",pct(execution.get("net_roi_pct")),tone(execution.get("net_roi_pct"))),
         metric("A/B CLV",pct(execution.get("avg_clv_pct")),tone(execution.get("avg_clv_pct"))),
         metric("Beat close",pct(execution.get("beat_close_pct")),"ok" if (execution.get("beat_close_pct") or 0)>=50 else "bad"),
         metric("CLV samples",execution.get("clv_samples",0)),
-        metric("Credits left",q.get("credits_remaining","—")),
     ])
 
     watch_rows=[]
@@ -1340,9 +1405,14 @@ def dashboard():
     .eyebrow{{color:#8b949e;font-size:12px;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px}}
     @media(max-width:600px){{body{{padding:14px}}.grid{{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:12px 0 18px}}.card{{padding:12px}}.value{{font-size:19px}}.panel{{padding:14px;margin-bottom:12px}}table{{min-width:590px}}.button{{margin:0;padding:10px 12px}}}}
     </style></head><body>
-    <div class='hero'><div><div class='eyebrow'>Project Exit Plan</div><h1>Betting Lab</h1><div class='sub'>Weekly evidence cockpit · v{VERSION} · shadow research only · top performance tiles = core football</div></div><span class='pill {health_css}'>{health}</span></div>
+    <div class='hero'><div><div class='eyebrow'>Project Exit Plan</div><h1>Betting Lab</h1><div class='sub'>Weekly evidence cockpit · v{VERSION} · shadow research only · headline = whole research lab</div></div><span class='pill {health_css}'>{health}</span></div>
 
     <div class='grid compact'>{headline}</div>
+    <div class='muted' style='margin:-8px 0 18px'>Today = primary shadow bets on fixtures occurring today in Europe/London. Football includes core + PRED1–4; Multi-Sport includes H2H + lines. Derivative multiple/system cards are excluded to avoid double-counting their legs.</div>
+
+    <div class='panel priority'><h2>Football</h2><div class='muted'>Core executable-football performance remains separate from the whole-lab headline so its P&L and CLV are not mixed with newer research lanes.</div>
+      <div class='grid compact'>{football_headline}</div>
+    </div>
 
     <div class='panel'><h2>Provider credits</h2><div class='muted'>Actual recorded provider-call cost. The 7-day average uses the previous seven completed UTC days; the 30-day projection is compared with the 100,000-credit monthly budget.</div>
       <div class='grid compact'>{credit_cards}</div>
