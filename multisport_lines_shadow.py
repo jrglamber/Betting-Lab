@@ -776,6 +776,8 @@ class MultiSportLinesEngine:
         self.execution_bookmaker_keys=tuple(str(x) for x in execution_bookmaker_keys if str(x))
         self.target_sport_keys=tuple(str(x) for x in settings.multisport_sport_keys if str(x))
         self.markets=tuple(x for x in settings.multisport_lines_markets if x in SUPPORTED_MARKETS) or ("spreads","totals")
+        self.featured_markets=tuple(x for x in self.markets if x in {"spreads","totals"})
+        self.additional_markets=tuple(x for x in self.markets if x not in {"spreads","totals"})
         self.quota=MultiSportQuotaGuard(db,daily_budget=settings.multisport_daily_paid_credit_budget,reserve=settings.multisport_quota_reserve_credits)
         self.config_hash=_safe_hash(settings,self.execution_bookmaker_keys)
         self._last_discovery_at: Optional[datetime]=None
@@ -840,38 +842,128 @@ class MultiSportLinesEngine:
         return sorted(due,key=lambda x:(10**9 if x["next_mins"] is None else max(0,float(x["next_mins"])), -float(x["lateness"]), 0 if x["mode"]=="breadth" else 1,x["sport_key"]))
 
     def _poll_breadth(self,target:Mapping[str,Any],now:datetime)->Dict[str,Any]:
-        estimated=max(1,len(self.markets)); allowed,reason=self.quota.decide(estimated)
+        estimated=max(1,len(self.featured_markets)); allowed,reason=self.quota.decide(estimated)
         if not allowed:return {"mode":"breadth","polled":0,"reason":reason}
         key=str(target["sport_key"]); title=str(target["title"]); actual=0; region=reference_region(self.settings,key)
         try:
-            result=self.api.sport_odds(key,region,self.markets); actual=provider_actual_cost(result.last_cost,estimated); self.quota.update(remaining=result.remaining,used=result.used,last_cost=result.last_cost)
+            result=self.api.sport_odds(key,region,self.featured_markets); actual=provider_actual_cost(result.last_cost,estimated); self.quota.update(remaining=result.remaining,used=result.used,last_cost=result.last_cost)
             captured=now.isoformat(); payload=result.data if isinstance(result.data,list) else []
             quote_rows,event_ids=insert_line_payload(self.db,sport_key=key,league_title=title,payload=payload,capture_mode="BREADTH",captured_at=captured)
             consensus=0
             for eid in event_ids:
                 consensus+=write_line_consensus(self.db,eid,captured,min_books=self.settings.multisport_lines_min_consensus_books,excluded_books=self.execution_bookmaker_keys)
             self.db.execute("UPDATE multisport_lines_state SET last_broad_poll_at=? WHERE sport_key=?",(captured,key))
-            self.db.record_collector_run("MULTISPORT_LINES_ODDS",True,sport_key=key,requested_markets=",".join(self.markets),estimated_cost=estimated,actual_cost=actual,detail=f"region={region}; events={len(event_ids)}; quote_rows={quote_rows}; consensus_rows={consensus}")
+            self.db.record_collector_run("MULTISPORT_LINES_ODDS",True,sport_key=key,requested_markets=",".join(self.featured_markets),estimated_cost=estimated,actual_cost=actual,detail=f"region={region}; events={len(event_ids)}; quote_rows={quote_rows}; consensus_rows={consensus}")
             return {"mode":"breadth","polled":1,"sport_key":key,"reference_region":region,"events":len(event_ids),"quote_rows":quote_rows,"consensus_rows":consensus,"cost":actual}
         except Exception as exc:
-            self.db.record_collector_run("MULTISPORT_LINES_ODDS",False,sport_key=key,requested_markets=",".join(self.markets),estimated_cost=estimated,actual_cost=actual,detail=f"error={sanitize_sensitive_text(exc)}")
+            self.db.record_collector_run("MULTISPORT_LINES_ODDS",False,sport_key=key,requested_markets=",".join(self.featured_markets),estimated_cost=estimated,actual_cost=actual,detail=f"error={sanitize_sensitive_text(exc)}")
             return {"mode":"breadth","polled":0,"sport_key":key,"reason":"error"}
 
     def _poll_convergence(self,target:Mapping[str,Any],now:datetime)->Dict[str,Any]:
-        estimated=max(1,len(self.markets)); allowed,reason=self.quota.decide(estimated)
+        estimated=max(1,len(self.featured_markets)); allowed,reason=self.quota.decide(estimated)
         if not allowed:return {"mode":"convergence","polled":0,"reason":reason}
         key=str(target["sport_key"]); title=str(target["title"]); actual=0
         try:
-            result=self.api.sport_odds(key,self.settings.multisport_odds_region,self.markets,bookmaker_keys=self.execution_bookmaker_keys); actual=provider_actual_cost(result.last_cost,estimated); self.quota.update(remaining=result.remaining,used=result.used,last_cost=result.last_cost)
+            result=self.api.sport_odds(key,self.settings.multisport_odds_region,self.featured_markets,bookmaker_keys=self.execution_bookmaker_keys); actual=provider_actual_cost(result.last_cost,estimated); self.quota.update(remaining=result.remaining,used=result.used,last_cost=result.last_cost)
             captured=now.isoformat(); payload=result.data if isinstance(result.data,list) else []
             quote_rows,event_ids=insert_line_payload(self.db,sport_key=key,league_title=title,payload=payload,capture_mode="CONVERGENCE",captured_at=captured)
             created=evaluate_line_wave(self.db,sport_key=key,captured_at=captured,execution_bookmaker_keys=self.execution_bookmaker_keys,min_edge_pct=self.settings.multisport_lines_min_edge_pct,max_consensus_age_minutes=self.settings.multisport_lines_max_consensus_age_minutes,config_hash=self.config_hash)
             self.db.execute("UPDATE multisport_lines_state SET last_convergence_poll_at=? WHERE sport_key=?",(captured,key))
-            self.db.record_collector_run("MULTISPORT_LINES_CONVERGENCE",True,sport_key=key,requested_markets=",".join(self.markets),estimated_cost=estimated,actual_cost=actual,detail=f"events={len(event_ids)}; quote_rows={quote_rows}; executions_created={created}")
+            self.db.record_collector_run("MULTISPORT_LINES_CONVERGENCE",True,sport_key=key,requested_markets=",".join(self.featured_markets),estimated_cost=estimated,actual_cost=actual,detail=f"events={len(event_ids)}; quote_rows={quote_rows}; executions_created={created}")
             return {"mode":"convergence","polled":1,"sport_key":key,"events":len(event_ids),"quote_rows":quote_rows,"executions_created":created,"cost":actual}
         except Exception as exc:
-            self.db.record_collector_run("MULTISPORT_LINES_CONVERGENCE",False,sport_key=key,requested_markets=",".join(self.markets),estimated_cost=estimated,actual_cost=actual,detail=f"error={sanitize_sensitive_text(exc)}")
+            self.db.record_collector_run("MULTISPORT_LINES_CONVERGENCE",False,sport_key=key,requested_markets=",".join(self.featured_markets),estimated_cost=estimated,actual_cost=actual,detail=f"error={sanitize_sensitive_text(exc)}")
             return {"mode":"convergence","polled":0,"sport_key":key,"reason":"error"}
+
+    def _poll_one_additional_event(self, now: datetime)->Dict[str,Any]:
+        if not self.additional_markets:
+            return {"polled":0,"reason":"no_additional_markets"}
+        rows=self.db.fetchall(
+            """
+            SELECT e.*
+            FROM multisport_events e
+            JOIN multisport_lines_state s ON s.sport_key=e.sport_key
+            WHERE e.status='UPCOMING' AND s.active=1 AND e.commence_time>?
+            ORDER BY e.commence_time ASC
+            """,
+            (now.isoformat(),),
+        )
+        target=None
+        for e in rows:
+            last=self.db.fetchone(
+                """
+                SELECT started_at FROM collector_runs
+                WHERE run_type='MULTISPORT_LINES_ADDITIONAL' AND ok=1 AND event_id=?
+                ORDER BY id DESC LIMIT 1
+                """,(e["event_id"],)
+            )
+            if last:
+                try:
+                    if (now-parse_iso(last["started_at"])).total_seconds()/60.0 < 60.0:
+                        continue
+                except Exception:
+                    pass
+            target=e
+            break
+        if not target:
+            return {"polled":0,"reason":"no_due_additional_event"}
+
+        per_call=max(1,len(self.additional_markets))
+        allowed,reason=self.quota.decide(per_call*2)
+        if not allowed:
+            return {"polled":0,"reason":reason}
+        key=str(target["sport_key"]); eid=str(target["event_id"])
+        title=str(target.get("league_title") or key)
+        broad_cost=conv_cost=0
+        try:
+            broad=self.api.event_odds(key,eid,reference_region(self.settings,key),self.additional_markets)
+            broad_cost=provider_actual_cost(broad.last_cost,per_call)
+            self.quota.update(remaining=broad.remaining,used=broad.used,last_cost=broad.last_cost)
+            captured=now.isoformat()
+            payload=broad.data if isinstance(broad.data,dict) else {}
+            breadth_rows,_=insert_line_payload(
+                self.db,sport_key=key,league_title=title,payload=[payload],
+                capture_mode="BREADTH",captured_at=captured
+            )
+            consensus=write_line_consensus(
+                self.db,eid,captured,
+                min_books=self.settings.multisport_lines_min_consensus_books,
+                excluded_books=self.execution_bookmaker_keys
+            )
+
+            conv=self.api.event_odds(
+                key,eid,self.settings.multisport_odds_region,self.additional_markets,
+                bookmaker_keys=self.execution_bookmaker_keys
+            )
+            conv_cost=provider_actual_cost(conv.last_cost,per_call)
+            self.quota.update(remaining=conv.remaining,used=conv.used,last_cost=conv.last_cost)
+            conv_payload=conv.data if isinstance(conv.data,dict) else {}
+            conv_rows,_=insert_line_payload(
+                self.db,sport_key=key,league_title=title,payload=[conv_payload],
+                capture_mode="CONVERGENCE",captured_at=captured
+            )
+            created=evaluate_line_wave(
+                self.db,sport_key=key,captured_at=captured,
+                execution_bookmaker_keys=self.execution_bookmaker_keys,
+                min_edge_pct=self.settings.multisport_lines_min_edge_pct,
+                max_consensus_age_minutes=self.settings.multisport_lines_max_consensus_age_minutes,
+                config_hash=self.config_hash
+            )
+            self.db.record_collector_run(
+                "MULTISPORT_LINES_ADDITIONAL",True,event_id=eid,sport_key=key,
+                requested_markets=",".join(self.additional_markets),
+                estimated_cost=per_call*2,actual_cost=broad_cost+conv_cost,
+                detail=f"breadth_rows={breadth_rows}; consensus_rows={consensus}; convergence_rows={conv_rows}; executions_created={created}"
+            )
+            return {"polled":1,"event_id":eid,"sport_key":key,"quote_rows":breadth_rows+conv_rows,"executions_created":created,"cost":broad_cost+conv_cost}
+        except Exception as exc:
+            self.db.record_collector_run(
+                "MULTISPORT_LINES_ADDITIONAL",False,event_id=eid,sport_key=key,
+                requested_markets=",".join(self.additional_markets),
+                estimated_cost=per_call*2,actual_cost=broad_cost+conv_cost,
+                detail=f"error={sanitize_sensitive_text(exc)}"
+            )
+            return {"polled":0,"event_id":eid,"sport_key":key,"reason":"error"}
 
     def collect_results(self, now: datetime)->Dict[str,Any]:
         settled_existing=settle_lines_from_stored_results(self.db)
@@ -934,5 +1026,6 @@ class MultiSportLinesEngine:
         now=now or datetime.now(timezone.utc); self._maybe_discover(now); due=self._due_lanes(now)
         odds={"mode":"idle","polled":0,"reason":"no_due_lines_lane"}
         if due:odds=self._poll_breadth(due[0],now) if due[0]["mode"]=="breadth" else self._poll_convergence(due[0],now)
+        additional=self._poll_one_additional_event(now)
         maint=self.maintenance(now); results=self.collect_results(now)
-        return {"enabled":True,"odds":odds,"maintenance":maint,"results":results,"paid_credits_today":self.quota.today_paid_cost(now),"shared_daily_budget":self.quota.daily_budget}
+        return {"enabled":True,"odds":odds,"additional_markets":additional,"maintenance":maint,"results":results,"paid_credits_today":self.quota.today_paid_cost(now),"shared_daily_budget":self.quota.daily_budget}
