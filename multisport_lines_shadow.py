@@ -24,9 +24,16 @@ from multisport_shadow import (
 )
 from quota import provider_actual_cost
 
-APP_VERSION = "0.9.0"
-EXPERIMENT_VERSION = "MSP2_LINES"
-SUPPORTED_MARKETS = {"spreads", "totals"}
+APP_VERSION = "0.9.1"
+EXPERIMENT_VERSION = "MSP2_EXPANDED_LINES"
+SUPPORTED_MARKETS = {"spreads", "totals", "alternate_spreads", "alternate_totals", "team_totals", "alternate_team_totals"}
+
+def _base_market(market_key: str) -> str:
+    return str(market_key).split("::", 1)[0]
+
+def _team_market_team(market_key: str) -> Optional[str]:
+    parts = str(market_key).split("::", 1)
+    return parts[1] if len(parts) == 2 else None
 
 
 def _norm_point(value: Any) -> Optional[float]:
@@ -63,60 +70,86 @@ def reference_region(settings, sport_key: str) -> str:
 
 
 def _required_selections(event: Mapping[str, Any], market_key: str) -> Tuple[str, str]:
-    if market_key == "spreads":
+    base = _base_market(market_key)
+    if base in {"spreads", "alternate_spreads"}:
         return str(event["home_team"]), str(event["away_team"])
+    if base in {"team_totals", "alternate_team_totals"}:
+        team = _team_market_team(market_key)
+        return f"{team} Over", f"{team} Under"
     return "Over", "Under"
 
 
 def _canonicalize_market(
     event: Mapping[str, Any],
     market: Mapping[str, Any],
-) -> Optional[Tuple[str, float, List[Tuple[str, float, float]]]]:
+) -> List[Tuple[str, float, List[Tuple[str, float, float]]]]:
     key = str(market.get("key") or "")
     if key not in SUPPORTED_MARKETS:
-        return None
+        return []
     outcomes = list(market.get("outcomes") or [])
-    if len(outcomes) != 2:
-        return None
+    home, away = str(event["home_team"]), str(event["away_team"])
+    normalized: List[Tuple[str, float, List[Tuple[str, float, float]]]] = []
 
-    if key == "spreads":
-        home, away = str(event["home_team"]), str(event["away_team"])
-        by_name = {str(o.get("name") or ""): o for o in outcomes}
-        if set(by_name) != {home, away}:
-            return None
-        hp = _norm_point(by_name[home].get("point"))
-        ap = _norm_point(by_name[away].get("point"))
-        if hp is None or ap is None or abs(hp + ap) > 1e-6:
-            return None
-        rows: List[Tuple[str, float, float]] = []
-        for name in (home, away):
+    if key in {"spreads", "alternate_spreads"}:
+        by_name: Dict[str, List[Mapping[str, Any]]] = defaultdict(list)
+        for o in outcomes:
+            by_name[str(o.get("name") or "")].append(o)
+        for h in by_name.get(home, []):
+            hp = _norm_point(h.get("point"))
+            if hp is None:
+                continue
+            a = next((x for x in by_name.get(away, []) if _norm_point(x.get("point")) is not None and abs(float(_norm_point(x.get("point"))) + hp) < 1e-6), None)
+            if not a:
+                continue
             try:
-                price = float(by_name[name].get("price"))
+                hprice, aprice = float(h.get("price")), float(a.get("price"))
             except Exception:
-                return None
-            if price <= 1.0:
-                return None
-            rows.append((name, _norm_point(by_name[name].get("point")) or 0.0, price))
-        return key, hp, rows
+                continue
+            if hprice <= 1.0 or aprice <= 1.0:
+                continue
+            normalized.append((key, hp, [(home, hp, hprice), (away, -hp, aprice)]))
+        return normalized
 
-    by_name = {str(o.get("name") or ""): o for o in outcomes}
-    if set(by_name) != {"Over", "Under"}:
-        return None
-    op = _norm_point(by_name["Over"].get("point"))
-    up = _norm_point(by_name["Under"].get("point"))
-    if op is None or up is None or abs(op - up) > 1e-6:
-        return None
-    rows = []
-    for name in ("Over", "Under"):
-        try:
-            price = float(by_name[name].get("price"))
-        except Exception:
-            return None
-        if price <= 1.0:
-            return None
-        rows.append((name, _norm_point(by_name[name].get("point")) or 0.0, price))
-    return key, op, rows
+    if key in {"totals", "alternate_totals"}:
+        by_point: Dict[float, Dict[str, Mapping[str, Any]]] = defaultdict(dict)
+        for o in outcomes:
+            point = _norm_point(o.get("point"))
+            name = str(o.get("name") or "")
+            if point is not None and name in {"Over", "Under"}:
+                by_point[point][name] = o
+        for point, pair in by_point.items():
+            if set(pair) != {"Over", "Under"}:
+                continue
+            try:
+                op, up = float(pair["Over"].get("price")), float(pair["Under"].get("price"))
+            except Exception:
+                continue
+            if op <= 1.0 or up <= 1.0:
+                continue
+            normalized.append((key, point, [("Over", point, op), ("Under", point, up)]))
+        return normalized
 
+    if key in {"team_totals", "alternate_team_totals"}:
+        by_team_point: Dict[Tuple[str,float], Dict[str, Mapping[str, Any]]] = defaultdict(dict)
+        for o in outcomes:
+            team = str(o.get("description") or "")
+            point = _norm_point(o.get("point"))
+            name = str(o.get("name") or "")
+            if team in {home, away} and point is not None and name in {"Over", "Under"}:
+                by_team_point[(team, point)][name] = o
+        for (team, point), pair in by_team_point.items():
+            if set(pair) != {"Over", "Under"}:
+                continue
+            try:
+                op, up = float(pair["Over"].get("price")), float(pair["Under"].get("price"))
+            except Exception:
+                continue
+            if op <= 1.0 or up <= 1.0:
+                continue
+            internal = f"{key}::{team}"
+            normalized.append((internal, point, [(f"{team} Over", point, op), (f"{team} Under", point, up)]))
+        return normalized
+    return []
 
 def insert_line_payload(
     db: Database,
@@ -174,18 +207,16 @@ def insert_line_payload(
         event_map = {"home_team": home, "away_team": away}
         for book in event.get("bookmakers") or []:
             for market in book.get("markets") or []:
-                normalized = _canonicalize_market(event_map, market)
-                if not normalized:
-                    continue
-                market_key, line_point, rows = normalized
-                for selection, outcome_point, price in rows:
-                    out_rows.append((
-                        eid, sport_key, captured_at, capture_mode,
-                        str(book.get("key") or ""),
-                        str(book.get("title") or book.get("key") or ""),
-                        book.get("last_update"), market_key, selection,
-                        outcome_point, line_point, price,
-                    ))
+                normalized_groups = _canonicalize_market(event_map, market)
+                for market_key, line_point, rows in normalized_groups:
+                    for selection, outcome_point, price in rows:
+                        out_rows.append((
+                            eid, sport_key, captured_at, capture_mode,
+                            str(book.get("key") or ""),
+                            str(book.get("title") or book.get("key") or ""),
+                            book.get("last_update"), market_key, selection,
+                            outcome_point, line_point, price,
+                        ))
     if out_rows:
         db.executemany(
             """
@@ -216,7 +247,7 @@ def _valid_line_groups(
         market = str(r.get("market_key") or "")
         line = _norm_point(r.get("line_point"))
         sel = str(r.get("selection") or "")
-        if not book or market not in SUPPORTED_MARKETS or line is None or not sel:
+        if not book or _base_market(market) not in SUPPORTED_MARKETS or line is None or not sel:
             continue
         if allowed is not None and book not in allowed:
             continue
@@ -394,7 +425,7 @@ def evaluate_line_wave(
         for (book, market, line), prices in groups.items():
             by_market_line[(market,line)][book] = prices
 
-        for market in sorted(SUPPORTED_MARKETS):
+        for market in sorted({m for (m, _line) in by_market_line}):
             for selection in _required_selections(event, market):
                 execution_key = f"{event['event_id']}|{market}|{selection}"
                 if db.fetchone("SELECT id FROM multisport_line_bets WHERE execution_key=?", (execution_key,)):
@@ -480,15 +511,16 @@ def evaluate_line_wave(
 
 
 def line_clv_points(market: str, selection: str, entry_line: float, close_line: float, event: Mapping[str, Any]) -> Optional[float]:
-    if market == "spreads":
+    base = _base_market(market)
+    if base in {"spreads", "alternate_spreads"}:
         if selection == str(event["home_team"]):
             return float(entry_line) - float(close_line)
         if selection == str(event["away_team"]):
             return float(close_line) - float(entry_line)
-    elif market == "totals":
-        if selection == "Over":
+    elif base in {"totals", "alternate_totals", "team_totals", "alternate_team_totals"}:
+        if selection.endswith("Over"):
             return float(close_line) - float(entry_line)
-        if selection == "Under":
+        if selection.endswith("Under"):
             return float(entry_line) - float(close_line)
     return None
 
@@ -604,7 +636,8 @@ def settle_line_event(db: Database, event_id: str, home_score: int, away_score: 
     for bet in bets:
         market = str(bet["market_key"]); selection = str(bet["selection"]); line = float(bet["line_point"])
         result = "PUSH"
-        if market == "spreads":
+        base_market = _base_market(market)
+        if base_market in {"spreads", "alternate_spreads"}:
             adjusted_home = float(home_score) + line
             if abs(adjusted_home - float(away_score)) < 1e-9:
                 result = "PUSH"
@@ -612,7 +645,7 @@ def settle_line_event(db: Database, event_id: str, home_score: int, away_score: 
                 result = "WIN" if adjusted_home > float(away_score) else "LOSS"
             elif selection == str(event["away_team"]):
                 result = "WIN" if adjusted_home < float(away_score) else "LOSS"
-        elif market == "totals":
+        elif base_market in {"totals", "alternate_totals"}:
             total = float(home_score + away_score)
             if abs(total-line)<1e-9:
                 result = "PUSH"
@@ -620,6 +653,15 @@ def settle_line_event(db: Database, event_id: str, home_score: int, away_score: 
                 result = "WIN" if total > line else "LOSS"
             elif selection == "Under":
                 result = "WIN" if total < line else "LOSS"
+        elif base_market in {"team_totals", "alternate_team_totals"}:
+            team = _team_market_team(market)
+            team_score = float(home_score if team == str(event["home_team"]) else away_score)
+            if abs(team_score-line)<1e-9:
+                result = "PUSH"
+            elif selection.endswith("Over"):
+                result = "WIN" if team_score > line else "LOSS"
+            elif selection.endswith("Under"):
+                result = "WIN" if team_score < line else "LOSS"
         gross = 0.0 if result=="PUSH" else (float(bet["offered_odds"])-1.0 if result=="WIN" else -1.0)
         rate, commission, net = commission_adjusted_pnl(gross, str(bet["bookmaker_key"]))
         quality = "RULE_SENSITIVE_FINAL_SCORE" if event["sport_family"] in {"BASEBALL","ICE_HOCKEY"} else "PROVIDER_FINAL_SCORE_RESEARCH"

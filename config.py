@@ -43,7 +43,7 @@ class Settings:
     )
     odds_region: str = os.getenv("ODDS_REGION", "uk")
     configured_odds_markets: Tuple[str, ...] = _csv(
-        "ODDS_MARKETS", "h2h,totals,btts"
+        "ODDS_MARKETS", "h2h,totals,btts,double_chance,correct_score"
     )
     enable_dnb_market: bool = _bool("ENABLE_DNB_MARKET", False)
     execution_bookmaker_keys: Tuple[str, ...] = _csv(
@@ -252,7 +252,7 @@ class Settings:
     # v0.9.0 — Multi-Sport Lines Shadow (MSP2).
     multisport_lines_enabled: bool = _bool("MULTISPORT_LINES_ENABLED", True)
     multisport_lines_markets: Tuple[str, ...] = _csv(
-        "MULTISPORT_LINES_MARKETS", "spreads,totals"
+        "MULTISPORT_LINES_MARKETS", "spreads,totals,alternate_spreads,alternate_totals,team_totals,alternate_team_totals"
     )
     multisport_lines_min_consensus_books: int = int(
         os.getenv("MULTISPORT_LINES_MIN_CONSENSUS_BOOKS", "3")

@@ -61,6 +61,27 @@ def grade_signal(
         winner = home_team if home_score > away_score else away_team
         return "WIN" if selection == winner else "LOSS"
 
+    if market == "double_chance":
+        if home_score > away_score:
+            actual = {home_team, f"{home_team} or {away_team}"}
+        elif away_score > home_score:
+            actual = {away_team, f"{home_team} or {away_team}"}
+        else:
+            actual = {"Draw"}
+        parts = {x.strip() for x in selection.split(" or ")}
+        if home_score == away_score:
+            return "WIN" if "Draw" in parts else "LOSS"
+        winner = home_team if home_score > away_score else away_team
+        return "WIN" if winner in parts else "LOSS"
+
+    if market == "correct_score":
+        raw = selection.strip().replace("–","-").replace("—","-").replace(":","-")
+        try:
+            a,b = raw.split("-",1)
+            return "WIN" if int(a.strip()) == int(home_score) and int(b.strip()) == int(away_score) else "LOSS"
+        except Exception:
+            return "VOID"
+
     return "VOID"
 
 
