@@ -81,6 +81,7 @@ from predictive_historical import (
 )
 from proxy_xg import ProxyXgEngine, proxy_xg_status
 from outcome_edge import outcome_edge_report, ensure_watch_cohorts
+from telegram_alerts import send_pending_heinz_alerts
 from cross_sport_systems_shadow import cross_sport_systems_scoreboard, latest_cross_sport_system_cards
 from cohort_systems_shadow import (
     ensure_cohort_system_state, run_cohort_systems_maintenance, cohort_systems_scoreboard,
@@ -99,7 +100,7 @@ from research import (
     event_price_history, signal_price_history, repair_premature_clv,
 )
 
-VERSION = "0.19.22"
+VERSION = "0.19.23"
 
 db = Database(settings.database_url, settings.db_path)
 api = TheOddsApi(settings.odds_api_key)
@@ -181,6 +182,17 @@ async def lifespan(app: FastAPI):
     ensure_watch_cohorts(db)
     outcome_edge_report(db)
     ensure_cohort_system_state(db)
+
+    # Telegram connectivity is tested independently of the slower manual-system
+    # research cycle. The helper is idempotent and sends the connection test once.
+    try:
+        tg = send_pending_heinz_alerts(
+            db, settings,
+            algorithm_version="CONSENSUS_H2H_4_TO_7_49_HEINZ_FORWARD_V1",
+        )
+        db.record_collector_run("TELEGRAM_STARTUP_TEST", True, detail=str(tg))
+    except Exception as exc:
+        db.record_collector_run("TELEGRAM_STARTUP_TEST", False, detail=str(exc))
 
     if settings.predictive_football_pred3_enabled:
         db.record_collector_run(
@@ -324,6 +336,37 @@ def primary_bets_today(db: Database, now: Optional[datetime] = None) -> dict:
 @app.get('/health')
 def health():
     return {"ok":True,"app":"Betting Lab","version":VERSION,"shadow_only":True,"provider_configured":bool(settings.odds_api_key)}
+
+@app.get('/api/telegram/status')
+def telegram_status():
+    latest = db.fetchone(
+        """SELECT started_at,finished_at,ok,detail
+           FROM collector_runs
+           WHERE run_type='TELEGRAM_STARTUP_TEST'
+           ORDER BY id DESC LIMIT 1"""
+    )
+    try:
+        state = db.fetchone(
+            "SELECT started_at,connection_test_sent_at FROM telegram_alert_state WHERE singleton_id=1"
+        )
+    except Exception:
+        state = None
+    try:
+        log = db.fetchall(
+            """SELECT created_at,status,system_bet_id,bookmaker_key,attempts,sent_at,last_error
+               FROM telegram_alert_log ORDER BY id DESC LIMIT 10"""
+        )
+    except Exception:
+        log = []
+    return {
+        "enabled": bool(settings.telegram_alerts_enabled),
+        "test_mode": bool(settings.telegram_test_mode),
+        "bot_token_configured": bool(settings.telegram_bot_token),
+        "chat_id_configured": bool(settings.telegram_chat_id),
+        "startup_test": latest,
+        "state": state,
+        "recent_alerts": log,
+    }
 
 @app.get('/api/status')
 def status():
