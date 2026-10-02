@@ -23,7 +23,7 @@ from canonical import (
 )
 from worker import Worker
 from research_intelligence import (
-    research_intelligence, upsert_weekly_report, latest_weekly_reports,
+    research_intelligence, research_governance, upsert_weekly_report, latest_weekly_reports,
 )
 from execution_shadow import (
     backfill_execution_shadows, evaluate_latest_execution_wave, track_execution_prices,
@@ -99,7 +99,7 @@ from research import (
     event_price_history, signal_price_history, repair_premature_clv,
 )
 
-VERSION = "0.19.21"
+VERSION = "0.19.22"
 
 db = Database(settings.database_url, settings.db_path)
 api = TheOddsApi(settings.odds_api_key)
@@ -1176,6 +1176,7 @@ def dashboard():
     p1=predictive_scoreboard(db);p2=predictive2_scoreboard(db)
     p3=predictive3_scoreboard(db);p4=predictive4_scoreboard(db)
     meta=meta_model_status(db)
+    governance=research_governance(db)
 
     def pct(v): return "—" if v is None else f"{_fmt(v)}%"
     def tone(v):
@@ -1396,6 +1397,38 @@ def dashboard():
         lane_row("PRED3",p3,"/predictive-football-pred3",pred_rates["PRED3"]),lane_row("PRED4",p4,"/predictive-football-pred4",pred_rates["PRED4"]),
     ])
 
+    def maturity_css(level):
+        return "ok" if level=="MATURE" else "warn" if level=="DEVELOPING" else "muted"
+    governance_rows=[]
+    for x in governance.get("lanes",[]):
+        roll=x.get("rolling") or {}
+        gates=(f"{x.get('promotion_gates_passed',0)}/{x.get('promotion_gates_total',0)}"
+               if x.get("promotion_eligible") else "—")
+        governance_rows.append(
+            f"<tr><td><strong>{escape(str(x.get('name')))}</strong></td>"
+            f"<td class='{maturity_css(str(x.get('maturity')))}'>{escape(str(x.get('maturity')))}</td>"
+            f"<td>{x.get('settled',0)}</td><td class='{tone(x.get('roi_pct'))}'>{pct(x.get('roi_pct'))}</td>"
+            f"<td>{pct((roll.get('20') or {}).get('roi_pct'))}</td>"
+            f"<td>{pct((roll.get('50') or {}).get('roi_pct'))}</td>"
+            f"<td>{pct((roll.get('100') or {}).get('roi_pct'))}</td>"
+            f"<td>{pct(x.get('median_clv_pct'))}</td><td>{pct(x.get('beat_close_pct'))}</td>"
+            f"<td>{gates}</td><td>{'REVIEW' if x.get('candidate_ready') else 'WAIT'}</td></tr>"
+        )
+    governance_html="".join(governance_rows) or "<tr><td colspan='11'>Waiting for research observations.</td></tr>"
+
+    concentration_rows=[]
+    for x in governance.get("systems",[]):
+        conc=x.get("concentration") or {}
+        concentration_rows.append(
+            f"<tr><td><strong>{escape(str(x.get('name')))}</strong></td>"
+            f"<td class='{maturity_css(str(x.get('maturity')))}'>{escape(str(x.get('maturity')))}</td>"
+            f"<td>{x.get('settled',0)}</td><td class='{tone(x.get('roi_pct'))}'>{pct(x.get('roi_pct'))}</td>"
+            f"<td>{pct(conc.get('top1_share_positive_pct'))}</td><td>{pct(conc.get('top3_share_positive_pct'))}</td>"
+            f"<td>{_fmt(conc.get('net_pnl_without_best1'))}u</td><td>{_fmt(conc.get('net_pnl_without_best3'))}u</td>"
+            f"<td>{_fmt(x.get('singles_control_pnl_units'))}u</td></tr>"
+        )
+    concentration_html="".join(concentration_rows) or "<tr><td colspan='9'>Multiple-system samples are still forming.</td></tr>"
+
     return HTMLResponse(f"""<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
     <title>Betting Lab v{VERSION}</title><style>{BASE_STYLE}
     body{{max-width:1400px;margin:auto}}.hero{{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap}}
@@ -1452,6 +1485,16 @@ def dashboard():
 
     <div class='panel'><h2>Other research lanes</h2><div class='muted'>Tennis and football model challengers stay secondary unless forward evidence starts to stand out.</div>
       <div class='table-wrap'><table><thead><tr><th>Lane</th><th>Settled</th><th>Frequency</th><th>Net ROI</th><th>A/B CLV</th><th>CLV n</th></tr></thead><tbody>{lanes}</tbody></table></div>
+    </div>
+
+    <div class='panel priority'><h2>Research governance <span class='pill warn'>FEATURE FREEZE</span></h2>
+      <div class='muted'>No new strategies, sports, odds bands, models or multiple types during the observation period. Bugs, data-quality repairs and measurement only. Maturity: EARLY 0–49 settled · DEVELOPING 50–149 · MATURE 150+.</div>
+      <h3 style='margin-top:18px'>Stability & promotion gates</h3>
+      <div class='table-wrap'><table><thead><tr><th>Lane</th><th>Maturity</th><th>Settled</th><th>Lifetime ROI</th><th>Last 20</th><th>Last 50</th><th>Last 100</th><th>Median CLV</th><th>Beat close</th><th>Gates</th><th>Status</th></tr></thead><tbody>{governance_html}</tbody></table></div>
+      <div class='muted' style='margin-top:10px'>Review-eligible requires 150 settled, 100 A/B CLV samples, positive median CLV, ≥52% beat-close, positive lifetime ROI and positive last-50 ROI. Passing all gates never auto-promotes anything; live promotion still requires explicit approval.</div>
+      <h3 style='margin-top:20px'>Multiple-system concentration</h3>
+      <div class='muted'>Jackpot concentration is descriptive, not a penalty. It shows how much of positive return came from the best 1/3 cards and what net P&L would be without them.</div>
+      <div class='table-wrap'><table><thead><tr><th>System</th><th>Maturity</th><th>Settled</th><th>ROI</th><th>Top 1 share</th><th>Top 3 share</th><th>P&L ex best 1</th><th>P&L ex best 3</th><th>Singles control P&L</th></tr></thead><tbody>{concentration_html}</tbody></table></div>
     </div>
 
     <div class='panel'><h2>Tuesday review exports</h2><div class='muted' style='margin-bottom:14px'>These are the two files to upload for the weekly review. Full history stays available for occasional audits.</div>
