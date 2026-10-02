@@ -98,6 +98,12 @@ class Settings:
         os.getenv("MANUAL_SYSTEMS_DAILY_CREDIT_BUDGET", "300")
     )
 
+    # Forward-only Telegram shadow alerting for genuinely placeable Heinz cards.
+    telegram_alerts_enabled: bool = _bool("TELEGRAM_ALERTS_ENABLED", False)
+    telegram_test_mode: bool = _bool("TELEGRAM_TEST_MODE", True)
+    telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    telegram_chat_id: str = os.getenv("TELEGRAM_CHAT_ID", "")
+
     enable_live_betting: bool = _bool("ENABLE_LIVE_BETTING", False)
     min_consensus_books: int = int(os.getenv("MIN_CONSENSUS_BOOKS", "3"))
     min_edge_pct: float = float(os.getenv("MIN_EDGE_PCT", "3.0"))
