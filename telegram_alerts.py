@@ -14,7 +14,8 @@ def _ensure_schema(db: Database) -> None:
     db.execute(
         f"""CREATE TABLE IF NOT EXISTS telegram_alert_state (
             singleton_id INTEGER PRIMARY KEY,
-            started_at TEXT NOT NULL
+            started_at TEXT NOT NULL,
+            connection_test_sent_at TEXT
         )"""
     )
     db.execute(
@@ -84,6 +85,27 @@ def format_heinz_message(card: Mapping[str, Any], legs: list[Mapping[str, Any]],
     return "\n".join(lines)
 
 
+def _maybe_send_connection_test(db: Database, bot_token: str, chat_id: str) -> bool:
+    _ensure_schema(db)
+    row = db.fetchone(
+        "SELECT connection_test_sent_at FROM telegram_alert_state WHERE singleton_id=1"
+    ) or {}
+    if row.get("connection_test_sent_at"):
+        return False
+    _send_telegram(
+        bot_token,
+        chat_id,
+        "🧪 BETTING LAB TELEGRAM TEST\n\n"
+        "Connection successful. Future qualifying William Hill/Ladbrokes Heinz alerts will arrive here.\n\n"
+        "SHADOW TEST ONLY — DO NOT PLACE.",
+    )
+    db.execute(
+        "UPDATE telegram_alert_state SET connection_test_sent_at=? WHERE singleton_id=1",
+        (utc_now_iso(),),
+    )
+    return True
+
+
 def _send_telegram(bot_token: str, chat_id: str, text: str) -> Dict[str, Any]:
     endpoint = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     body = parse.urlencode({
@@ -121,6 +143,14 @@ def send_pending_heinz_alerts(
         return {"enabled": True, "sent": 0, "reason": "credentials_missing"}
 
     start = _state_start(db)
+    connection_test_sent = False
+    try:
+        connection_test_sent = _maybe_send_connection_test(db, token, chat_id)
+    except Exception as exc:
+        return {
+            "enabled": True, "sent": 0, "reason": "connection_test_failed",
+            "error": sanitize_sensitive_text(exc),
+        }
     cards = db.fetchall(
         """SELECT * FROM manual_system_shadow_bets
            WHERE algorithm_version=? AND system_type='HEINZ'
@@ -179,4 +209,5 @@ def send_pending_heinz_alerts(
         "failed": failed,
         "already_sent": skipped,
         "started_at": start.isoformat(),
+        "connection_test_sent": connection_test_sent,
     }
