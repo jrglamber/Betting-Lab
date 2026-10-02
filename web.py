@@ -99,7 +99,7 @@ from research import (
     event_price_history, signal_price_history, repair_premature_clv,
 )
 
-VERSION = "0.19.20"
+VERSION = "0.19.21"
 
 db = Database(settings.database_url, settings.db_path)
 api = TheOddsApi(settings.odds_api_key)
@@ -1907,6 +1907,77 @@ def multisport_page():
         f"<tr><td>{escape(str(x['decision']))}</td><td>{escape(str(x['reason']))}</td><td>{x['n']}</td></tr>"
         for x in moneyline_funnel['rows']
     ) or "<tr><td colspan='3'>No moneyline evaluations yet.</td></tr>"
+
+    # Focused league research panels. These are descriptive only and do not
+    # alter entry rules, staking or execution authority.
+    nfl_rows=db.fetchall("""
+        SELECT b.*,e.league_title
+        FROM multisport_execution_bets b
+        JOIN multisport_events e ON e.event_id=b.event_id
+        WHERE b.sport_key='americanfootball_nfl'
+        ORDER BY b.id
+    """)
+    euro_rows=db.fetchall("""
+        SELECT b.*,e.league_title
+        FROM multisport_execution_bets b
+        JOIN multisport_events e ON e.event_id=b.event_id
+        WHERE b.sport_key='basketball_euroleague'
+        ORDER BY b.id
+    """)
+
+    def focus_segment_rows(rows, label_fn):
+        groups={}
+        for row in rows:
+            groups.setdefault(str(label_fn(row)),[]).append(row)
+        out=[]
+        for label,items in sorted(groups.items()):
+            settled=[x for x in items if x.get('net_pnl_units') is not None]
+            ab=[x for x in items if str(x.get('clv_quality') or '').upper() in {'A','B'} and x.get('clv_pct') is not None]
+            clvs=sorted(float(x['clv_pct']) for x in ab)
+            n=len(clvs)
+            med=(clvs[n//2] if n%2 else ((clvs[n//2-1]+clvs[n//2])/2.0)) if n else None
+            net=sum(float(x.get('net_pnl_units') or 0.0) for x in settled)
+            out.append({
+                'label':label,'bets':len(items),'settled':len(settled),'clv_samples':n,
+                'avg_clv_pct':(sum(clvs)/n if n else None),'median_clv_pct':med,
+                'beat_close_pct':(sum(1 for v in clvs if v>0)/n*100.0 if n else None),
+                'net_roi_pct':(net/len(settled)*100.0 if settled else None),
+            })
+        return out
+
+    def focus_table(items):
+        rows=''.join(
+            f"<tr><td>{escape(str(x['label']))}</td><td>{x['bets']}</td><td>{x['settled']}</td><td>{x['clv_samples']}</td>"
+            f"<td>{_fmt(x['avg_clv_pct'])}%</td><td>{_fmt(x['median_clv_pct'])}%</td>"
+            f"<td>{_fmt(x['beat_close_pct'])}%</td><td>{_fmt(x['net_roi_pct'])}%</td></tr>"
+            for x in items
+        ) or "<tr><td colspan='8'>No sample yet.</td></tr>"
+        return f"<table><thead><tr><th>Segment</th><th>Bets</th><th>Settled</th><th>A/B</th><th>Avg CLV</th><th>Median CLV</th><th>Beat close</th><th>Net ROI</th></tr></thead><tbody>{rows}</tbody></table>"
+
+    def nfl_band(row):
+        o=float(row.get('offered_odds') or 0.0)
+        if o < 2.0:return '<2.00'
+        if o < 3.0:return '2.00-2.99'
+        if o < 4.0:return '3.00-3.99'
+        if o < 5.0:return '4.00-4.99'
+        if o < 7.5:return '5.00-7.49'
+        if o < 10.0:return '7.50-9.99'
+        return '10.00+'
+
+    nfl_by_band=focus_segment_rows(nfl_rows,nfl_band)
+    nfl_by_book=focus_segment_rows(nfl_rows,lambda r:r.get('bookmaker_title') or r.get('bookmaker_key') or 'Unknown')
+    euro_ab=[float(x['clv_pct']) for x in euro_rows if str(x.get('clv_quality') or '').upper() in {'A','B'} and x.get('clv_pct') is not None]
+    euro_sorted=sorted(euro_ab)
+    euro_n=len(euro_sorted)
+    euro_median=(euro_sorted[euro_n//2] if euro_n%2 else ((euro_sorted[euro_n//2-1]+euro_sorted[euro_n//2])/2.0)) if euro_n else None
+    euro_mean=(sum(euro_sorted)/euro_n) if euro_n else None
+    euro_extreme=sum(1 for v in euro_sorted if abs(v)>=50.0)
+    euro_max=max((abs(v) for v in euro_sorted),default=None)
+    euro_audit_html=(
+        f"<strong>Audit before interpretation.</strong> A/B CLV n={euro_n}; mean={_fmt(euro_mean)}%; "
+        f"median={_fmt(euro_median)}%; |CLV| ≥50% observations={euro_extreme}; max |CLV|={_fmt(euro_max)}%. "
+        "The headline mean can be dominated by a few extreme price moves, so EuroLeague remains research-only until those observations are verified."
+    )
     def seg_table(items):
         rows=''.join(
             f"<tr><td>{escape(x['label'])}</td><td>{x['bets']}</td><td>{x['settled']}</td><td>{x['clv_samples']}</td>"
@@ -1922,6 +1993,11 @@ def multisport_page():
     <div class='panel'><h2>Latest executable shadows</h2><table><thead><tr><th>ID</th><th>Sport</th><th>League</th><th>Event</th><th>Selection</th><th>Venue</th><th>Entry</th><th>Fair</th><th>Edge</th><th>Min</th><th>Move</th><th>CLV</th><th>Quality</th><th>Result</th><th>Net P&L</th></tr></thead><tbody>{brows}</tbody></table></div>
     <div class='section-grid'><div class='panel'><h2>By sport</h2>{seg_table(segments['sport'])}</div><div class='panel'><h2>By league</h2>{seg_table(segments['league'])}</div></div>
     <div class='section-grid'><div class='panel'><h2>By odds band</h2>{seg_table(segments['odds_band'])}</div><div class='panel'><h2>Favourite vs outsider</h2>{seg_table(segments['side'])}</div></div>
+    <div class='panel priority'><h2>NFL research focus</h2><div class='muted'>League-specific descriptive view only. Positive CLV/ROI pockets remain shadow evidence until sample size is meaningful.</div>
+      <h3 style='margin-top:18px'>By odds band</h3>{focus_table(nfl_by_band)}
+      <h3 style='margin-top:18px'>By bookmaker</h3>{focus_table(nfl_by_book)}
+    </div>
+    <div class='panel'><h2>EuroLeague CLV audit</h2><div class='muted'>{euro_audit_html}</div></div>
     <div class='panel'><h2>Configured / active competitions</h2><div class='muted'>Every configured Multi-Sport competition is listed here. Active now = currently returned by provider discovery; inactive targets remain configured and will begin collecting automatically when the provider activates them.</div><table><thead><tr><th>Configured</th><th>Active now</th><th>Sport</th><th>Competition</th><th>Provider key</th><th>Last breadth</th><th>Last convergence</th></tr></thead><tbody>{lrows}</tbody></table></div>
     <div class='panel'><h2>Moneyline execution funnel</h2><table><thead><tr><th>Decision</th><th>Reason</th><th>Count</th></tr></thead><tbody>{funnel_rows}</tbody></table></div>
     <div class='panel'><h2>Latest execution audit</h2><table><thead><tr><th>Evaluated</th><th>League key</th><th>Selection</th><th>Executable</th><th>Min</th><th>Fair</th><th>Edge</th><th>Decision</th><th>Reason</th></tr></thead><tbody>{erows}</tbody></table></div>
