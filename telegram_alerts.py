@@ -18,6 +18,10 @@ def _ensure_schema(db: Database) -> None:
             connection_test_sent_at TEXT
         )"""
     )
+    try:
+        db.execute("ALTER TABLE telegram_alert_state ADD COLUMN connection_test_sent_at TEXT")
+    except Exception:
+        pass
     db.execute(
         f"""CREATE TABLE IF NOT EXISTS telegram_alert_log (
             id {id_col},
