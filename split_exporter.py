@@ -24,6 +24,7 @@ from outcome_edge import outcome_edge_report
 from meta_edge import meta_edge_scoreboard
 from meta_edge_model import meta_model_status
 from proxy_xg import proxy_xg_status
+from research_intelligence import research_governance
 
 # Phone-friendly research export: intentionally omits the very large raw price/
 # odds/training histories. Lifetime scoreboards remain in analysis_summary.json.
@@ -82,6 +83,7 @@ def _summary(db, settings):
         "meta_edge": meta_edge_scoreboard(db, int(getattr(settings, "meta_edge_min_clean_labels", 200))),
         "meta_edge_model": meta_model_status(db),
         "proxy_xg": proxy_xg_status(db, settings),
+        "research_governance": research_governance(db),
     }
 
 def _build(db, settings, version: str, tables, kind: str, include_summary: bool = True):
