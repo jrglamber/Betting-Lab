@@ -180,7 +180,10 @@ class Settings:
 
     # v0.8.0 — Multi-Sport Shadow (MSP1).
     multisport_shadow_enabled: bool = _bool("MULTISPORT_SHADOW_ENABLED", True)
-    multisport_sport_keys: Tuple[str, ...] = _csv(
+    # Keep production overrides, but always include the cricket research family.
+    # MULTISPORT_SPORT_KEYS predates cricket support in Railway, so an existing
+    # env override otherwise masks every cricket key added to the code default.
+    _multisport_configured_keys: Tuple[str, ...] = _csv(
         "MULTISPORT_SPORT_KEYS",
         (
             "baseball_mlb,"
@@ -204,23 +207,28 @@ class Settings:
             "icehockey_nhl,"
             "icehockey_nhl_preseason,"
             "icehockey_sweden_hockey_league,"
-            "icehockey_sweden_allsvenskan,"
-            "cricket_test_match,"
-            "cricket_odi,"
-            "cricket_international_t20,"
-            "cricket_ipl,"
-            "cricket_big_bash,"
-            "cricket_asia_cup,"
-            "cricket_caribbean_premier_league,"
-            "cricket_icc_world_cup,"
-            "cricket_icc_world_cup_womens,"
-            "cricket_psl,"
-            "cricket_t20_blast,"
-            "cricket_t20_world_cup,"
-            "cricket_t20_world_cup_womens,"
-            "cricket_the_hundred,"
-            "cricket_the_hundred_womens"
+            "icehockey_sweden_allsvenskan"
         ),
+    )
+    _cricket_research_keys: Tuple[str, ...] = (
+        "cricket_test_match",
+        "cricket_odi",
+        "cricket_international_t20",
+        "cricket_ipl",
+        "cricket_big_bash",
+        "cricket_asia_cup",
+        "cricket_caribbean_premier_league",
+        "cricket_icc_world_cup",
+        "cricket_icc_world_cup_womens",
+        "cricket_psl",
+        "cricket_t20_blast",
+        "cricket_t20_world_cup",
+        "cricket_t20_world_cup_womens",
+        "cricket_the_hundred",
+        "cricket_the_hundred_womens",
+    )
+    multisport_sport_keys: Tuple[str, ...] = tuple(
+        dict.fromkeys(_multisport_configured_keys + _cricket_research_keys)
     )
     multisport_market: str = os.getenv("MULTISPORT_MARKET", "h2h")
     multisport_odds_region: str = os.getenv("MULTISPORT_ODDS_REGION", "uk")
