@@ -655,3 +655,219 @@ def latest_weekly_reports(db: Database, limit: int = 12) -> List[Dict[str, Any]]
         """,
         (limit,),
     )
+
+
+# Frozen research-governance thresholds. These are evidence labels only: they
+# never alter collection, selection, staking or execution.
+MATURITY_EARLY_MAX = 49
+MATURITY_DEVELOPING_MAX = 149
+PROMOTION_MIN_SETTLED = 150
+PROMOTION_MIN_CLV = 100
+PROMOTION_MIN_BEAT_CLOSE_PCT = 52.0
+
+
+def _research_maturity(settled: int) -> str:
+    n = int(settled or 0)
+    if n <= MATURITY_EARLY_MAX:
+        return "EARLY"
+    if n <= MATURITY_DEVELOPING_MAX:
+        return "DEVELOPING"
+    return "MATURE"
+
+
+def _governance_lane(
+    name: str,
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    pnl_field: str = "net_pnl_units",
+    clv_field: str = "clv_pct",
+    clv_quality_field: Optional[str] = "clv_quality",
+    settled_field: Optional[str] = None,
+    singles_pnl_field: Optional[str] = None,
+    promotion_eligible: bool = True,
+) -> Dict[str, Any]:
+    items = list(rows)
+    settled = []
+    for r in items:
+        if settled_field:
+            if str(r.get(settled_field) or "").upper() != "SETTLED":
+                continue
+        elif r.get(pnl_field) is None:
+            continue
+        settled.append(r)
+    settled = sorted(
+        settled,
+        key=lambda r: (str(r.get("settled_at") or r.get("created_at") or ""), int(r.get("id") or 0)),
+    )
+    pnls = [float(r.get(pnl_field) or 0.0) for r in settled]
+    total = sum(pnls)
+    roi = (total / len(pnls) * 100.0) if pnls else None
+
+    clvs = []
+    for r in items:
+        if r.get(clv_field) is None:
+            continue
+        if clv_quality_field and str(r.get(clv_quality_field) or "").upper() not in {"A", "B"}:
+            continue
+        try:
+            clvs.append(float(r[clv_field]))
+        except Exception:
+            pass
+    clvs_sorted = sorted(clvs)
+    nclv = len(clvs_sorted)
+    med = (
+        clvs_sorted[nclv // 2]
+        if nclv % 2
+        else ((clvs_sorted[nclv // 2 - 1] + clvs_sorted[nclv // 2]) / 2.0)
+    ) if nclv else None
+    beat = (sum(1 for v in clvs if v > 0) / nclv * 100.0) if nclv else None
+
+    rolling = {}
+    for window in (20, 50, 100):
+        if len(pnls) >= window:
+            sample = pnls[-window:]
+            rolling[str(window)] = {
+                "n": window,
+                "pnl_units": sum(sample),
+                "roi_pct": sum(sample) / window * 100.0,
+            }
+        else:
+            rolling[str(window)] = {"n": len(pnls), "pnl_units": None, "roi_pct": None}
+
+    positive = sorted((x for x in pnls if x > 0), reverse=True)
+    positive_total = sum(positive)
+    top1 = sum(positive[:1])
+    top3 = sum(positive[:3])
+    best1 = max(pnls) if pnls else 0.0
+    top3_realized = sum(sorted(pnls, reverse=True)[:3]) if pnls else 0.0
+    concentration = {
+        "positive_pnl_units": positive_total,
+        "top1_share_positive_pct": (top1 / positive_total * 100.0) if positive_total > 0 else None,
+        "top3_share_positive_pct": (top3 / positive_total * 100.0) if positive_total > 0 else None,
+        "net_pnl_without_best1": total - best1 if pnls else None,
+        "net_pnl_without_best3": total - top3_realized if pnls else None,
+    }
+
+    gates = {
+        "settled_150": len(settled) >= PROMOTION_MIN_SETTLED,
+        "clv_100": nclv >= PROMOTION_MIN_CLV,
+        "median_clv_positive": med is not None and med > 0,
+        "beat_close_52": beat is not None and beat >= PROMOTION_MIN_BEAT_CLOSE_PCT,
+        "lifetime_roi_positive": roi is not None and roi > 0,
+        "rolling_50_roi_positive": rolling["50"]["roi_pct"] is not None and rolling["50"]["roi_pct"] > 0,
+    }
+    return {
+        "name": name,
+        "bets": len(items),
+        "settled": len(settled),
+        "maturity": _research_maturity(len(settled)),
+        "net_pnl_units": total,
+        "roi_pct": roi,
+        "clv_samples": nclv,
+        "median_clv_pct": med,
+        "beat_close_pct": beat,
+        "rolling": rolling,
+        "concentration": concentration,
+        "promotion_eligible": bool(promotion_eligible),
+        "promotion_gates": gates if promotion_eligible else {},
+        "promotion_gates_passed": sum(1 for v in gates.values() if v) if promotion_eligible else None,
+        "promotion_gates_total": len(gates) if promotion_eligible else None,
+        "candidate_ready": bool(promotion_eligible and all(gates.values())),
+        "singles_control_pnl_units": (
+            sum(float(r.get(singles_pnl_field) or 0.0) for r in settled)
+            if singles_pnl_field else None
+        ),
+    }
+
+
+def research_governance(db: Database) -> Dict[str, Any]:
+    """Cross-lab stability, concentration and promotion-governance snapshot."""
+    lanes: List[Dict[str, Any]] = []
+    try:
+        lanes.append(_governance_lane(
+            "Football core",
+            db.fetchall("SELECT * FROM execution_shadow_bets ORDER BY id"),
+        ))
+    except Exception:
+        pass
+    try:
+        lanes.append(_governance_lane(
+            "Tennis",
+            db.fetchall("SELECT * FROM tennis_execution_bets ORDER BY id"),
+        ))
+    except Exception:
+        pass
+    try:
+        ms = db.fetchall(
+            """SELECT b.*,e.sport_family,e.league_title
+               FROM multisport_execution_bets b
+               JOIN multisport_events e ON e.event_id=b.event_id
+               ORDER BY b.id"""
+        )
+        lanes.append(_governance_lane("Multi-Sport overall", ms))
+        for family in sorted({str(r.get("sport_family") or "") for r in ms if r.get("sport_family")}):
+            lanes.append(_governance_lane(
+                str(family).replace("_", " ").title(),
+                [r for r in ms if str(r.get("sport_family") or "") == family],
+            ))
+        for key, label in (
+            ("americanfootball_nfl", "NFL"),
+            ("basketball_euroleague", "EuroLeague"),
+        ):
+            sample = [r for r in ms if str(r.get("sport_key") or "") == key]
+            if sample:
+                lanes.append(_governance_lane(label, sample))
+    except Exception:
+        pass
+
+    systems: List[Dict[str, Any]] = []
+    try:
+        manual = db.fetchall("SELECT * FROM manual_system_shadow_bets ORDER BY id")
+        for system in ("HEINZ", "GOLIATH", "YANKEE"):
+            sample = [r for r in manual if str(r.get("system_type") or "").upper() == system]
+            if sample:
+                systems.append(_governance_lane(
+                    f"Manual {system}", sample,
+                    pnl_field="system_pnl_units", settled_field="status",
+                    singles_pnl_field="singles_pnl_units", promotion_eligible=False,
+                ))
+    except Exception:
+        pass
+    try:
+        xs = db.fetchall("SELECT * FROM cross_sport_system_bets ORDER BY id")
+        for system in ("HEINZ", "GOLIATH", "YANKEE"):
+            sample = [r for r in xs if str(r.get("system_type") or "").upper() == system]
+            if sample:
+                systems.append(_governance_lane(
+                    f"Cross-sport {system}", sample,
+                    pnl_field="system_pnl_units", clv_field="avg_leg_clv_pct",
+                    clv_quality_field=None, settled_field="status",
+                    singles_pnl_field="singles_pnl_units", promotion_eligible=False,
+                ))
+    except Exception:
+        pass
+
+    return {
+        "feature_freeze": True,
+        "feature_freeze_policy": (
+            "No new strategies, sports, odds bands, models or multiple types during the observation period. "
+            "Only bug fixes, data-quality repairs and previously agreed research measurement are in scope."
+        ),
+        "maturity_thresholds": {
+            "EARLY": "0-49 settled",
+            "DEVELOPING": "50-149 settled",
+            "MATURE": "150+ settled",
+        },
+        "promotion_policy": {
+            "auto_promote": False,
+            "min_settled": PROMOTION_MIN_SETTLED,
+            "min_ab_clv_samples": PROMOTION_MIN_CLV,
+            "median_clv_must_be_positive": True,
+            "min_beat_close_pct": PROMOTION_MIN_BEAT_CLOSE_PCT,
+            "lifetime_roi_must_be_positive": True,
+            "rolling_50_roi_must_be_positive": True,
+            "note": "Passing every gate makes a lane review-eligible only; live promotion still requires explicit approval.",
+        },
+        "lanes": lanes,
+        "systems": systems,
+    }
