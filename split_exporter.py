@@ -7,7 +7,7 @@ from io import BytesIO
 from typing import Any, Dict, Mapping, Sequence
 
 from db import sanitize_sensitive_text
-from exporter import _json_safe, _rows_to_csv, _safe_settings, _table_exists
+from exporter import _json_safe, _rows_to_csv, _safe_settings, _table_exists, export_coverage_report
 from canonical import canonical_scoreboard
 from execution_shadow import execution_scoreboard, execution_funnel
 from multiples_shadow import multiples_scoreboard
@@ -112,6 +112,7 @@ def _build(db, settings, version: str, tables, kind: str, include_summary: bool 
             "generated_at_utc": generated.isoformat(),
             "contains_secrets": False,
             "row_counts": row_counts,
+            "export_coverage": export_coverage_report(db, tables, kind),
             "settings": _safe_settings(settings),
         }
         z.writestr("manifest.json", json.dumps(_json_safe(manifest), indent=2))
