@@ -63,6 +63,10 @@ EXPORT_TABLES: Tuple[str, ...] = (
     "cohort_system_shadow_bets",
     "cohort_system_shadow_legs",
     "cohort_system_shadow_lines",
+    "cross_sport_system_state",
+    "cross_sport_system_bets",
+    "cross_sport_system_legs",
+    "cross_sport_system_lines",
     "event_results",
     "research_reports",
     "collector_runs",
@@ -186,6 +190,85 @@ def _table_exists(db, table: str) -> bool:
         return True
     except Exception:
         return False
+
+
+_RESEARCH_TABLE_PREFIXES = (
+    "execution_shadow_", "multiple_shadow_", "manual_system_shadow_",
+    "cohort_system_shadow_", "cross_sport_system_", "tennis_",
+    "multisport_", "football_predictive", "outcome_edge_",
+    "meta_edge_", "football_pxg_", "research_reports",
+)
+_WEEKLY_CRITICAL_SUFFIXES = (
+    "_bets", "_legs", "_lines", "_results", "_predictions",
+    "_samples", "_scores", "_validations", "_reports",
+)
+
+
+def _database_table_names(db) -> List[str]:
+    """Return user tables without coupling exporters to a specific backend."""
+    try:
+        if bool(getattr(db, "is_postgres", False)):
+            rows = db.fetchall(
+                "SELECT table_name FROM information_schema.tables "
+                "WHERE table_schema='public' AND table_type='BASE TABLE'"
+            )
+            return sorted(str(r.get("table_name") or "") for r in rows if r.get("table_name"))
+        rows = db.fetchall(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        )
+        return sorted(str(r.get("name") or "") for r in rows if r.get("name"))
+    except Exception:
+        return []
+
+
+def export_coverage_report(db, export_tables: Sequence[str], kind: str) -> Dict[str, Any]:
+    """Flag recognised research outputs that an export policy would silently omit.
+
+    Full Historical is expected to contain every recognised research table.
+    Weekly intentionally skips bulky raw quote/training/audit histories, so its
+    automatic check focuses on analysis-bearing outputs such as bets, systems,
+    predictions, results and model samples. Manual Systems is scoped to manual
+    and cross-sport system families only.
+    """
+    existing = _database_table_names(db)
+    monitored = [
+        t for t in existing
+        if any(t == p or t.startswith(p) for p in _RESEARCH_TABLE_PREFIXES)
+    ]
+    kind_key = str(kind or "").lower()
+    if kind_key in {"research", "full", "full-historical", "research-full"}:
+        expected = monitored
+    elif kind_key == "research-weekly":
+        expected = [
+            t for t in monitored
+            if t.endswith(_WEEKLY_CRITICAL_SUFFIXES)
+            or t in {
+                "outcome_edge_watch_cohorts",
+                "meta_edge_model_runs", "meta_edge_model_scores",
+            }
+        ]
+    elif kind_key == "manual-systems":
+        expected = [
+            t for t in monitored
+            if t.startswith("manual_system_shadow_")
+            or t.startswith("cross_sport_system_")
+        ]
+    else:
+        expected = []
+    configured = set(str(x) for x in export_tables)
+    missing = sorted(t for t in expected if t not in configured)
+    return {
+        "status": "OK" if not missing else "WARNING",
+        "export_kind": kind,
+        "monitored_table_count": len(monitored),
+        "expected_table_count": len(expected),
+        "missing_tables": missing,
+        "message": (
+            "All automatically monitored research outputs are covered."
+            if not missing else
+            "Recognised research tables exist but are not covered by this export policy."
+        ),
+    }
 
 
 def _safe_settings(settings) -> Dict[str, Any]:
@@ -380,6 +463,7 @@ def build_research_export(db, settings, version: str) -> tuple[bytes, str]:
         "database_backend": "postgres" if db.is_postgres else "sqlite",
         "contains_secrets": False,
         "row_counts": row_counts,
+        "export_coverage": export_coverage_report(db, EXPORT_TABLES, "full-historical"),
         "settings": _safe_settings(settings),
         "notes": [
             "Headline/live-candidate analysis should use execution_shadow_bets.",
