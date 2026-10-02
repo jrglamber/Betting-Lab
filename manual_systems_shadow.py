@@ -14,6 +14,7 @@ from execution_shadow import clv_quality, parse_iso
 from quota import provider_actual_cost
 from results import grade_signal
 from cross_sport_systems_shadow import run_cross_sport_systems_maintenance
+from telegram_alerts import send_pending_heinz_alerts
 
 ALGORITHM_VERSION = "HP1_HIGH_PAYOUT_FORWARD"
 APP_VERSION = "0.16.1"
@@ -1076,5 +1077,10 @@ class ManualSystemsShadowEngine:
         clv = finalize_manual_system_clv(self.db, now=now)
         settled = settle_manual_system_shadows(self.db)
         cross_sport = run_cross_sport_systems_maintenance(self.db, now=now)
+        telegram = send_pending_heinz_alerts(
+            self.db, self.settings,
+            algorithm_version=FROZEN_CONSENSUS_H2H_HEINZ_VERSION,
+        )
         return {"enabled": True, "refresh": refresh, "created": created, "clv_finalized": clv,
-                "settled": settled, "cross_sport_systems": cross_sport}
+                "settled": settled, "cross_sport_systems": cross_sport,
+                "telegram_alerts": telegram}
