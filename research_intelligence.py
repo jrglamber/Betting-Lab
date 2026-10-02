@@ -523,6 +523,7 @@ def research_intelligence(
         "clv_vs_results": clv_vs_results(db),
         "price_checkpoints": price_checkpoint_summary(db),
         "data_quality_alerts": data_quality_alerts(db, now=now),
+        "research_governance": research_governance(db),
     }
 
 
