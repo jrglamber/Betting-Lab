@@ -73,18 +73,59 @@ def ensure_cross_sport_state(db: Database) -> Dict[str, Any]:
     return {"singleton_id": 1, "started_at": stamp, "algorithm_version": ALGORITHM_VERSION}
 
 
+def _latest_same_book_quote(db: Database, row: Mapping[str, Any], now: datetime) -> Optional[Dict[str, Any]]:
+    """Return the freshest stored quote for the frozen selection at its bookmaker.
+
+    XS1/XS2 formation must prove simultaneous availability from quote snapshots.
+    The execution bet's created_at is only when the single was first frozen and
+    is not evidence that its price is still available now.
+    """
+    if str(row.get("source_family")) == "FOOTBALL":
+        params: List[Any] = [
+            row["event_id"], row["bookmaker_key"], row["market_key"],
+            row["selection"], now.isoformat(),
+        ]
+        rows = db.fetchall(
+            """SELECT captured_at,price,outcome_description,point
+               FROM odds_snapshots
+               WHERE event_id=? AND bookmaker_key=? AND market_key=?
+                 AND outcome_name=? AND captured_at<=?
+               ORDER BY captured_at DESC,id DESC LIMIT 20""",
+            tuple(params),
+        )
+        want_desc = str(row.get("outcome_description") or "")
+        want_point = None if row.get("point") is None else float(row["point"])
+        for q in rows:
+            desc = str(q.get("outcome_description") or "")
+            point = None if q.get("point") is None else float(q["point"])
+            if desc == want_desc and point == want_point:
+                return dict(q)
+        return None
+    if str(row.get("source_family")) == "MULTISPORT":
+        q = db.fetchone(
+            """SELECT captured_at,price
+               FROM multisport_odds_snapshots
+               WHERE event_id=? AND bookmaker_key=? AND market_key='h2h'
+                 AND selection=? AND captured_at<=?
+               ORDER BY captured_at DESC,id DESC LIMIT 1""",
+            (row["event_id"], row["bookmaker_key"], row["selection"], now.isoformat()),
+        )
+        return dict(q) if q else None
+    return None
+
+
 def _candidates(db: Database, now: datetime, started_at: datetime) -> List[Dict[str, Any]]:
     horizon = now + timedelta(hours=FORMATION_HORIZON_HOURS)
     out: List[Dict[str, Any]] = []
     sources = (
         ("FOOTBALL", """SELECT b.id,b.created_at,b.event_id,e.sport_key,e.commence_time,
-             b.market_key,b.selection,b.offered_odds,b.fair_probability,b.min_odds,b.edge_pct,
-             b.bookmaker_key,b.status
+             b.market_key,b.selection,b.outcome_description,b.point,b.offered_odds,
+             b.fair_probability,b.min_odds,b.edge_pct,b.bookmaker_key,b.status
              FROM execution_shadow_bets b JOIN events e ON e.event_id=b.event_id
              WHERE b.status='OPEN' AND e.status='UPCOMING'""", "execution_shadow_bets"),
         ("MULTISPORT", """SELECT b.id,b.created_at,b.event_id,b.sport_key,e.commence_time,
-             'h2h' AS market_key,b.selection,b.offered_odds,b.fair_probability,b.min_odds,b.edge_pct,
-             b.bookmaker_key,b.status
+             'h2h' AS market_key,b.selection,NULL AS outcome_description,NULL AS point,
+             b.offered_odds,b.fair_probability,b.min_odds,b.edge_pct,b.bookmaker_key,b.status
              FROM multisport_execution_bets b JOIN multisport_events e ON e.event_id=b.event_id
              WHERE b.status='OPEN' AND e.status='UPCOMING'""", "multisport_execution_bets"),
     )
@@ -95,29 +136,49 @@ def _candidates(db: Database, now: datetime, started_at: datetime) -> List[Dict[
             continue
         for raw in rows:
             row = dict(raw)
+            row["source_family"] = family
+            row["source_table"] = table
             try:
-                created = _parse_iso(str(row["created_at"]))
                 kickoff = _parse_iso(str(row["commence_time"]))
-                odds = float(row["offered_odds"])
                 prob = float(row["fair_probability"])
             except Exception:
                 continue
-            if created < started_at or not (now < kickoff <= horizon):
+            if not (now < kickoff <= horizon) or prob <= 0:
                 continue
-            age = (now-created).total_seconds()/60.0
-            if age < 0 or age > MAX_SOURCE_AGE_MINUTES or odds <= 1.0 or prob <= 0:
+            book = str(row.get("bookmaker_key") or "")
+            if not book:
                 continue
-            row.update(source_family=family, source_table=table, source_id=int(row["id"]),
-                       kickoff_dt=kickoff, entry_odds=odds,
-                       selection_key=f"{family}|{row['event_id']}|{row['market_key']}|{row['selection']}")
+
+            # Re-price from the latest same-book snapshot. This is the actual
+            # simultaneous-availability evidence used for system formation.
+            quote = _latest_same_book_quote(db, row, now)
+            if not quote:
+                continue
+            try:
+                quote_at = _parse_iso(str(quote["captured_at"]))
+                odds = float(quote["price"])
+            except Exception:
+                continue
+            age = (now - quote_at).total_seconds() / 60.0
+            if age < 0 or age > MAX_SOURCE_AGE_MINUTES or odds <= 1.0:
+                continue
+            min_odds = float(row.get("min_odds") or 0.0)
+            if min_odds > 0 and odds + 1e-12 < min_odds:
+                continue
+
+            row.update(
+                source_id=int(row["id"]),
+                kickoff_dt=kickoff,
+                entry_odds=odds,
+                created_at=quote_at.isoformat(),
+                selection_key=f"{family}|{row['event_id']}|{row['market_key']}|{row['selection']}",
+            )
             out.append(row)
-    # Exact selection dedup, then one selection per event. Ranking is frozen:
-    # highest source edge, then best price, then earliest source row.
+
+    # Exact selection dedup, then one selection per event per bookmaker.
     exact: Dict[str, Dict[str, Any]] = {}
     for row in out:
         book = str(row.get("bookmaker_key") or "")
-        if not book:
-            continue
         key = book + "|" + str(row["selection_key"])
         prev = exact.get(key)
         rank = (float(row.get("edge_pct") or 0), float(row["entry_odds"]), -int(row["source_id"]))
@@ -130,7 +191,6 @@ def _candidates(db: Database, now: datetime, started_at: datetime) -> List[Dict[
         if prev is None or (float(row.get("edge_pct") or 0), float(row["entry_odds"])) > (float(prev.get("edge_pct") or 0), float(prev["entry_odds"])):
             by_event[key] = row
     return sorted(by_event.values(), key=lambda r: (-float(r.get("edge_pct") or 0), -float(r["entry_odds"]), str(r["selection_key"])))
-
 
 def _line_combos(system_type: str, n: int) -> List[Tuple[int,...]]:
     if system_type == "YANKEE" and n == 4:
