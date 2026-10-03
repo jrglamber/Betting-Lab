@@ -81,7 +81,7 @@ from predictive_historical import (
 )
 from proxy_xg import ProxyXgEngine, proxy_xg_status
 from outcome_edge import outcome_edge_report, ensure_watch_cohorts
-from telegram_alerts import send_pending_heinz_alerts
+from telegram_alerts import send_pending_heinz_alerts, send_telegram_test_now
 from cross_sport_systems_shadow import cross_sport_systems_scoreboard, latest_cross_sport_system_cards
 from cohort_systems_shadow import (
     ensure_cohort_system_state, run_cohort_systems_maintenance, cohort_systems_scoreboard,
@@ -100,7 +100,7 @@ from research import (
     event_price_history, signal_price_history, repair_premature_clv,
 )
 
-VERSION = "0.19.24"
+VERSION = "0.19.25"
 
 db = Database(settings.database_url, settings.db_path)
 api = TheOddsApi(settings.odds_api_key)
@@ -182,6 +182,15 @@ async def lifespan(app: FastAPI):
     ensure_watch_cohorts(db)
     outcome_edge_report(db)
     ensure_cohort_system_state(db)
+
+    # Explicit diagnostic send for this deployment so Telegram routing is proven
+    # independently of card eligibility. The result is emitted to runtime logs.
+    try:
+        tg_diag = send_telegram_test_now(settings)
+        print(f"TELEGRAM_FORCE_DIAGNOSTIC {tg_diag}", flush=True)
+        db.record_collector_run("TELEGRAM_FORCE_DIAGNOSTIC", bool(tg_diag.get("sent")), detail=str(tg_diag))
+    except Exception as exc:
+        print(f"TELEGRAM_FORCE_DIAGNOSTIC_ERROR {type(exc).__name__}: {exc}", flush=True)
 
     # Telegram connectivity is tested independently of the slower manual-system
     # research cycle. The helper is idempotent and sends the connection test once.
