@@ -60,15 +60,15 @@ class Settings:
         "MULTIPLES_API_BOOKMAKER_KEYS", ""
     )
 
-    # v0.14.0 — MS2 Manual Systems Shadow. Research-only Yankee/Heinz
-    # cards. William Hill/Ladbrokes are manual-placeable venues; the existing
-    # exchange venues remain synthetic price-comparison controls only.
+    # v0.14.0 — MS2 Manual Systems Shadow. Research-only Yankee/Heinz cards.
+    # Multiples formation is restricted to the supported manual-placeable books.
+    # Exchange/API execution venues remain available for singles only.
     manual_systems_enabled: bool = _bool("MANUAL_SYSTEMS_ENABLED", True)
     manual_systems_placeable_bookmaker_keys: Tuple[str, ...] = _csv(
         "MANUAL_SYSTEMS_PLACEABLE_BOOKMAKER_KEYS", "williamhill,ladbrokes_uk,betfred_uk,boylesports"
     )
     manual_systems_comparison_bookmaker_keys: Tuple[str, ...] = _csv(
-        "MANUAL_SYSTEMS_COMPARISON_BOOKMAKER_KEYS", "betfair_ex_uk,matchbook,smarkets"
+        "MANUAL_SYSTEMS_COMPARISON_BOOKMAKER_KEYS", ""
     )
     manual_systems_types: Tuple[str, ...] = _csv(
         "MANUAL_SYSTEMS_TYPES", "YANKEE,HEINZ"
