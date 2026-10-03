@@ -36,7 +36,7 @@ HP_LANES = (
 # do not mix William Hill and Ladbrokes prices within one Heinz.
 FROZEN_CONSENSUS_H2H_HEINZ_VERSION = "CONSENSUS_H2H_4_TO_7_49_HEINZ_FORWARD_V1"
 FROZEN_CONSENSUS_H2H_HEINZ_BOOKS = ("williamhill", "ladbrokes_uk")
-DEFAULT_PLACEABLE_BOOKS = ("williamhill", "ladbrokes_uk")
+DEFAULT_PLACEABLE_BOOKS = ("williamhill", "ladbrokes_uk", "betfred_uk", "boylesports")
 DEFAULT_COMPARISON_BOOKS = ("betfair_ex_uk", "matchbook", "smarkets")
 DEFAULT_COHORTS = ("MIXED_BEST", "CONSENSUS", "PRED1", "PRED2")
 
