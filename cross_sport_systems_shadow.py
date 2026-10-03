@@ -7,13 +7,13 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from db import Database, utc_now_iso
 
-APP_VERSION = "0.19.26"
+APP_VERSION = "0.19.27"
 ALGORITHM_VERSION = "XS1_CROSS_SPORT_PLACEABLE_V3"
 SYSTEM_SPECS = {"YANKEE": (4, 11), "HEINZ": (6, 57), "GOLIATH": (8, 247)}
 FORMATION_HORIZON_HOURS = 30.0
 MAX_SOURCE_AGE_MINUTES = 45.0
 MAX_CARD_QUOTE_SPREAD_MINUTES = 15.0
-PLACEABLE_BOOKMAKER_KEYS = ("williamhill", "ladbrokes_uk")
+PLACEABLE_BOOKMAKER_KEYS = ("williamhill", "ladbrokes_uk", "betfred_uk", "boylesports")
 
 
 def _parse_iso(value: str) -> datetime:
