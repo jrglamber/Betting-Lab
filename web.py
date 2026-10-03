@@ -100,7 +100,7 @@ from research import (
     event_price_history, signal_price_history, repair_premature_clv,
 )
 
-VERSION = "0.19.23"
+VERSION = "0.19.24"
 
 db = Database(settings.database_url, settings.db_path)
 api = TheOddsApi(settings.odds_api_key)
@@ -189,6 +189,7 @@ async def lifespan(app: FastAPI):
         tg = send_pending_heinz_alerts(
             db, settings,
             algorithm_version="CONSENSUS_H2H_4_TO_7_49_HEINZ_FORWARD_V1",
+            include_cross_sport=False,
         )
         db.record_collector_run("TELEGRAM_STARTUP_TEST", True, detail=str(tg))
     except Exception as exc:

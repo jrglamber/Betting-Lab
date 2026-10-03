@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from db import Database, utc_now_iso
 
-APP_VERSION = "0.19.2"
+APP_VERSION = "0.19.24"
 ALGORITHM_VERSION = "XS1_CROSS_SPORT_SAME_BOOK_V2"
 SYSTEM_SPECS = {"YANKEE": (4, 11), "HEINZ": (6, 57), "GOLIATH": (8, 247)}
 FORMATION_HORIZON_HOURS = 30.0
@@ -277,45 +277,141 @@ def generate_cross_sport_systems(db: Database, now: Optional[datetime]=None) -> 
     return created
 
 
+def _source_settlement_row(db: Database, leg: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    """Return the source bet settlement, repairing it from stored final scores when needed."""
+    def fetch_source() -> Optional[Dict[str, Any]]:
+        row = db.fetchone(
+            f"SELECT result,closing_odds,clv_pct,clv_quality,status FROM {leg['source_table']} WHERE id=?",
+            (leg["source_id"],),
+        )
+        return dict(row) if row else None
+
+    src = fetch_source()
+    if src and str(src.get("status") or "") == "SETTLED" and src.get("result"):
+        return src
+
+    family = str(leg.get("source_family") or "")
+    try:
+        if family == "FOOTBALL":
+            score = db.fetchone(
+                "SELECT home_score,away_score FROM event_results WHERE event_id=?",
+                (leg["event_id"],),
+            )
+            if score:
+                from execution_shadow import settle_execution_event
+                settle_execution_event(
+                    db, str(leg["event_id"]),
+                    home_score=int(score["home_score"]),
+                    away_score=int(score["away_score"]),
+                )
+        elif family == "MULTISPORT":
+            score = db.fetchone(
+                "SELECT home_score,away_score FROM multisport_results WHERE event_id=?",
+                (leg["event_id"],),
+            )
+            if score:
+                from multisport_shadow import settle_multisport_event
+                settle_multisport_event(
+                    db, str(leg["event_id"]),
+                    home_score=int(score["home_score"]),
+                    away_score=int(score["away_score"]),
+                )
+    except Exception:
+        pass
+    return fetch_source()
+
+
 def settle_cross_sport_systems(db: Database) -> int:
     _ensure_schema(db)
-    settled=0
-    cards=db.fetchall("SELECT * FROM cross_sport_system_bets WHERE status='OPEN'")
+    settled = 0
+    cards = db.fetchall("SELECT * FROM cross_sport_system_bets WHERE status='OPEN'")
     for card in cards:
-        legs=db.fetchall("SELECT * FROM cross_sport_system_legs WHERE system_bet_id=? ORDER BY leg_order",(card["id"],))
-        ready=True; wins=0; clvs=[]
+        legs = db.fetchall(
+            "SELECT * FROM cross_sport_system_legs WHERE system_bet_id=? ORDER BY leg_order",
+            (card["id"],),
+        )
+        ready = True
+        wins = 0
+        clvs: List[float] = []
         for leg in legs:
-            src=db.fetchone(f"SELECT result,closing_odds,clv_pct,clv_quality,status FROM {leg['source_table']} WHERE id=?",(leg["source_id"],))
-            if not src or str(src.get("status") or "")!="SETTLED" or not src.get("result"):
-                ready=False; break
-            result=str(src["result"]).upper()
-            if result=="WIN": wins+=1
+            src = _source_settlement_row(db, leg)
+            if not src or str(src.get("status") or "") != "SETTLED" or not src.get("result"):
+                ready = False
+                break
+            result = str(src["result"]).upper()
+            if result not in {"WIN", "LOSS", "PUSH", "VOID"}:
+                ready = False
+                break
+            if result == "WIN":
+                wins += 1
             if src.get("clv_pct") is not None:
                 clvs.append(float(src["clv_pct"]))
-            db.execute("""UPDATE cross_sport_system_legs SET result=?,closing_odds=?,clv_pct=?,clv_quality=?
-                          WHERE id=?""",(result,src.get("closing_odds"),src.get("clv_pct"),src.get("clv_quality"),leg["id"]))
+            db.execute(
+                """UPDATE cross_sport_system_legs
+                   SET result=?,closing_odds=?,clv_pct=?,clv_quality=?
+                   WHERE id=?""",
+                (result, src.get("closing_odds"), src.get("clv_pct"), src.get("clv_quality"), leg["id"]),
+            )
         if not ready:
             continue
-        lines=db.fetchall("SELECT * FROM cross_sport_system_lines WHERE system_bet_id=? ORDER BY line_order",(card["id"],))
-        system_return=0.0
-        for line in lines:
-            orders=json.loads(str(line["leg_orders_json"]))
-            picked=[legs[int(i)-1] for i in orders]
-            won=all(str(x["result"]).upper()=="WIN" for x in picked)
-            ret=float(line["stake_units"])*float(line["entry_odds"]) if won else 0.0
-            system_return+=ret
-            db.execute("UPDATE cross_sport_system_lines SET result=?,return_units=?,pnl_units=? WHERE id=?",
-                       ("WIN" if won else "LOSS",ret,ret-float(line["stake_units"]),line["id"]))
-        singles_return=sum((float(x["entry_odds"])/len(legs)) if str(x["result"]).upper()=="WIN" else 0.0 for x in legs)
-        pnl=system_return-1.0; spnl=singles_return-1.0
-        db.execute("""UPDATE cross_sport_system_bets SET status='SETTLED',result=?,winning_legs=?,
-            system_return_units=?,system_pnl_units=?,system_roi_pct=?,singles_return_units=?,
-            singles_pnl_units=?,singles_roi_pct=?,avg_leg_clv_pct=?,ab_clv_samples=?,settled_at=? WHERE id=?""",
-            ("PROFIT" if pnl>0 else ("LOSS" if pnl<0 else "PUSH"),wins,system_return,pnl,pnl*100,
-             singles_return,spnl,spnl*100,(sum(clvs)/len(clvs) if clvs else None),len(clvs),utc_now_iso(),card["id"]))
-        settled+=1
-    return settled
 
+        legs = db.fetchall(
+            "SELECT * FROM cross_sport_system_legs WHERE system_bet_id=? ORDER BY leg_order",
+            (card["id"],),
+        )
+        lines = db.fetchall(
+            "SELECT * FROM cross_sport_system_lines WHERE system_bet_id=? ORDER BY line_order",
+            (card["id"],),
+        )
+        system_return = 0.0
+        for line in lines:
+            orders = json.loads(str(line["leg_orders_json"]))
+            picked = [legs[int(i) - 1] for i in orders]
+            results = [str(x.get("result") or "").upper() for x in picked]
+            if "LOSS" in results:
+                ret = 0.0
+                line_result = "LOSS"
+            else:
+                multiplier = 1.0
+                for x in picked:
+                    if str(x.get("result") or "").upper() == "WIN":
+                        multiplier *= float(x["entry_odds"])
+                ret = float(line["stake_units"]) * multiplier
+                line_result = "WIN" if ret > float(line["stake_units"]) + 1e-12 else "PUSH"
+            system_return += ret
+            db.execute(
+                "UPDATE cross_sport_system_lines SET result=?,return_units=?,pnl_units=? WHERE id=?",
+                (line_result, ret, ret - float(line["stake_units"]), line["id"]),
+            )
+
+        n_legs = max(1, len(legs))
+        singles_return = 0.0
+        for x in legs:
+            result = str(x.get("result") or "").upper()
+            if result == "WIN":
+                singles_return += float(x["entry_odds"]) / n_legs
+            elif result in {"PUSH", "VOID"}:
+                singles_return += 1.0 / n_legs
+
+        pnl = system_return - 1.0
+        spnl = singles_return - 1.0
+        db.execute(
+            """UPDATE cross_sport_system_bets
+               SET status='SETTLED',result=?,winning_legs=?,
+                   system_return_units=?,system_pnl_units=?,system_roi_pct=?,
+                   singles_return_units=?,singles_pnl_units=?,singles_roi_pct=?,
+                   avg_leg_clv_pct=?,ab_clv_samples=?,settled_at=?
+               WHERE id=?""",
+            (
+                "PROFIT" if pnl > 0 else ("LOSS" if pnl < 0 else "PUSH"),
+                wins, system_return, pnl, pnl * 100.0,
+                singles_return, spnl, spnl * 100.0,
+                (sum(clvs) / len(clvs) if clvs else None),
+                len(clvs), utc_now_iso(), card["id"],
+            ),
+        )
+        settled += 1
+    return settled
 
 def run_cross_sport_systems_maintenance(db: Database, now: Optional[datetime]=None) -> Dict[str,Any]:
     ensure_cross_sport_state(db)
