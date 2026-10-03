@@ -57,6 +57,36 @@ def _format_kickoff(value: Any) -> str:
         return raw or "—"
 
 
+def _format_market_selection(leg: Mapping[str, Any]) -> str:
+    """Human-readable market + selection for Telegram/manual placement."""
+    market = str(leg.get("market_key") or "").lower().strip()
+    selection = str(leg.get("selection") or "—").strip()
+    point = leg.get("point")
+    sport = str(leg.get("sport_key") or "").lower()
+
+    if market == "h2h":
+        # Football H2H is 1X2; most other sports are a straight winner/moneyline.
+        label = "1X2" if sport.startswith("soccer") or sport == "" else "Winner / Moneyline"
+        return f"{label}: {selection}"
+    if market == "btts":
+        return f"BTTS: {selection}"
+    if market == "totals":
+        # Selection often already contains Over/Under; add the line only when
+        # it is not already present in the text.
+        if point is not None and str(point) not in selection:
+            return f"Total: {selection} {point}"
+        return f"Total: {selection}"
+    if market == "draw_no_bet":
+        return f"Draw No Bet: {selection}"
+    if market == "double_chance":
+        return f"Double Chance: {selection}"
+    if market == "correct_score":
+        return f"Correct Score: {selection}"
+    if market:
+        return f"{market.replace('_', ' ').title()}: {selection}"
+    return selection
+
+
 def format_heinz_message(card: Mapping[str, Any], legs: list[Mapping[str, Any]], *, test_mode: bool = True) -> str:
     banner = "🧪 SHADOW TEST — DO NOT PLACE" if test_mode else "🚨 HEINZ READY"
     book = str(card.get("bookmaker_title") or card.get("bookmaker_key") or "Bookmaker")
@@ -71,7 +101,7 @@ def format_heinz_message(card: Mapping[str, Any], legs: list[Mapping[str, Any]],
     ]
     for idx, leg in enumerate(legs, start=1):
         fixture = f"{leg.get('home_team') or ''} v {leg.get('away_team') or ''}".strip()
-        selection = str(leg.get("selection") or "—")
+        selection = _format_market_selection(leg)
         odds = float(leg.get("entry_odds") or 0.0)
         kickoff = _format_kickoff(leg.get("commence_time"))
         lines += [
@@ -109,7 +139,7 @@ def format_cross_sport_message(
     ]
     for idx, leg in enumerate(legs, start=1):
         fixture = str(leg.get("fixture") or leg.get("event_id") or "—")
-        selection = str(leg.get("selection") or "—")
+        selection = _format_market_selection(leg)
         odds = float(leg.get("entry_odds") or 0.0)
         kickoff = _format_kickoff(leg.get("commence_time"))
         lines += [
