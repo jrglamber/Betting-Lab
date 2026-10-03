@@ -324,3 +324,43 @@ def send_pending_heinz_alerts(
         "connection_test_sent": connection_test_sent,
     }
 
+
+
+def send_telegram_test_now(settings: Any) -> Dict[str, Any]:
+    """Send an explicit one-off diagnostic message and return sanitized routing metadata."""
+    enabled = bool(getattr(settings, "telegram_alerts_enabled", False))
+    token = str(getattr(settings, "telegram_bot_token", "") or "").strip()
+    chat_id = str(getattr(settings, "telegram_chat_id", "") or "").strip()
+    if not enabled:
+        return {"enabled": False, "sent": False, "reason": "disabled"}
+    if not token or not chat_id:
+        return {
+            "enabled": True,
+            "sent": False,
+            "reason": "credentials_missing",
+            "token_configured": bool(token),
+            "chat_id_configured": bool(chat_id),
+        }
+    try:
+        result = _send_telegram(
+            token,
+            chat_id,
+            "🧪 BETTING LAB TELEGRAM DIAGNOSTIC\n\n"
+            "If you can read this, Telegram delivery is working.\n"
+            "SHADOW TEST ONLY — DO NOT PLACE.",
+        )
+        return {
+            "enabled": True,
+            "sent": True,
+            "reason": "ok",
+            "message_id": result.get("message_id"),
+            "chat_id_suffix": chat_id[-4:] if len(chat_id) >= 4 else chat_id,
+        }
+    except Exception as exc:
+        return {
+            "enabled": True,
+            "sent": False,
+            "reason": "send_failed",
+            "error": sanitize_sensitive_text(exc),
+            "chat_id_suffix": chat_id[-4:] if len(chat_id) >= 4 else chat_id,
+        }
