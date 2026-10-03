@@ -100,7 +100,7 @@ from research import (
     event_price_history, signal_price_history, repair_premature_clv,
 )
 
-VERSION = "0.19.29"
+VERSION = "0.19.30"
 
 db = Database(settings.database_url, settings.db_path)
 api = TheOddsApi(settings.odds_api_key)
@@ -1340,16 +1340,19 @@ def dashboard():
         alltime=x.get("all_time") or {}
         watch_rows.append(
             f"<tr><td><strong>{escape(str(x.get('label') or x.get('cohort_key') or 'Cohort'))}</strong></td>"
-            f"<td>{fwd.get('selections',0)}</td><td class='{tone(fwd.get('flat_stake_roi_pct'))}'>{pct(fwd.get('flat_stake_roi_pct'))}</td>"
+            f"<td>{fwd.get('selections',0)}</td><td class='{tone(fwd.get('pnl_units'))}'>{_fmt(fwd.get('pnl_units'))}u</td>"
+            f"<td class='{tone(fwd.get('flat_stake_roi_pct'))}'>{pct(fwd.get('flat_stake_roi_pct'))}</td>"
             f"<td class='{tone(fwd.get('avg_ab_clv_pct'))}'>{pct(fwd.get('avg_ab_clv_pct'))}</td><td>{fwd.get('ab_clv_samples',fwd.get('clv_samples',0))}</td>"
-            f"<td>{alltime.get('selections',0)}</td><td>{pct(alltime.get('flat_stake_roi_pct'))}</td></tr>"
+            f"<td>{alltime.get('selections',0)}</td><td class='{tone(alltime.get('pnl_units'))}'>{_fmt(alltime.get('pnl_units'))}u</td>"
+            f"<td>{pct(alltime.get('flat_stake_roi_pct'))}</td></tr>"
         )
-    watch_html="".join(watch_rows) or "<tr><td colspan='7'>Frozen cohorts are waiting for forward evidence.</td></tr>"
+    watch_html="".join(watch_rows) or "<tr><td colspan='9'>Frozen cohorts are waiting for forward evidence.</td></tr>"
 
     focus=outcome.get("focus_4_to_4_99") or {}
     focus_cards="".join([
         metric("4–4.99 selections",focus.get("selections",0)),
         metric("4–4.99 hit rate",pct(focus.get("hit_rate_pct"))),
+        metric("4–4.99 P&L",f"{_fmt(focus.get('pnl_units'))}u",tone(focus.get("pnl_units"))),
         metric("4–4.99 ROI",pct(focus.get("flat_stake_roi_pct")),tone(focus.get("flat_stake_roi_pct"))),
         metric("4–4.99 A/B CLV",pct(focus.get("avg_ab_clv_pct")),tone(focus.get("avg_ab_clv_pct"))),
     ])
@@ -1359,24 +1362,28 @@ def dashboard():
         band_rows.append(
             f"<tr><td>{escape(str(x.get('odds_band')))}</td><td>{x.get('selections',0)}</td>"
             f"<td>{pct(x.get('hit_rate_pct'))}</td><td>{pct(x.get('mean_implied_probability_pct'))}</td>"
+            f"<td class='{tone(x.get('pnl_units'))}'>{_fmt(x.get('pnl_units'))}u</td>"
             f"<td class='{tone(x.get('flat_stake_roi_pct'))}'>{pct(x.get('flat_stake_roi_pct'))}</td>"
             f"<td class='{tone(x.get('avg_ab_clv_pct'))}'>{pct(x.get('avg_ab_clv_pct'))}</td></tr>"
         )
-    bands="".join(band_rows) or "<tr><td colspan='6'>No settled odds-band evidence yet.</td></tr>"
+    bands="".join(band_rows) or "<tr><td colspan='7'>No settled odds-band evidence yet.</td></tr>"
 
     system_rows=[]
     for x in (manual.get("segments",{}).get("system_type",[]) or []):
         system_rows.append(
             f"<tr><td>{escape(str(x.get('label') or x.get('key')))}</td><td>{x.get('settled',0)}</td>"
+            f"<td class='{tone(x.get('system_pnl_units'))}'>{_fmt(x.get('system_pnl_units'))}u</td>"
             f"<td class='{tone(x.get('system_roi_pct'))}'>{pct(x.get('system_roi_pct'))}</td>"
+            f"<td class='{tone(x.get('singles_pnl_units'))}'>{_fmt(x.get('singles_pnl_units'))}u</td>"
             f"<td class='{tone(x.get('singles_roi_pct'))}'>{pct(x.get('singles_roi_pct'))}</td>"
             f"<td class='{tone(x.get('system_minus_singles_units'))}'>{_fmt(x.get('system_minus_singles_units'))}u</td></tr>"
         )
-    systems="".join(system_rows) or "<tr><td colspan='5'>No settled multiple-system evidence yet.</td></tr>"
+    systems="".join(system_rows) or "<tr><td colspan='7'>No settled multiple-system evidence yet.</td></tr>"
 
     def lane_row(name,score,href,rate):
         settled=score.get("settled_bets",score.get("settled",0))
         return (f"<tr><td><a href='{href}'><strong>{name}</strong></a></td><td>{settled}</td><td>{pace_text(rate)}</td>"
+                f"<td class='{tone(score.get('net_pnl_units'))}'>{_fmt(score.get('net_pnl_units'))}u</td>"
                 f"<td class='{tone(score.get('net_roi_pct'))}'>{pct(score.get('net_roi_pct'))}</td>"
                 f"<td class='{tone(score.get('avg_clv_pct'))}'>{pct(score.get('avg_clv_pct'))}</td>"
                 f"<td>{score.get('clv_samples',0)}</td></tr>")
@@ -1391,21 +1398,23 @@ def dashboard():
         label=sport_labels.get(str(x.get("label") or "").upper(),raw.title())
         sport_rows.append(
             f"<tr><td><strong>{escape(label)}</strong></td><td>{x.get('bets',0)}</td><td>{pace_text(multisport_rates.get(str(x.get('label') or '').upper(),{'per_day':0.0,'per_week':0.0}))}</td><td>{x.get('settled',0)}</td>"
+            f"<td class='{tone(x.get('net_pnl_units'))}'>{_fmt(x.get('net_pnl_units'))}u</td>"
             f"<td class='{tone(x.get('net_roi_pct'))}'>{pct(x.get('net_roi_pct'))}</td>"
             f"<td class='{tone(x.get('avg_clv_pct'))}'>{pct(x.get('avg_clv_pct'))}</td><td>{x.get('clv_samples',0)}</td></tr>"
         )
     cricket_rows=[r for r in sport_rows if ">Cricket<" in r]
     core_sport_rows=[r for r in sport_rows if ">Cricket<" not in r]
-    sports_html="".join(core_sport_rows) or "<tr><td colspan='6'>New sport lanes are enabled and waiting for observations.</td></tr>"
-    cricket_summary_html="".join(cricket_rows) or "<tr><td colspan='6'>Cricket collection enabled; waiting for observations.</td></tr>"
+    sports_html="".join(core_sport_rows) or "<tr><td colspan='8'>New sport lanes are enabled and waiting for observations.</td></tr>"
+    cricket_summary_html="".join(cricket_rows) or "<tr><td colspan='7'>Cricket collection enabled; waiting for observations.</td></tr>"
     ms_band_rows=[]
     for x in multisport_by_odds:
         ms_band_rows.append(
             f"<tr><td><strong>{escape(str(x.get('label') or '—'))}</strong></td><td>{x.get('bets',0)}</td><td>{x.get('settled',0)}</td>"
+            f"<td class='{tone(x.get('net_pnl_units'))}'>{_fmt(x.get('net_pnl_units'))}u</td>"
             f"<td class='{tone(x.get('net_roi_pct'))}'>{pct(x.get('net_roi_pct'))}</td>"
             f"<td class='{tone(x.get('avg_clv_pct'))}'>{pct(x.get('avg_clv_pct'))}</td><td>{x.get('clv_samples',0)}</td></tr>"
         )
-    ms_bands_html="".join(ms_band_rows) or "<tr><td colspan='6'>Waiting for settled multi-sport odds-band evidence.</td></tr>"
+    ms_bands_html="".join(ms_band_rows) or "<tr><td colspan='7'>Waiting for settled multi-sport odds-band evidence.</td></tr>"
     def ms_price_band(row):
         try:o=float(row.get("offered_odds") or 0)
         except Exception:return "Unknown"
@@ -1437,8 +1446,8 @@ def dashboard():
             roi=(net/len(settled)*100.0) if settled else None
             clvs=[float(x["clv_pct"]) for x in items if x.get("clv_pct") is not None and str(x.get("clv_quality") or "") in {"A","B"}]
             avg_clv=(sum(clvs)/len(clvs)) if clvs else None
-            rows.append(f"<tr><td><strong>{escape(band)}</strong></td><td>{len(items)}</td><td>{len(settled)}</td><td class='{tone(roi)}'>{pct(roi)}</td><td class='{tone(avg_clv)}'>{pct(avg_clv)}</td><td>{len(clvs)}</td></tr>")
-        per_sport_sections.append(f"<h3 style='margin-top:20px'>{escape(label)}</h3><div class='table-wrap'><table><thead><tr><th>Odds</th><th>Bets</th><th>Settled</th><th>Net ROI</th><th>A/B CLV</th><th>CLV n</th></tr></thead><tbody>{''.join(rows)}</tbody></table></div>")
+            rows.append(f"<tr><td><strong>{escape(band)}</strong></td><td>{len(items)}</td><td>{len(settled)}</td><td class='{tone(net)}'>{_fmt(net)}u</td><td class='{tone(roi)}'>{pct(roi)}</td><td class='{tone(avg_clv)}'>{pct(avg_clv)}</td><td>{len(clvs)}</td></tr>")
+        per_sport_sections.append(f"<h3 style='margin-top:20px'>{escape(label)}</h3><div class='table-wrap'><table><thead><tr><th>Odds</th><th>Bets</th><th>Settled</th><th>Net P&L</th><th>Net ROI</th><th>A/B CLV</th><th>CLV n</th></tr></thead><tbody>{''.join(rows)}</tbody></table></div>")
     cricket_band_sections=[x for x in per_sport_sections if ">Cricket<" in x]
     core_band_sections=[x for x in per_sport_sections if ">Cricket<" not in x]
     per_sport_bands_html="".join(core_band_sections) or "<div class='muted'>Waiting for sport-level odds-band evidence.</div>"
@@ -1460,14 +1469,14 @@ def dashboard():
         governance_rows.append(
             f"<tr><td><strong>{escape(str(x.get('name')))}</strong></td>"
             f"<td class='{maturity_css(str(x.get('maturity')))}'>{escape(str(x.get('maturity')))}</td>"
-            f"<td>{x.get('settled',0)}</td><td class='{tone(x.get('roi_pct'))}'>{pct(x.get('roi_pct'))}</td>"
+            f"<td>{x.get('settled',0)}</td><td class='{tone(x.get('net_pnl_units'))}'>{_fmt(x.get('net_pnl_units'))}u</td><td class='{tone(x.get('roi_pct'))}'>{pct(x.get('roi_pct'))}</td>"
             f"<td>{pct((roll.get('20') or {}).get('roi_pct'))}</td>"
             f"<td>{pct((roll.get('50') or {}).get('roi_pct'))}</td>"
             f"<td>{pct((roll.get('100') or {}).get('roi_pct'))}</td>"
             f"<td>{pct(x.get('median_clv_pct'))}</td><td>{pct(x.get('beat_close_pct'))}</td>"
             f"<td>{gates}</td><td>{'REVIEW' if x.get('candidate_ready') else 'WAIT'}</td></tr>"
         )
-    governance_html="".join(governance_rows) or "<tr><td colspan='11'>Waiting for research observations.</td></tr>"
+    governance_html="".join(governance_rows) or "<tr><td colspan='12'>Waiting for research observations.</td></tr>"
 
     concentration_rows=[]
     for x in governance.get("systems",[]):
@@ -1475,12 +1484,12 @@ def dashboard():
         concentration_rows.append(
             f"<tr><td><strong>{escape(str(x.get('name')))}</strong></td>"
             f"<td class='{maturity_css(str(x.get('maturity')))}'>{escape(str(x.get('maturity')))}</td>"
-            f"<td>{x.get('settled',0)}</td><td class='{tone(x.get('roi_pct'))}'>{pct(x.get('roi_pct'))}</td>"
+            f"<td>{x.get('settled',0)}</td><td class='{tone(x.get('net_pnl_units'))}'>{_fmt(x.get('net_pnl_units'))}u</td><td class='{tone(x.get('roi_pct'))}'>{pct(x.get('roi_pct'))}</td>"
             f"<td>{pct(conc.get('top1_share_positive_pct'))}</td><td>{pct(conc.get('top3_share_positive_pct'))}</td>"
             f"<td>{_fmt(conc.get('net_pnl_without_best1'))}u</td><td>{_fmt(conc.get('net_pnl_without_best3'))}u</td>"
             f"<td>{_fmt(x.get('singles_control_pnl_units'))}u</td></tr>"
         )
-    concentration_html="".join(concentration_rows) or "<tr><td colspan='9'>Multiple-system samples are still forming.</td></tr>"
+    concentration_html="".join(concentration_rows) or "<tr><td colspan='10'>Multiple-system samples are still forming.</td></tr>"
 
     return HTMLResponse(f"""<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
     <title>Betting Lab v{VERSION}</title><style>{BASE_STYLE}
@@ -1505,49 +1514,49 @@ def dashboard():
     </div>
 
     <div class='panel priority'><h2>What we care about</h2>
-      <div class='summary'>The current job is simple: build the forward sample and see whether the interesting pockets survive. Broad executable performance is <strong class='{tone(execution.get("net_roi_pct"))}'>{pct(execution.get("net_roi_pct"))} ROI</strong> with <strong class='{tone(execution.get("avg_clv_pct"))}'>{pct(execution.get("avg_clv_pct"))} A/B CLV</strong>. No strategy is promoted from this dashboard.</div>
+      <div class='summary'>The current job is simple: build the forward sample and see whether the interesting pockets survive. Broad executable performance is <strong class='{tone(execution.get("net_pnl_units"))}'>{_fmt(execution.get("net_pnl_units"))}u</strong> / <strong class='{tone(execution.get("net_roi_pct"))}'>{pct(execution.get("net_roi_pct"))} ROI</strong> with <strong class='{tone(execution.get("avg_clv_pct"))}'>{pct(execution.get("avg_clv_pct"))} A/B CLV</strong>. No strategy is promoted from this dashboard.</div>
       <div class='grid compact'>{focus_cards}</div>
       <div class='muted'>4.00–4.99 is shown prominently because it is an existing research lead, not because the dashboard declares it an edge.</div>
     </div>
 
     <div class='panel priority'><h2>Forward watchlist</h2><div class='muted'>Post-freeze evidence gets priority over discovery results.</div>
-      <div class='table-wrap'><table><thead><tr><th>Cohort</th><th>Forward n</th><th>Forward ROI</th><th>Forward CLV</th><th>CLV n</th><th>All-time n</th><th>All-time ROI</th></tr></thead><tbody>{watch_html}</tbody></table></div>
+      <div class='table-wrap'><table><thead><tr><th>Cohort</th><th>Forward n</th><th>Forward P&L</th><th>Forward ROI</th><th>Forward CLV</th><th>CLV n</th><th>All-time n</th><th>All-time P&L</th><th>All-time ROI</th></tr></thead><tbody>{watch_html}</tbody></table></div>
     </div>
 
     <div class='section-grid'>
       <div class='panel'><h2>Odds-band scan</h2><div class='muted'>Fast view for pockets strengthening, fading or emerging. We still require forward confirmation.</div>
-        <div class='table-wrap'><table><thead><tr><th>Odds</th><th>n</th><th>Hit</th><th>Implied</th><th>ROI</th><th>A/B CLV</th></tr></thead><tbody>{bands}</tbody></table></div>
+        <div class='table-wrap'><table><thead><tr><th>Odds</th><th>n</th><th>Hit</th><th>Implied</th><th>P&L</th><th>ROI</th><th>A/B CLV</th></tr></thead><tbody>{bands}</tbody></table></div>
       </div>
       <div class='panel'><h2>Multiples vs singles</h2><div class='muted'>The key question: are systems adding anything beyond their component singles?</div>
-        <div class='table-wrap'><table><thead><tr><th>System</th><th>Settled</th><th>System ROI</th><th>Singles ROI</th><th>Δ P&L</th></tr></thead><tbody>{systems}</tbody></table></div>
+        <div class='table-wrap'><table><thead><tr><th>System</th><th>Settled</th><th>System P&L</th><th>System ROI</th><th>Singles P&L</th><th>Singles ROI</th><th>Δ P&L</th></tr></thead><tbody>{systems}</tbody></table></div>
         <div class='summary' style='margin-top:12px'>Manual-placeable cards: <strong>{manual.get("manual_placeable_cards",0)}</strong> · Open cards: <strong>{manual.get("open",0)}</strong></div>
       </div>
     </div>
 
     <div class='panel priority'><h2>Multi-Sport lanes</h2><div class='muted'>Individual sport families are visible here so new pockets do not disappear inside one aggregate row. Tap Multi-Sport for league and odds-band detail.</div>
-      <div class='table-wrap'><table><thead><tr><th>Sport</th><th>Bets</th><th>Frequency</th><th>Settled</th><th>Net ROI</th><th>A/B CLV</th><th>CLV n</th></tr></thead><tbody>{sports_html}</tbody></table></div>
+      <div class='table-wrap'><table><thead><tr><th>Sport</th><th>Bets</th><th>Frequency</th><th>Settled</th><th>Net P&L</th><th>Net ROI</th><th>A/B CLV</th><th>CLV n</th></tr></thead><tbody>{sports_html}</tbody></table></div>
       <h3 style='margin-top:20px'>Odds bands by sport</h3><div class='muted'>Each sport is split into the same price bands so sport-specific pockets are visible without assuming one universal odds effect. Descriptive research only.</div>
       {per_sport_bands_html}
       <div style='margin-top:12px'><a href='/multisport'>Open full Multi-Sport research →</a></div>
     </div>
 
     <div class='panel priority'><h2>Cricket</h2><div class='muted'>Dedicated H2H/match-winner research lane. Kept separate from the other sports so cricket-specific odds behaviour stays easy to read.</div>
-      <div class='table-wrap'><table><thead><tr><th>Sport</th><th>Bets</th><th>Settled</th><th>Net ROI</th><th>A/B CLV</th><th>CLV n</th></tr></thead><tbody>{cricket_summary_html}</tbody></table></div>
+      <div class='table-wrap'><table><thead><tr><th>Sport</th><th>Bets</th><th>Settled</th><th>Net P&L</th><th>Net ROI</th><th>A/B CLV</th><th>CLV n</th></tr></thead><tbody>{cricket_summary_html}</tbody></table></div>
       <h3 style='margin-top:20px'>Cricket odds bands</h3>{cricket_bands_html}
     </div>
 
     <div class='panel'><h2>Other research lanes</h2><div class='muted'>Tennis and football model challengers stay secondary unless forward evidence starts to stand out.</div>
-      <div class='table-wrap'><table><thead><tr><th>Lane</th><th>Settled</th><th>Frequency</th><th>Net ROI</th><th>A/B CLV</th><th>CLV n</th></tr></thead><tbody>{lanes}</tbody></table></div>
+      <div class='table-wrap'><table><thead><tr><th>Lane</th><th>Settled</th><th>Frequency</th><th>Net P&L</th><th>Net ROI</th><th>A/B CLV</th><th>CLV n</th></tr></thead><tbody>{lanes}</tbody></table></div>
     </div>
 
     <div class='panel priority'><h2>Research governance <span class='pill warn'>FEATURE FREEZE</span></h2>
       <div class='muted'>No new strategies, sports, odds bands, models or multiple types during the observation period. Bugs, data-quality repairs and measurement only. Maturity: EARLY 0–49 settled · DEVELOPING 50–149 · MATURE 150+.</div>
       <h3 style='margin-top:18px'>Stability & promotion gates</h3>
-      <div class='table-wrap'><table><thead><tr><th>Lane</th><th>Maturity</th><th>Settled</th><th>Lifetime ROI</th><th>Last 20</th><th>Last 50</th><th>Last 100</th><th>Median CLV</th><th>Beat close</th><th>Gates</th><th>Status</th></tr></thead><tbody>{governance_html}</tbody></table></div>
+      <div class='table-wrap'><table><thead><tr><th>Lane</th><th>Maturity</th><th>Settled</th><th>Lifetime P&L</th><th>Lifetime ROI</th><th>Last 20</th><th>Last 50</th><th>Last 100</th><th>Median CLV</th><th>Beat close</th><th>Gates</th><th>Status</th></tr></thead><tbody>{governance_html}</tbody></table></div>
       <div class='muted' style='margin-top:10px'>Review-eligible requires 150 settled, 100 A/B CLV samples, positive median CLV, ≥52% beat-close, positive lifetime ROI and positive last-50 ROI. Passing all gates never auto-promotes anything; live promotion still requires explicit approval.</div>
       <h3 style='margin-top:20px'>Multiple-system concentration</h3>
       <div class='muted'>Jackpot concentration is descriptive, not a penalty. It shows how much of positive return came from the best 1/3 cards and what net P&L would be without them.</div>
-      <div class='table-wrap'><table><thead><tr><th>System</th><th>Maturity</th><th>Settled</th><th>ROI</th><th>Top 1 share</th><th>Top 3 share</th><th>P&L ex best 1</th><th>P&L ex best 3</th><th>Singles control P&L</th></tr></thead><tbody>{concentration_html}</tbody></table></div>
+      <div class='table-wrap'><table><thead><tr><th>System</th><th>Maturity</th><th>Settled</th><th>P&L</th><th>ROI</th><th>Top 1 share</th><th>Top 3 share</th><th>P&L ex best 1</th><th>P&L ex best 3</th><th>Singles control P&L</th></tr></thead><tbody>{concentration_html}</tbody></table></div>
     </div>
 
     <div class='panel'><h2>Tuesday review exports</h2><div class='muted' style='margin-bottom:14px'>These are the two files to upload for the weekly review. Full history stays available for occasional audits.</div>
