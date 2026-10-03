@@ -17,7 +17,7 @@ from cross_sport_systems_shadow import run_cross_sport_systems_maintenance
 from telegram_alerts import send_pending_heinz_alerts
 
 ALGORITHM_VERSION = "HP1_HIGH_PAYOUT_FORWARD"
-APP_VERSION = "0.16.1"
+APP_VERSION = "0.19.28"
 SYSTEM_SPECS = {"DOUBLE": (2, 1), "TREBLE": (3, 1), "FOURFOLD": (4, 1), "YANKEE": (4, 11), "SIXFOLD": (6, 1), "HEINZ": (6, 57)}
 HIGH_PAYOUT_SYSTEMS = tuple(SYSTEM_SPECS)
 HP1_SYSTEMS = HIGH_PAYOUT_SYSTEMS
@@ -32,12 +32,13 @@ HP_LANES = (
 )
 # Frozen forward lane discovered in the 2026-09-27 export review.
 # A card is only considered manually placeable when all six CONSENSUS H2H legs
-# have simultaneous qualifying quotes at the SAME bookmaker.  We deliberately
-# do not mix William Hill and Ladbrokes prices within one Heinz.
+# have simultaneous qualifying quotes at the SAME bookmaker. This dedicated
+# frozen lane remains WH/Ladbrokes-only; the broader multiples lanes use all
+# supported manual-placeable books.
 FROZEN_CONSENSUS_H2H_HEINZ_VERSION = "CONSENSUS_H2H_4_TO_7_49_HEINZ_FORWARD_V1"
 FROZEN_CONSENSUS_H2H_HEINZ_BOOKS = ("williamhill", "ladbrokes_uk")
 DEFAULT_PLACEABLE_BOOKS = ("williamhill", "ladbrokes_uk", "betfred_uk", "boylesports")
-DEFAULT_COMPARISON_BOOKS = ("betfair_ex_uk", "matchbook", "smarkets")
+DEFAULT_COMPARISON_BOOKS: Tuple[str, ...] = ()
 DEFAULT_COHORTS = ("MIXED_BEST", "CONSENSUS", "PRED1", "PRED2")
 
 
