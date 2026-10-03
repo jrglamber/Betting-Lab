@@ -65,7 +65,7 @@ class Settings:
     # exchange venues remain synthetic price-comparison controls only.
     manual_systems_enabled: bool = _bool("MANUAL_SYSTEMS_ENABLED", True)
     manual_systems_placeable_bookmaker_keys: Tuple[str, ...] = _csv(
-        "MANUAL_SYSTEMS_PLACEABLE_BOOKMAKER_KEYS", "williamhill,ladbrokes_uk"
+        "MANUAL_SYSTEMS_PLACEABLE_BOOKMAKER_KEYS", "williamhill,ladbrokes_uk,betfred_uk,boylesports"
     )
     manual_systems_comparison_bookmaker_keys: Tuple[str, ...] = _csv(
         "MANUAL_SYSTEMS_COMPARISON_BOOKMAKER_KEYS", "betfair_ex_uk,matchbook,smarkets"
