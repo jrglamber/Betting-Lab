@@ -270,7 +270,9 @@ def send_pending_heinz_alerts(
         try:
             cross_cards = db.fetchall(
                 """SELECT * FROM cross_sport_system_bets
-                   WHERE status='OPEN' ORDER BY id ASC"""
+                   WHERE status='OPEN'
+                     AND algorithm_version='XS1_CROSS_SPORT_PLACEABLE_V3'
+                   ORDER BY id ASC"""
             )
         except Exception:
             cross_cards = []
