@@ -209,7 +209,7 @@ def _aggregate(rows: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
         return {
             "selections": 0, "wins": 0, "losses": 0, "hit_rate_pct": None,
             "mean_implied_probability_pct": None, "hit_minus_implied_pp": None,
-            "flat_stake_roi_pct": None, "avg_odds": None, "median_odds": None,
+            "pnl_units": 0.0, "flat_stake_roi_pct": None, "avg_odds": None, "median_odds": None,
             "avg_ab_clv_pct": None, "ab_clv_samples": 0,
             "wilson_low_pct": None, "wilson_high_pct": None,
         }
@@ -236,6 +236,7 @@ def _aggregate(rows: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
         "hit_rate_pct": hit_rate * 100.0,
         "mean_implied_probability_pct": implied * 100.0,
         "hit_minus_implied_pp": (hit_rate - implied) * 100.0,
+        "pnl_units": flat_pnl,
         "flat_stake_roi_pct": (flat_pnl / n) * 100.0,
         "avg_odds": sum(odds) / n,
         "median_odds": median,
