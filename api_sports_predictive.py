@@ -252,26 +252,107 @@ def _league_season(item: Mapping[str, Any]) -> List[Tuple[int, str, str, bool]]:
     return out
 
 
-def discover_lane(db: Database, client: ApiSportsClient, lane: Lane) -> Tuple[int, str, str]:
+def _season_sort_key(season: str) -> Tuple[int, ...]:
+    nums = [int(x) for x in re.findall(r"\d{4}", str(season or ""))]
+    if nums:
+        return tuple(nums)
+    nums = [int(x) for x in re.findall(r"\d+", str(season or ""))]
+    return tuple(nums) if nums else (0,)
+
+
+def _league_matches(lane: Lane, name: str) -> bool:
+    n = _norm(name)
+    if lane.key == "NFL":
+        return n == "nfl" or "nationalfootballleague" in n
+    if lane.key == "EUROLEAGUE":
+        # Deliberately exclude EuroLeague Women / junior competitions.
+        if any(token in n for token in ("women", "woman", "female", "u18", "junior")):
+            return False
+        return n in {"euroleague", "euroleaguebasketball"} or n.startswith("euroleague")
+    return _norm(lane.league_search) in n
+
+
+def _league_rows(client: ApiSportsClient, lane: Lane) -> List[Mapping[str, Any]]:
+    # The American-football API does not support the `search` parameter on
+    # /leagues. Basketball does, but local filtering keeps discovery consistent.
+    if lane.key == "NFL":
+        return client.get(lane, "leagues", {})
+    return client.get(lane, "leagues", {"search": lane.league_search})
+
+
+def _probe_accessible_season(
+    client: ApiSportsClient,
+    lane: Lane,
+    candidates: Sequence[Tuple[int, str, str, bool]],
+) -> Tuple[int, str, str, List[Mapping[str, Any]], List[Dict[str, str]]]:
+    ordered = sorted(
+        candidates,
+        key=lambda x: (1 if x[3] else 0, _season_sort_key(x[2])),
+        reverse=True,
+    )
+    attempts: List[Dict[str, str]] = []
+    last_error: Optional[Exception] = None
+    for league_id, league_name, season, _ in ordered:
+        try:
+            rows = client.get(lane, "games", {"league": league_id, "season": season, "timezone": "UTC"})
+            attempts.append({"league": league_name, "season": season, "result": "accessible"})
+            return league_id, league_name, season, rows, attempts
+        except Exception as exc:
+            last_error = exc
+            attempts.append({
+                "league": league_name,
+                "season": season,
+                "result": sanitize_sensitive_text(str(exc), (client.api_key,)),
+            })
+            # Probe a few recent seasons only; don't burn the daily free quota on
+            # a long historical scan.
+            if len(attempts) >= 5:
+                break
+    detail = "; ".join(f"{a['season']}: {a['result']}" for a in attempts)
+    if last_error:
+        raise RuntimeError(f"{lane.key}: no accessible recent season ({detail})") from last_error
+    raise RuntimeError(f"{lane.key}: no accessible recent season")
+
+
+def discover_lane(
+    db: Database,
+    client: ApiSportsClient,
+    lane: Lane,
+) -> Tuple[int, str, str, Optional[List[Mapping[str, Any]]], List[Dict[str, str]]]:
     cached = db.fetchone(
         "SELECT * FROM api_sports_pred_leagues WHERE lane_key=?",
         (lane.key,),
     )
-    # League/season discovery changes slowly. Reuse for 14 days, then refresh.
-    if cached:
+    # Reuse a valid exact league mapping for 14 days. Bad historical mappings
+    # (e.g. Euroleague Women) are deliberately invalidated immediately.
+    if cached and _league_matches(lane, str(cached.get("league_name") or "")):
         at = _parse_dt(cached.get("discovered_at"))
         if at and (_now() - at).total_seconds() < 14 * 86400:
-            return int(cached["provider_league_id"]), str(cached["league_name"]), str(cached["season"])
+            return (
+                int(cached["provider_league_id"]),
+                str(cached["league_name"]),
+                str(cached["season"]),
+                None,
+                [],
+            )
 
-    rows = client.get(lane, "leagues", {"search": lane.league_search})
+    rows = _league_rows(client, lane)
     candidates: List[Tuple[int, str, str, bool]] = []
     for item in rows:
-        candidates.extend(_league_season(item))
+        for candidate in _league_season(item):
+            if _league_matches(lane, candidate[1]):
+                candidates.append(candidate)
     if not candidates:
-        raise RuntimeError(f"{lane.key}: no league/season found for {lane.league_search}")
-    current = [x for x in candidates if x[3]]
-    chosen = (current or candidates)[-1]
-    league_id, league_name, season, _ = chosen
+        names: List[str] = []
+        for item in rows:
+            league_obj = item.get("league") if isinstance(item.get("league"), dict) else item
+            if isinstance(league_obj, dict) and league_obj.get("name"):
+                names.append(str(league_obj.get("name")))
+        raise RuntimeError(
+            f"{lane.key}: target league not found. Candidates={names[:20]}"
+        )
+
+    league_id, league_name, season, game_rows, attempts = _probe_accessible_season(client, lane, candidates)
     db.execute(
         """
         INSERT INTO api_sports_pred_leagues(lane_key,provider_league_id,league_name,season,discovered_at)
@@ -281,7 +362,7 @@ def discover_lane(db: Database, client: ApiSportsClient, lane: Lane) -> Tuple[in
         """,
         (lane.key, league_id, league_name, season, utc_now_iso()),
     )
-    return league_id, league_name, season
+    return league_id, league_name, season, game_rows, attempts
 
 
 def _extract_game(lane: Lane, item: Mapping[str, Any], league_id: int, season: str) -> Optional[Dict[str, Any]]:
@@ -348,8 +429,17 @@ def _extract_game(lane: Lane, item: Mapping[str, Any], league_id: int, season: s
     }
 
 
-def sync_games(db: Database, client: ApiSportsClient, lane: Lane, league_id: int, season: str) -> int:
-    rows = client.get(lane, "games", {"league": league_id, "season": season, "timezone": "UTC"})
+def sync_games(
+    db: Database,
+    client: ApiSportsClient,
+    lane: Lane,
+    league_id: int,
+    season: str,
+    prefetched_rows: Optional[Sequence[Mapping[str, Any]]] = None,
+) -> int:
+    rows = list(prefetched_rows) if prefetched_rows is not None else client.get(
+        lane, "games", {"league": league_id, "season": season, "timezone": "UTC"}
+    )
     captured = utc_now_iso()
     count = 0
     for item in rows:
@@ -622,9 +712,16 @@ def run() -> Dict[str, Any]:
     for lane in LANES:
         lane_result: Dict[str, Any] = {}
         try:
-            league_id, league_name, season = discover_lane(db,client,lane)
-            lane_result.update({"league_id":league_id,"league":league_name,"season":season})
-            lane_result["games_synced"] = sync_games(db,client,lane,league_id,season)
+            league_id, league_name, season, prefetched_rows, probe_attempts = discover_lane(db,client,lane)
+            lane_result.update({
+                "league_id": league_id,
+                "league": league_name,
+                "season": season,
+                "season_probe": probe_attempts,
+            })
+            lane_result["games_synced"] = sync_games(
+                db,client,lane,league_id,season,prefetched_rows=prefetched_rows
+            )
             lane_result.update(make_forecasts(db,lane))
             lane_result.update(settle(db,lane))
             lane_result["scoreboard"] = scoreboard(db,lane)
