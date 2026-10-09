@@ -14,6 +14,7 @@ CURRENT_ALIASES = {
     "lommel sk": "lommel united",
     "sjk seinajoki": "sjk",
     "west ham united": "west ham",
+    "queens park rangers": "qpr",
 }
 
 
