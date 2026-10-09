@@ -92,7 +92,7 @@ def latest(db) -> Dict[str, Any]:
     try:
         row = db.fetchone(
             """SELECT * FROM collector_runs
-               WHERE collector='PRED4_EXACT_COVERAGE_DIAGNOSTIC'
+               WHERE run_type='PRED4_EXACT_COVERAGE_DIAGNOSTIC'
                ORDER BY id DESC LIMIT 1"""
         )
     except Exception:
