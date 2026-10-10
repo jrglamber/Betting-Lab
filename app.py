@@ -17,7 +17,7 @@ from pred4_alias_patch import apply as apply_pred4_alias_patch
 # Dashboard up-rev for this research expansion. web route functions resolve VERSION
 # from the module global at request time, so the visible main dashboard is updated
 # without touching the large legacy web module.
-web_module.VERSION = "0.19.34"
+web_module.VERSION = "0.19.35"
 
 # API-Sports free access is currently historical (2022-2024). Make that visible
 # rather than presenting a successful collector run as a current-data HEALTHY lane.
@@ -41,6 +41,31 @@ install_sport_predictive_dashboard = sports_dashboard.install
 # Import after the access-status patch so the unified research dashboard reads
 # the same status function as the dedicated Sport Predictive page.
 from research_progress_dashboard import install as install_research_progress_dashboard
+
+
+def _expand_clv_first_sources():
+    """Make CLV-First observe every current selection-producing betting lane.
+
+    Duplicates are intentional at capture time. A selection may be represented by
+    more than one model/lane; later analysis can deduplicate on the underlying
+    event/market/selection key. Missing a lane would be a worse failure than
+    recording the same underlying pick more than once.
+    """
+    additional = (
+        ("football_predictive_bets", "events", "PRED1_H2H"),
+        ("football_predictive_market_bets", "events", "PRED1_MARKETS"),
+        ("football_predictive2_bets", "events", "PRED2_H2H"),
+        ("football_predictive2_market_bets", "events", "PRED2_MARKETS"),
+        ("football_predictive3_bets", "events", "PRED3_H2H"),
+        ("football_predictive3_market_bets", "events", "PRED3_MARKETS"),
+        ("football_predictive4_bets", "events", "PRED4_H2H"),
+        ("football_predictive4_market_bets", "events", "PRED4_MARKETS"),
+        # PRED5/PRED6 and related Edge Research challengers copy their own
+        # selection-level CLV into this table. Include them as well even though
+        # they can duplicate a PRED4 underlying selection.
+        ("football_predictive_research_samples", "events", "FOOTBALL_RESEARCH"),
+    )
+    clv_first.SOURCE_SPECS = tuple(dict.fromkeys(tuple(clv_first.SOURCE_SPECS) + additional))
 
 
 def _surface_clv_first_on_home():
@@ -103,6 +128,7 @@ def _surface_clv_first_on_home():
 
 
 apply_pred4_alias_patch()
+_expand_clv_first_sources()
 install_sport_predictive_dashboard(app, db, BASE_STYLE)
 install_research_extensions(app, db, BASE_STYLE)
 install_clv_first(app, db, BASE_STYLE)
