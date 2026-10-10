@@ -5,13 +5,14 @@ import web as web_module
 from web import app, db, BASE_STYLE, predictive_football_pred4_engine
 import sports_predictive_dashboard as sports_dashboard
 from research_extensions import install as install_research_extensions
+from clv_first import install as install_clv_first
 from pred4_coverage_diagnostic import install as install_pred4_coverage_diagnostic
 from pred4_alias_patch import apply as apply_pred4_alias_patch
 
 # Dashboard up-rev for this research expansion. web route functions resolve VERSION
 # from the module global at request time, so the visible main dashboard is updated
 # without touching the large legacy web module.
-web_module.VERSION = "0.19.32"
+web_module.VERSION = "0.19.33"
 
 # API-Sports free access is currently historical (2022-2024). Make that visible
 # rather than presenting a successful collector run as a current-data HEALTHY lane.
@@ -39,6 +40,7 @@ from research_progress_dashboard import install as install_research_progress_das
 apply_pred4_alias_patch()
 install_sport_predictive_dashboard(app, db, BASE_STYLE)
 install_research_extensions(app, db, BASE_STYLE)
+install_clv_first(app, db, BASE_STYLE)
 install_pred4_coverage_diagnostic(app, db, predictive_football_pred4_engine)
 install_research_progress_dashboard(app, db, BASE_STYLE)
 
