@@ -1,5 +1,6 @@
 """Railway entry point for Project Exit Plan — Betting Lab."""
 from datetime import datetime, timezone
+from html import escape
 import inspect
 import json
 
@@ -17,7 +18,7 @@ from pred4_alias_patch import apply as apply_pred4_alias_patch
 # Dashboard up-rev for this research expansion. web route functions resolve VERSION
 # from the module global at request time, so the visible main dashboard is updated
 # without touching the large legacy web module.
-web_module.VERSION = "0.19.35"
+web_module.VERSION = "0.19.36"
 
 # API-Sports free access is currently historical (2022-2024). Make that visible
 # rather than presenting a successful collector run as a current-data HEALTHY lane.
@@ -66,6 +67,228 @@ def _expand_clv_first_sources():
         ("football_predictive_research_samples", "events", "FOOTBALL_RESEARCH"),
     )
     clv_first.SOURCE_SPECS = tuple(dict.fromkeys(tuple(clv_first.SOURCE_SPECS) + additional))
+
+
+def _parse_utc(value):
+    if not value:
+        return None
+    try:
+        out = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if out.tzinfo is None:
+            out = out.replace(tzinfo=timezone.utc)
+        return out.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def _clv_first_ingestion_health():
+    """Audit source-to-CLV-First coverage independently of model performance."""
+    start = clv_first.forward_start(db)
+    start_iso = start.isoformat()
+    source_rows = []
+    total_source = total_captured = total_missing = 0
+    total_forward_source = total_forward_captured = total_forward_missing = 0
+    source_errors = 0
+
+    for table, _, lane in clv_first.SOURCE_SPECS:
+        row = {
+            "source_table": table,
+            "source_lane": lane,
+            "source_rows": 0,
+            "captured_rows": 0,
+            "missing_rows": 0,
+            "forward_source_rows": 0,
+            "forward_captured_rows": 0,
+            "forward_missing_rows": 0,
+            "latest_source_at": None,
+            "latest_captured_at": None,
+            "status": "HEALTHY",
+        }
+        try:
+            src = db.fetchone(
+                f"""SELECT COUNT(*) AS n,
+                           MAX(created_at) AS latest_at,
+                           SUM(CASE WHEN created_at>=? THEN 1 ELSE 0 END) AS forward_n
+                    FROM {table}""",
+                (start_iso,),
+            ) or {}
+            cap = db.fetchone(
+                """SELECT COUNT(*) AS n,
+                          MAX(created_at) AS latest_at,
+                          SUM(CASE WHEN evidence_mode='FORWARD' THEN 1 ELSE 0 END) AS forward_n
+                   FROM clv_first_samples WHERE source_table=?""",
+                (table,),
+            ) or {}
+            miss = db.fetchone(
+                f"""SELECT COUNT(*) AS n
+                    FROM {table} t
+                    WHERE NOT EXISTS (
+                      SELECT 1 FROM clv_first_samples c
+                      WHERE c.source_table=? AND c.source_bet_id=t.id
+                    )""",
+                (table,),
+            ) or {}
+            miss_fwd = db.fetchone(
+                f"""SELECT COUNT(*) AS n
+                    FROM {table} t
+                    WHERE t.created_at>=?
+                      AND NOT EXISTS (
+                        SELECT 1 FROM clv_first_samples c
+                        WHERE c.source_table=? AND c.source_bet_id=t.id
+                      )""",
+                (start_iso, table),
+            ) or {}
+
+            row["source_rows"] = int(src.get("n") or 0)
+            row["captured_rows"] = int(cap.get("n") or 0)
+            row["missing_rows"] = int(miss.get("n") or 0)
+            row["forward_source_rows"] = int(src.get("forward_n") or 0)
+            row["forward_captured_rows"] = int(cap.get("forward_n") or 0)
+            row["forward_missing_rows"] = int(miss_fwd.get("n") or 0)
+            row["latest_source_at"] = src.get("latest_at")
+            row["latest_captured_at"] = cap.get("latest_at")
+            if row["missing_rows"] or row["forward_missing_rows"]:
+                row["status"] = "LAGGING"
+        except Exception as exc:
+            row["status"] = "ERROR"
+            row["error"] = f"{type(exc).__name__}: {exc}"
+            source_errors += 1
+
+        total_source += row["source_rows"]
+        total_captured += row["captured_rows"]
+        total_missing += row["missing_rows"]
+        total_forward_source += row["forward_source_rows"]
+        total_forward_captured += row["forward_captured_rows"]
+        total_forward_missing += row["forward_missing_rows"]
+        source_rows.append(row)
+
+    latest_run = db.fetchone(
+        """SELECT started_at,finished_at,ok,detail
+           FROM collector_runs
+           WHERE run_type='CLV_FIRST_MAINT'
+           ORDER BY id DESC LIMIT 1"""
+    ) or {}
+    run_at = _parse_utc(latest_run.get("finished_at") or latest_run.get("started_at"))
+    run_age_minutes = None
+    if run_at:
+        run_age_minutes = max(0.0, (datetime.now(timezone.utc) - run_at).total_seconds() / 60.0)
+
+    if source_errors or (latest_run and not bool(latest_run.get("ok"))):
+        status = "ERROR"
+    elif not latest_run:
+        status = "WAITING"
+    elif run_age_minutes is not None and run_age_minutes > 25:
+        status = "STALE"
+    elif total_missing or total_forward_missing:
+        status = "LAGGING"
+    else:
+        status = "HEALTHY"
+
+    coverage_pct = (total_captured / total_source * 100.0) if total_source else 100.0
+    forward_coverage_pct = (
+        total_forward_captured / total_forward_source * 100.0
+        if total_forward_source else 100.0
+    )
+    return {
+        "status": status,
+        "forward_start_at": start_iso,
+        "source_lanes": len(source_rows),
+        "source_rows": total_source,
+        "captured_rows": total_captured,
+        "missing_rows": total_missing,
+        "coverage_pct": coverage_pct,
+        "forward_source_rows": total_forward_source,
+        "forward_captured_rows": total_forward_captured,
+        "forward_missing_rows": total_forward_missing,
+        "forward_coverage_pct": forward_coverage_pct,
+        "last_maintenance_at": latest_run.get("finished_at") or latest_run.get("started_at"),
+        "last_maintenance_ok": latest_run.get("ok"),
+        "last_maintenance_age_minutes": run_age_minutes,
+        "sources": source_rows,
+    }
+
+
+def _surface_clv_first_health():
+    """Add an end-to-end ingestion health panel to the CLV-First dashboard."""
+    route = next(
+        (
+            item for item in list(app.router.routes)
+            if getattr(item, "path", None) == "/clv-first"
+            and "GET" in (getattr(item, "methods", set()) or set())
+        ),
+        None,
+    )
+    if route is None:
+        raise RuntimeError("CLV-First dashboard route not found")
+
+    original_endpoint = route.endpoint
+    route_name = route.name
+    include_in_schema = getattr(route, "include_in_schema", True)
+    app.router.routes.remove(route)
+
+    async def clv_first_dashboard_with_health():
+        response = original_endpoint()
+        if inspect.isawaitable(response):
+            response = await response
+        if not isinstance(response, HTMLResponse):
+            return response
+
+        health = _clv_first_ingestion_health()
+        status = str(health.get("status") or "UNKNOWN")
+        status_css = "ok" if status == "HEALTHY" else "warn" if status in {"WAITING", "LAGGING", "STALE"} else "bad"
+        rows = []
+        for item in health.get("sources", []):
+            row_status = str(item.get("status") or "UNKNOWN")
+            row_css = "ok" if row_status == "HEALTHY" else "warn" if row_status == "LAGGING" else "bad"
+            rows.append(
+                f"<tr><td><strong>{escape(str(item.get('source_lane') or ''))}</strong>"
+                f"<div class='muted'>{escape(str(item.get('source_table') or ''))}</div></td>"
+                f"<td class='{row_css}'>{escape(row_status)}</td>"
+                f"<td>{item.get('source_rows',0)}</td><td>{item.get('captured_rows',0)}</td>"
+                f"<td>{item.get('missing_rows',0)}</td><td>{item.get('forward_source_rows',0)}</td>"
+                f"<td>{item.get('forward_captured_rows',0)}</td><td>{item.get('forward_missing_rows',0)}</td>"
+                f"<td>{escape(str(item.get('latest_source_at') or '—'))}</td></tr>"
+            )
+        source_table = "".join(rows) or "<tr><td colspan='9'>No configured source lanes.</td></tr>"
+        age = health.get("last_maintenance_age_minutes")
+        age_text = "—" if age is None else f"{float(age):.1f} min ago"
+        panel = f"""
+        <div class='panel'><h2>Ingestion health <span class='pill {status_css}'>{escape(status)}</span></h2>
+          <p>Coverage <strong>{health.get('captured_rows',0)}/{health.get('source_rows',0)}</strong>
+          ({float(health.get('coverage_pct') or 0):.2f}%) · missing <strong>{health.get('missing_rows',0)}</strong></p>
+          <p>Forward source selections <strong>{health.get('forward_source_rows',0)}</strong> · captured
+          <strong>{health.get('forward_captured_rows',0)}</strong> · missed <strong>{health.get('forward_missing_rows',0)}</strong></p>
+          <p class='muted'>Last CLV-First maintenance: {escape(str(health.get('last_maintenance_at') or '—'))} ({escape(age_text)}).
+          A zero forward sample is safe when this panel is HEALTHY and forward source selections are also zero.</p>
+          <div class='table-wrap'><table><thead><tr><th>Lane</th><th>Status</th><th>Source</th><th>Captured</th><th>Missing</th>
+          <th>Forward source</th><th>Forward captured</th><th>Forward missed</th><th>Latest source</th></tr></thead>
+          <tbody>{source_table}</tbody></table></div>
+        </div>"""
+
+        html = response.body.decode("utf-8")
+        marker = "<div class=grid>"
+        if marker in html:
+            html = html.replace(marker, panel + marker, 1)
+        else:
+            html = html.replace("</h1>", "</h1>" + panel, 1)
+        headers = {
+            key: value for key, value in response.headers.items()
+            if key.lower() != "content-length"
+        }
+        return HTMLResponse(content=html, status_code=response.status_code, headers=headers)
+
+    app.add_api_route(
+        "/clv-first",
+        clv_first_dashboard_with_health,
+        methods=["GET"],
+        response_class=HTMLResponse,
+        name=route_name,
+        include_in_schema=include_in_schema,
+    )
+
+    @app.get("/api/clv-first/health")
+    def clv_first_health_api():
+        return _clv_first_ingestion_health()
 
 
 def _surface_clv_first_on_home():
@@ -132,6 +355,7 @@ _expand_clv_first_sources()
 install_sport_predictive_dashboard(app, db, BASE_STYLE)
 install_research_extensions(app, db, BASE_STYLE)
 install_clv_first(app, db, BASE_STYLE)
+_surface_clv_first_health()
 try:
     print("CLV_FIRST_INSTALL " + json.dumps(clv_first.scoreboard(db), sort_keys=True, default=str), flush=True)
 except Exception as exc:
