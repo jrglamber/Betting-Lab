@@ -1,10 +1,12 @@
 """Railway entry point for Project Exit Plan — Betting Lab."""
 from datetime import datetime, timezone
+import json
 
 import web as web_module
 from web import app, db, BASE_STYLE, predictive_football_pred4_engine
 import sports_predictive_dashboard as sports_dashboard
 from research_extensions import install as install_research_extensions
+import clv_first
 from clv_first import install as install_clv_first
 from pred4_coverage_diagnostic import install as install_pred4_coverage_diagnostic
 from pred4_alias_patch import apply as apply_pred4_alias_patch
@@ -41,6 +43,10 @@ apply_pred4_alias_patch()
 install_sport_predictive_dashboard(app, db, BASE_STYLE)
 install_research_extensions(app, db, BASE_STYLE)
 install_clv_first(app, db, BASE_STYLE)
+try:
+    print("CLV_FIRST_INSTALL " + json.dumps(clv_first.scoreboard(db), sort_keys=True, default=str), flush=True)
+except Exception as exc:
+    print(f"CLV_FIRST_INSTALL_ERROR {type(exc).__name__}: {exc}", flush=True)
 install_pred4_coverage_diagnostic(app, db, predictive_football_pred4_engine)
 install_research_progress_dashboard(app, db, BASE_STYLE)
 
