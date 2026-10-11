@@ -25,6 +25,7 @@ MIN_CARD_PRICE_RETENTION = 0.95       # <=5% loss in combined four-leg price
 
 _INSTALLED = False
 _ORIGINAL_PICK_FOUR = None
+_ORIGINAL_FORM = None
 _ORIGINAL_MESSAGE = None
 _ORIGINAL_SCOREBOARD = None
 _ORIGINAL_PAGE_HTML = None
@@ -147,6 +148,21 @@ def _consolidated_pick(db, now):
     return candidates, proposed, "SAME_BOOK_CONSOLIDATED"
 
 
+def _form(db, now, max_cards: int = 5):
+    before = db.fetchone(
+        "SELECT COUNT(*) AS n FROM live_yankee_cards WHERE assembly_mode='SAME_BOOK_CONSOLIDATED'"
+    ) or {}
+    before_n = int(before.get("n") or 0)
+    out = dict(_ORIGINAL_FORM(db, now, max_cards=max_cards))
+    after = db.fetchone(
+        "SELECT COUNT(*) AS n FROM live_yankee_cards WHERE assembly_mode='SAME_BOOK_CONSOLIDATED'"
+    ) or {}
+    delta = max(0, int(after.get("n") or 0) - before_n)
+    out["same_book"] = int(out.get("same_book") or 0) + delta
+    out["same_book_consolidated"] = delta
+    return out
+
+
 def _message(card, legs):
     mode = str(card.get("assembly_mode") or "")
     if mode != "SAME_BOOK_CONSOLIDATED":
@@ -206,16 +222,18 @@ def _page_html():
 
 
 def install() -> dict:
-    global _INSTALLED, _ORIGINAL_PICK_FOUR, _ORIGINAL_MESSAGE, _ORIGINAL_SCOREBOARD, _ORIGINAL_PAGE_HTML
+    global _INSTALLED, _ORIGINAL_PICK_FOUR, _ORIGINAL_FORM, _ORIGINAL_MESSAGE, _ORIGINAL_SCOREBOARD, _ORIGINAL_PAGE_HTML
     if _INSTALLED:
         return {"installed": True, "already_installed": True, "version": "YANKEE_CONSOLIDATION_V1"}
 
     _ORIGINAL_PICK_FOUR = feed._pick_four
+    _ORIGINAL_FORM = feed._form
     _ORIGINAL_MESSAGE = feed._message
     _ORIGINAL_SCOREBOARD = feed.scoreboard
     _ORIGINAL_PAGE_HTML = feed._page_html
 
     feed._pick_four = _consolidated_pick
+    feed._form = _form
     feed._message = _message
     feed.scoreboard = _scoreboard
     feed._page_html = _page_html
