@@ -2,10 +2,10 @@ from __future__ import annotations
 
 """Small observability helper for paid American-football PRED1.
 
-Reads only shared research tables/collector metadata.  It makes no provider calls
-and has no execution authority.  The startup log is deliberately limited to
-non-sensitive season/count/quota metadata so subscription upgrades can be
-verified without exposing the API key.
+Reads only shared research tables/collector metadata. It makes no provider calls
+and has no execution authority. The startup log is deliberately limited to
+non-sensitive season/count/quota metadata so subscription upgrades and price
+linkage can be verified without exposing the API key.
 """
 
 import json
@@ -13,7 +13,7 @@ from typing import Any, Dict
 
 import web as web_module
 
-VERSION = "APISPORTS_PAID_STATUS_V1"
+VERSION = "APISPORTS_PAID_STATUS_V2"
 _INSTALLED = False
 
 
@@ -45,6 +45,8 @@ def _lane_status(lane: str, model: str) -> Dict[str, Any]:
     forecasts = db.fetchone(
         """SELECT COUNT(*) AS n,
                   SUM(CASE WHEN status='OPEN' THEN 1 ELSE 0 END) AS open_n,
+                  SUM(CASE WHEN odds_event_id IS NOT NULL AND odds_event_id<>'' THEN 1 ELSE 0 END) AS mapped_n,
+                  SUM(CASE WHEN status='OPEN' AND odds_event_id IS NOT NULL AND odds_event_id<>'' THEN 1 ELSE 0 END) AS open_mapped_n,
                   MAX(generated_at) AS latest_at
            FROM api_sports_pred_forecasts WHERE model_name=?""",
         (model,),
@@ -71,6 +73,8 @@ def _lane_status(lane: str, model: str) -> Dict[str, Any]:
         "season_status_counts": [dict(x) for x in counts],
         "forecasts": int(forecasts.get("n") or 0),
         "open_forecasts": int(forecasts.get("open_n") or 0),
+        "price_mapped_forecasts": int(forecasts.get("mapped_n") or 0),
+        "open_price_mapped_forecasts": int(forecasts.get("open_mapped_n") or 0),
         "latest_forecast_at": forecasts.get("latest_at"),
         "shadow_bets": int(bets.get("n") or 0),
         "open_shadow_bets": int(bets.get("open_n") or 0),
