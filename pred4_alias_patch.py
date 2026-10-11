@@ -11,6 +11,7 @@ from live_yankee_consolidation_patch import install as install_live_yankee_conso
 from betting_lab_research_clarity_patch import install as install_research_clarity
 from live_yankee_source_focus_patch import install as install_live_yankee_source_focus
 from api_sports_walkforward_dashboard_patch import install as install_walkforward_dashboard
+from live_yankee_readiness_patch import install as install_live_yankee_readiness
 
 CURRENT_ALIASES = {
     "stade lavallois": "laval",
@@ -31,7 +32,8 @@ def apply() -> dict:
     research_clarity = install_research_clarity()
     live_yankee_source_focus = install_live_yankee_source_focus()
     walkforward_dashboard = install_walkforward_dashboard()
-    web_module.VERSION = "0.19.43"
+    live_yankee_readiness = install_live_yankee_readiness()
+    web_module.VERSION = "0.19.44"
     return {
         "aliases_applied": len(CURRENT_ALIASES),
         "changed": sum(1 for key, value in CURRENT_ALIASES.items() if before.get(key) != value),
@@ -43,5 +45,6 @@ def apply() -> dict:
         "research_clarity": research_clarity,
         "live_yankee_source_focus": live_yankee_source_focus,
         "walkforward_dashboard": walkforward_dashboard,
+        "live_yankee_readiness": live_yankee_readiness,
         "dashboard_version": web_module.VERSION,
     }
