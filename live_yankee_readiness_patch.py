@@ -42,14 +42,15 @@ def _scoreboard(db):
 
 
 def _page_html():
-    html=_ORIGINAL_PAGE()
-    r=_readiness(web_module.db)
-    rows=''.join(
-        f"<tr><td>{escape(x['source_lane'])}</td><td>{escape(x['selection'])}</td>"
-        f"<td>{x['valid_books']}</td><td>{'—' if x['best_valid_price'] is None else f'{x['best_valid_price']:.2f}'}</td>"
-        f"<td class='{'ok' if x['ready'] else 'warn'}'>{'READY' if x['ready'] else 'WAITING PRICE'}</td></tr>"
-        for x in r['details']
-    ) or "<tr><td colspan='5'>No queued candidates.</td></tr>"
+    html=_ORIGINAL_PAGE(); r=_readiness(web_module.db); parts=[]
+    for x in r['details']:
+        price='—' if x['best_valid_price'] is None else f"{x['best_valid_price']:.2f}"
+        css='ok' if x['ready'] else 'warn'; label='READY' if x['ready'] else 'WAITING PRICE'
+        parts.append(
+            f"<tr><td>{escape(x['source_lane'])}</td><td>{escape(x['selection'])}</td>"
+            f"<td>{x['valid_books']}</td><td>{price}</td><td class='{css}'>{label}</td></tr>"
+        )
+    rows=''.join(parts) or "<tr><td colspan='5'>No queued candidates.</td></tr>"
     panel=(
         "<div class='panel'><h2>Queue readiness</h2>"
         f"<div class='muted'>{r['queued_candidates']} queued candidates · {r['queued_distinct_events']} distinct events · "
