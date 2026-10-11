@@ -13,6 +13,8 @@ from live_yankee_source_focus_patch import install as install_live_yankee_source
 from api_sports_walkforward_dashboard_patch import install as install_walkforward_dashboard
 from live_yankee_readiness_patch import install as install_live_yankee_readiness
 from betting_lab_shadow_focus_v2_patch import install as install_shadow_focus_v2
+from api_sports_paid_dashboard_patch import install as install_paid_sports_dashboard
+from live_yankee_expiry_fallback_patch import install as install_yankee_expiry_fallback
 
 CURRENT_ALIASES = {
     "stade lavallois": "laval",
@@ -35,7 +37,9 @@ def apply() -> dict:
     walkforward_dashboard = install_walkforward_dashboard()
     live_yankee_readiness = install_live_yankee_readiness()
     shadow_focus_v2 = install_shadow_focus_v2()
-    web_module.VERSION = "0.19.45"
+    paid_sports_dashboard = install_paid_sports_dashboard()
+    yankee_expiry_fallback = install_yankee_expiry_fallback()
+    web_module.VERSION = "0.19.47"
     return {
         "aliases_applied": len(CURRENT_ALIASES),
         "changed": sum(1 for key, value in CURRENT_ALIASES.items() if before.get(key) != value),
@@ -49,5 +53,7 @@ def apply() -> dict:
         "walkforward_dashboard": walkforward_dashboard,
         "live_yankee_readiness": live_yankee_readiness,
         "shadow_focus_v2": shadow_focus_v2,
+        "paid_sports_dashboard": paid_sports_dashboard,
+        "yankee_expiry_fallback": yankee_expiry_fallback,
         "dashboard_version": web_module.VERSION,
     }
