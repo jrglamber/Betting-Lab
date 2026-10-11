@@ -56,6 +56,21 @@ def _fmt(value, digits: int = 2) -> str:
         return escape(str(value))
 
 
+def _tone_style(value) -> str:
+    """Use restrained traffic-light colouring for signed performance metrics."""
+    if value is None:
+        return ""
+    try:
+        number = float(value)
+    except Exception:
+        return ""
+    if number > 0:
+        return " style='color:#22c55e;font-weight:700'"
+    if number < 0:
+        return " style='color:#ef4444;font-weight:700'"
+    return ""
+
+
 def _price_band(row) -> str:
     try:
         odds = float(row.get("offered_odds") or 0.0)
@@ -144,8 +159,10 @@ def _render_panel() -> str:
             rows_html.append(
                 f"<tr><td><strong>{escape(band)}</strong></td>"
                 f"<td>{len(items)}</td><td>{len(settled)}</td>"
-                f"<td>{_fmt(net)}u</td><td>{_fmt(roi)}%</td>"
-                f"<td>{_fmt(avg_clv)}%</td><td>{len(clvs)}</td></tr>"
+                f"<td{_tone_style(net)}>{_fmt(net)}u</td>"
+                f"<td{_tone_style(roi)}>{_fmt(roi)}%</td>"
+                f"<td{_tone_style(avg_clv)}>{_fmt(avg_clv)}%</td>"
+                f"<td>{len(clvs)}</td></tr>"
             )
 
         sections.append(
