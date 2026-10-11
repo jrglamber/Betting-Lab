@@ -8,6 +8,7 @@ from multisport_odds_band_patch import install as install_multisport_odds_band_p
 from live_yankee_feed import install as install_live_yankee_feed
 from live_yankee_fast_loop import install as install_live_yankee_fast_loop
 from live_yankee_consolidation_patch import install as install_live_yankee_consolidation
+from betting_lab_research_clarity_patch import install as install_research_clarity
 
 CURRENT_ALIASES = {
     "stade lavallois": "laval",
@@ -25,7 +26,8 @@ def apply() -> dict:
     live_yankee = install_live_yankee_feed()
     live_yankee_fast_loop = install_live_yankee_fast_loop()
     live_yankee_consolidation = install_live_yankee_consolidation()
-    web_module.VERSION = "0.19.40"
+    research_clarity = install_research_clarity()
+    web_module.VERSION = "0.19.41"
     return {
         "aliases_applied": len(CURRENT_ALIASES),
         "changed": sum(1 for key, value in CURRENT_ALIASES.items() if before.get(key) != value),
@@ -34,5 +36,6 @@ def apply() -> dict:
         "live_yankee_feed": live_yankee,
         "live_yankee_fast_loop": live_yankee_fast_loop,
         "live_yankee_consolidation": live_yankee_consolidation,
+        "research_clarity": research_clarity,
         "dashboard_version": web_module.VERSION,
     }
