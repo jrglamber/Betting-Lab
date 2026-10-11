@@ -6,6 +6,7 @@ import web as web_module
 from predictive_football_pred4 import ALIAS_NORMALIZATION
 from multisport_odds_band_patch import install as install_multisport_odds_band_patch
 from live_yankee_feed import install as install_live_yankee_feed
+from live_yankee_fast_loop import install as install_live_yankee_fast_loop
 
 CURRENT_ALIASES = {
     "stade lavallois": "laval",
@@ -21,12 +22,14 @@ def apply() -> dict:
     ALIAS_NORMALIZATION.update(CURRENT_ALIASES)
     multisport_dashboard = install_multisport_odds_band_patch()
     live_yankee = install_live_yankee_feed()
-    web_module.VERSION = "0.19.38"
+    live_yankee_fast_loop = install_live_yankee_fast_loop()
+    web_module.VERSION = "0.19.39"
     return {
         "aliases_applied": len(CURRENT_ALIASES),
         "changed": sum(1 for key, value in CURRENT_ALIASES.items() if before.get(key) != value),
         "aliases": dict(CURRENT_ALIASES),
         "multisport_odds_bands": multisport_dashboard,
         "live_yankee_feed": live_yankee,
+        "live_yankee_fast_loop": live_yankee_fast_loop,
         "dashboard_version": web_module.VERSION,
     }
