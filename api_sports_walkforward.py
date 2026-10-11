@@ -7,7 +7,7 @@ from typing import Dict, List, Tuple
 from db import Database, utc_now_iso
 import api_sports_predictive as core
 
-VERSION = "APISPORTS_PRED1_WALKFORWARD_V1"
+VERSION = "APISPORTS_PRED1_WALKFORWARD_V2"
 MIN_HISTORY = 3
 
 
@@ -59,6 +59,15 @@ def _update(elo, perf, game):
     perf.setdefault(home,[]).append((hs,aas)); perf.setdefault(away,[]).append((aas,hs))
 
 
+def _walkforward_game_id(game):
+    # API-Sports IDs are provider identifiers, not a contract that they are
+    # globally unique across every season/product.  Qualify them by season in
+    # the walk-forward store so paid current-season data cannot collide with
+    # historical research rows.
+    season=str(game.get('season') or 'UNKNOWN')
+    return f"{season}:{game.get('provider_game_id')}"
+
+
 def run_lane(db, lane):
     rows=db.fetchall("""SELECT * FROM api_sports_pred_games
         WHERE lane_key=? AND status='FINISHED' AND home_score IS NOT NULL AND away_score IS NOT NULL
@@ -75,7 +84,7 @@ def run_lane(db, lane):
             if pred:
                 hp,hn,an=pred; bp=(home_sum/prior_n) if prior_n>=10 else 0.5
                 correct=None if y==0.5 else int((hp>=0.5)==(y==1.0))
-                out.append((lane.model_name,lane.key,str(g['provider_game_id']),kickoff,hp,y,(hp-y)**2,(bp-y)**2,correct,hn,an))
+                out.append((lane.model_name,lane.key,_walkforward_game_id(g),kickoff,hp,y,(hp-y)**2,(bp-y)**2,correct,hn,an))
             pending.append((g,y))
         for g,y in pending:
             _update(elo,perf,g); home_sum+=y; prior_n+=1
@@ -84,7 +93,12 @@ def run_lane(db, lane):
         db.execute("""INSERT INTO api_sports_pred_walkforward(
             model_name,lane_key,provider_game_id,commence_time,home_probability,outcome_home,
             brier_score,baseline_brier_score,correct,home_sample,away_sample)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?)""",row)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(model_name,provider_game_id) DO UPDATE SET
+              lane_key=excluded.lane_key,commence_time=excluded.commence_time,
+              home_probability=excluded.home_probability,outcome_home=excluded.outcome_home,
+              brier_score=excluded.brier_score,baseline_brier_score=excluded.baseline_brier_score,
+              correct=excluded.correct,home_sample=excluded.home_sample,away_sample=excluded.away_sample""",row)
     n=len(out); b=sum(x[6] for x in out)/n if n else None; bb=sum(x[7] for x in out)/n if n else None
     imp=((bb-b)/bb*100.0) if n and bb else None
     resolved=[x for x in out if x[8] is not None]
