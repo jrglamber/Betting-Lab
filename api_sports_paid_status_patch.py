@@ -13,7 +13,7 @@ from typing import Any, Dict
 
 import web as web_module
 
-VERSION = "APISPORTS_PAID_STATUS_V2"
+VERSION = "APISPORTS_PAID_STATUS_V3"
 _INSTALLED = False
 
 
@@ -58,7 +58,7 @@ def _lane_status(lane: str, model: str) -> Dict[str, Any]:
            FROM api_sports_pred_shadow_bets WHERE model_name=?""",
         (model,),
     ) or {}
-    return {
+    out = {
         "lane": lane,
         "model": model,
         "league": league.get("league_name") or detail.get("league"),
@@ -81,6 +81,28 @@ def _lane_status(lane: str, model: str) -> Dict[str, Any]:
         "latest_shadow_bet_at": bets.get("latest_at"),
         "error": detail.get("error") if latest and not bool(latest.get("ok")) else None,
     }
+    if lane == "NCAAF" and int(forecasts.get("mapped_n") or 0) == 0:
+        try:
+            provider = db.fetchall(
+                """SELECT home_team,away_team,commence_time
+                   FROM api_sports_pred_forecasts
+                   WHERE model_name=? AND status='OPEN'
+                   ORDER BY commence_time LIMIT 8""",
+                (model,),
+            )
+            odds = db.fetchall(
+                """SELECT home_team,away_team,commence_time
+                   FROM multisport_events
+                   WHERE sport_key='americanfootball_ncaaf' AND status='UPCOMING'
+                   ORDER BY commence_time LIMIT 12"""
+            )
+            out["mapping_samples"] = {
+                "provider": [dict(x) for x in provider],
+                "odds_api": [dict(x) for x in odds],
+            }
+        except Exception as exc:
+            out["mapping_samples_error"] = f"{type(exc).__name__}: {exc}"
+    return out
 
 
 def snapshot() -> Dict[str, Any]:
