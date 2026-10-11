@@ -7,9 +7,11 @@ from typing import Any, Dict, Mapping, Optional
 import api_sports_predictive as core
 import api_sports_walkforward as walkforward
 from api_sports_paid_access_patch import install as install_paid_access
+from api_sports_price_link_patch import install as install_price_link
 
 
 PAID_ACCESS = install_paid_access()
+PRICE_LINK = install_price_link()
 _original_extract_game = core._extract_game
 
 
@@ -76,5 +78,6 @@ if __name__ == "__main__":
     result = core.run()
     wf = walkforward.run()
     print(f"API_SPORTS_PAID_ACCESS {PAID_ACCESS}", flush=True)
+    print(f"API_SPORTS_PRICE_LINK {PRICE_LINK}", flush=True)
     ok = all(v.get("ok") for v in result["lanes"].values()) and all(v.get("ok") for v in wf["lanes"].values())
     raise SystemExit(0 if ok else 1)
