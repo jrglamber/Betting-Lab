@@ -8,12 +8,13 @@ non-sensitive season/count/quota metadata so subscription upgrades and price
 linkage can be verified without exposing the API key.
 """
 
+from datetime import datetime, timezone
 import json
 from typing import Any, Dict
 
 import web as web_module
 
-VERSION = "APISPORTS_PAID_STATUS_V3"
+VERSION = "APISPORTS_PAID_STATUS_V4"
 _INSTALLED = False
 
 
@@ -83,22 +84,34 @@ def _lane_status(lane: str, model: str) -> Dict[str, Any]:
     }
     if lane == "NCAAF" and int(forecasts.get("mapped_n") or 0) == 0:
         try:
+            now_iso = datetime.now(timezone.utc).isoformat()
             provider = db.fetchall(
                 """SELECT home_team,away_team,commence_time
                    FROM api_sports_pred_forecasts
-                   WHERE model_name=? AND status='OPEN'
-                   ORDER BY commence_time LIMIT 8""",
-                (model,),
+                   WHERE model_name=? AND status='OPEN' AND commence_time>?
+                   ORDER BY commence_time LIMIT 12""",
+                (model, now_iso),
             )
-            odds = db.fetchall(
-                """SELECT home_team,away_team,commence_time
+            odds_summary = db.fetchone(
+                """SELECT COUNT(*) AS n,MIN(commence_time) AS first_at,MAX(commence_time) AS last_at
                    FROM multisport_events
-                   WHERE sport_key='americanfootball_ncaaf' AND status='UPCOMING'
-                   ORDER BY commence_time LIMIT 12"""
+                   WHERE sport_key='americanfootball_ncaaf' AND status='UPCOMING' AND commence_time>?""",
+                (now_iso,),
+            ) or {}
+            odds = db.fetchall(
+                """SELECT event_id,home_team,away_team,commence_time
+                   FROM multisport_events
+                   WHERE sport_key='americanfootball_ncaaf' AND status='UPCOMING' AND commence_time>?
+                   ORDER BY commence_time LIMIT 20""",
+                (now_iso,),
             )
             out["mapping_samples"] = {
-                "provider": [dict(x) for x in provider],
-                "odds_api": [dict(x) for x in odds],
+                "checked_at": now_iso,
+                "provider_future": [dict(x) for x in provider],
+                "odds_api_future_count": int(odds_summary.get("n") or 0),
+                "odds_api_future_first_at": odds_summary.get("first_at"),
+                "odds_api_future_last_at": odds_summary.get("last_at"),
+                "odds_api_future": [dict(x) for x in odds],
             }
         except Exception as exc:
             out["mapping_samples_error"] = f"{type(exc).__name__}: {exc}"
