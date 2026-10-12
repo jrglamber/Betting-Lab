@@ -2,6 +2,7 @@
 
 import app as base_app
 import dashboard_layout_v2
+from credit_policy_unlimited_patch import install as install_credit_policy_unlimited
 from dashboard_layout_v2 import install as install_dashboard_layout_v2
 from dashboard_metric_parity_patch import install as install_dashboard_metric_parity
 from dashboard_api_sports_health_patch import install as install_dashboard_api_sports_health
@@ -42,6 +43,12 @@ print(f"HISTORICAL_RESCUE_FINAL_TENNIS {final_tennis}", flush=True)
 queue_guard = install_rescue_queue_guard(base_app.web_module)
 print(f"HISTORICAL_RESCUE_QUEUE_GUARD {queue_guard}", flush=True)
 
+# Remove app-imposed daily credit ceilings from every configurable Odds API
+# lane via Railway variables, and lift the two newer hard-coded 500/day quote
+# caps here. The provider's real remaining-credit balance is still enforced.
+credit_policy = install_credit_policy_unlimited()
+print(f"CREDIT_POLICY_UNLIMITED {credit_policy}", flush=True)
+
 # The curated dashboard must repeat canonical research metrics rather than
 # recomputing lookalike cohorts. This is presentation-only and also keeps the
 # focused EuroLeague band aligned with the current 1.50-3.99 research lane.
@@ -53,8 +60,8 @@ print(f"DASHBOARD_METRIC_PARITY {parity}", flush=True)
 api_health = install_dashboard_api_sports_health()
 print(f"DASHBOARD_API_SPORTS_HEALTH {api_health}", flush=True)
 
-# Curated homepage up-rev for the API-Sports observability fix.
-dashboard_layout_v2.VERSION = "0.19.60"
+# Curated homepage up-rev for provider-quota-only collection policy.
+dashboard_layout_v2.VERSION = "0.19.61"
 install_dashboard_layout_v2(base_app.app, base_app.db, base_app.BASE_STYLE)
 
 app = base_app.app
