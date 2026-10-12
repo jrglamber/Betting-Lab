@@ -18,7 +18,7 @@ from live_yankee_expiry_fallback_patch import install as install_yankee_expiry_f
 from api_sports_paid_status_patch import install as install_paid_sports_status
 from live_yankee_results_patch import install as install_yankee_results
 from hit_rate_multiples_lab import install as install_hit_rate_multiples
-from settlement_integrity_v2_patch import install as install_settlement_integrity
+from settlement_integrity_training_fallback_patch import install as install_settlement_integrity
 
 CURRENT_ALIASES = {
     "stade lavallois": "laval",
@@ -47,7 +47,7 @@ def apply() -> dict:
     yankee_results = install_yankee_results()
     hit_rate_multiples = install_hit_rate_multiples()
     settlement_integrity = install_settlement_integrity()
-    web_module.VERSION = "0.19.52"
+    web_module.VERSION = "0.19.53"
     return {
         "aliases_applied": len(CURRENT_ALIASES),
         "changed": sum(1 for key, value in CURRENT_ALIASES.items() if before.get(key) != value),
