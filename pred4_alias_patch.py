@@ -17,6 +17,7 @@ from api_sports_paid_dashboard_patch import install as install_paid_sports_dashb
 from live_yankee_expiry_fallback_patch import install as install_yankee_expiry_fallback
 from api_sports_paid_status_patch import install as install_paid_sports_status
 from live_yankee_results_patch import install as install_yankee_results
+from hit_rate_multiples_lab import install as install_hit_rate_multiples
 
 CURRENT_ALIASES = {
     "stade lavallois": "laval",
@@ -43,7 +44,8 @@ def apply() -> dict:
     yankee_expiry_fallback = install_yankee_expiry_fallback()
     paid_sports_status = install_paid_sports_status()
     yankee_results = install_yankee_results()
-    web_module.VERSION = "0.19.49"
+    hit_rate_multiples = install_hit_rate_multiples()
+    web_module.VERSION = "0.19.50"
     return {
         "aliases_applied": len(CURRENT_ALIASES),
         "changed": sum(1 for key, value in CURRENT_ALIASES.items() if before.get(key) != value),
@@ -61,5 +63,6 @@ def apply() -> dict:
         "yankee_expiry_fallback": yankee_expiry_fallback,
         "paid_sports_status": paid_sports_status,
         "yankee_results": yankee_results,
+        "hit_rate_multiples": hit_rate_multiples,
         "dashboard_version": web_module.VERSION,
     }
