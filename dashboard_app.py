@@ -3,6 +3,7 @@
 import app as base_app
 import dashboard_layout_v2
 from credit_policy_unlimited_patch import install as install_credit_policy_unlimited
+from dashboard_credit_usage_patch import install as install_dashboard_credit_usage
 from dashboard_layout_v2 import install as install_dashboard_layout_v2
 from dashboard_metric_parity_patch import install as install_dashboard_metric_parity
 from dashboard_api_sports_health_patch import install as install_dashboard_api_sports_health
@@ -60,8 +61,14 @@ print(f"DASHBOARD_METRIC_PARITY {parity}", flush=True)
 api_health = install_dashboard_api_sports_health()
 print(f"DASHBOARD_API_SPORTS_HEALTH {api_health}", flush=True)
 
-# Curated homepage up-rev for provider-quota-only collection policy.
-dashboard_layout_v2.VERSION = "0.19.61"
+# Restore provider-credit observability from the legacy dashboard near the top
+# of the curated homepage. This is presentation-only and reads the existing
+# actual_cost ledger; it does not impose any new cap.
+credit_panel = install_dashboard_credit_usage(base_app.db)
+print(f"DASHBOARD_PROVIDER_CREDITS {credit_panel}", flush=True)
+
+# Curated homepage up-rev for provider-credit observability.
+dashboard_layout_v2.VERSION = "0.19.62"
 install_dashboard_layout_v2(base_app.app, base_app.db, base_app.BASE_STYLE)
 
 app = base_app.app
