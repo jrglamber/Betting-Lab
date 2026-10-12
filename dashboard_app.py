@@ -5,6 +5,7 @@ import dashboard_layout_v2
 from dashboard_layout_v2 import install as install_dashboard_layout_v2
 from dashboard_metric_parity_patch import install as install_dashboard_metric_parity
 from historical_rescue_patch import install as install_historical_rescue
+from settlement_rescue_final_football import install as install_final_football_rescue
 from settlement_rescue_final_tennis import install as install_final_tennis_rescue
 from settlement_rescue_queue_guard import install as install_rescue_queue_guard
 
@@ -17,6 +18,12 @@ rescue = install_historical_rescue(
     base_app.web_module,
 )
 print(f"HISTORICAL_RESCUE_INSTALL {rescue}", flush=True)
+
+# Four remaining source/canonical football obligations were independently
+# verified as postponed/rescheduled. Void the original event obligations rather
+# than inventing scores; any rescheduled fixtures remain separate future events.
+final_football = install_final_football_rescue(base_app.db)
+print(f"HISTORICAL_RESCUE_FINAL_FOOTBALL {final_football}", flush=True)
 
 # A same-day tennis result crossed the six-hour stale threshold while the
 # provider result was delayed. Clear it under the existing tennis winner rule.
@@ -33,8 +40,8 @@ print(f"HISTORICAL_RESCUE_QUEUE_GUARD {queue_guard}", flush=True)
 parity = install_dashboard_metric_parity(base_app.db)
 print(f"DASHBOARD_METRIC_PARITY {parity}", flush=True)
 
-# Curated homepage up-rev for the settlement rescue + metric parity release.
-dashboard_layout_v2.VERSION = "0.19.57"
+# Curated homepage up-rev for the completed settlement rescue + metric parity release.
+dashboard_layout_v2.VERSION = "0.19.58"
 install_dashboard_layout_v2(base_app.app, base_app.db, base_app.BASE_STYLE)
 
 app = base_app.app
