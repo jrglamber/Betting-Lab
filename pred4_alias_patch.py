@@ -19,6 +19,7 @@ from api_sports_paid_status_patch import install as install_paid_sports_status
 from live_yankee_results_patch import install as install_yankee_results
 from hit_rate_multiples_lab import install as install_hit_rate_multiples
 from settlement_integrity_training_fallback_patch import install as install_settlement_integrity
+from settlement_lookback_patch import install as install_settlement_lookback
 
 CURRENT_ALIASES = {
     "stade lavallois": "laval",
@@ -47,7 +48,8 @@ def apply() -> dict:
     yankee_results = install_yankee_results()
     hit_rate_multiples = install_hit_rate_multiples()
     settlement_integrity = install_settlement_integrity()
-    web_module.VERSION = "0.19.53"
+    settlement_lookback = install_settlement_lookback()
+    web_module.VERSION = "0.19.54"
     return {
         "aliases_applied": len(CURRENT_ALIASES),
         "changed": sum(1 for key, value in CURRENT_ALIASES.items() if before.get(key) != value),
@@ -67,5 +69,6 @@ def apply() -> dict:
         "yankee_results": yankee_results,
         "hit_rate_multiples": hit_rate_multiples,
         "settlement_integrity": settlement_integrity,
+        "settlement_lookback": settlement_lookback,
         "dashboard_version": web_module.VERSION,
     }
