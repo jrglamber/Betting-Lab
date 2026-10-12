@@ -5,6 +5,7 @@ import dashboard_layout_v2
 from dashboard_layout_v2 import install as install_dashboard_layout_v2
 from dashboard_metric_parity_patch import install as install_dashboard_metric_parity
 from historical_rescue_patch import install as install_historical_rescue
+from postponed_event_revival_patch import install as install_postponed_event_revival
 from settlement_rescue_final_football import install as install_final_football_rescue
 from settlement_rescue_final_tennis import install as install_final_tennis_rescue
 from settlement_rescue_queue_guard import install as install_rescue_queue_guard
@@ -25,6 +26,12 @@ print(f"HISTORICAL_RESCUE_INSTALL {rescue}", flush=True)
 final_football = install_final_football_rescue(base_app.db)
 print(f"HISTORICAL_RESCUE_FINAL_FOOTBALL {final_football}", flush=True)
 
+# If a provider later reuses one of those event IDs with a genuinely changed
+# future kickoff, allow it back into normal collection instead of leaving the
+# rescheduled fixture permanently stuck POSTPONED.
+revival = install_postponed_event_revival(base_app.web_module)
+print(f"POSTPONED_EVENT_REVIVAL_INSTALL {revival}", flush=True)
+
 # A same-day tennis result crossed the six-hour stale threshold while the
 # provider result was delayed. Clear it under the existing tennis winner rule.
 final_tennis = install_final_tennis_rescue(base_app.db)
@@ -40,8 +47,8 @@ print(f"HISTORICAL_RESCUE_QUEUE_GUARD {queue_guard}", flush=True)
 parity = install_dashboard_metric_parity(base_app.db)
 print(f"DASHBOARD_METRIC_PARITY {parity}", flush=True)
 
-# Curated homepage up-rev for the completed settlement rescue + metric parity release.
-dashboard_layout_v2.VERSION = "0.19.58"
+# Curated homepage up-rev for the completed settlement rescue + parity hardening.
+dashboard_layout_v2.VERSION = "0.19.59"
 install_dashboard_layout_v2(base_app.app, base_app.db, base_app.BASE_STYLE)
 
 app = base_app.app
