@@ -4,6 +4,7 @@ import app as base_app
 import dashboard_layout_v2
 from dashboard_layout_v2 import install as install_dashboard_layout_v2
 from dashboard_metric_parity_patch import install as install_dashboard_metric_parity
+from dashboard_api_sports_health_patch import install as install_dashboard_api_sports_health
 from historical_rescue_patch import install as install_historical_rescue
 from postponed_event_revival_patch import install as install_postponed_event_revival
 from settlement_rescue_final_football import install as install_final_football_rescue
@@ -47,8 +48,13 @@ print(f"HISTORICAL_RESCUE_QUEUE_GUARD {queue_guard}", flush=True)
 parity = install_dashboard_metric_parity(base_app.db)
 print(f"DASHBOARD_METRIC_PARITY {parity}", flush=True)
 
-# Curated homepage up-rev for the completed settlement rescue + parity hardening.
-dashboard_layout_v2.VERSION = "0.19.59"
+# API-Sports health must use the same paid-status source that the predictive
+# diagnostics use. This fixes the false '0 current-season games' dashboard tile.
+api_health = install_dashboard_api_sports_health()
+print(f"DASHBOARD_API_SPORTS_HEALTH {api_health}", flush=True)
+
+# Curated homepage up-rev for the API-Sports observability fix.
+dashboard_layout_v2.VERSION = "0.19.60"
 install_dashboard_layout_v2(base_app.app, base_app.db, base_app.BASE_STYLE)
 
 app = base_app.app
