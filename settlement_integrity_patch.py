@@ -1,17 +1,11 @@
 from __future__ import annotations
 
-"""Settlement integrity guard for Project Exit Plan — Betting Lab.
+"""Settlement integrity guard for Betting Lab.
 
-This patch fixes a blind spot in the shared football result collector and adds a
-read-only stale-open audit across the primary research ledgers.  PRED4-only
-fixtures were previously absent from ResultCollector._due_events(), so no
-`event_results` row was requested and PRED4's otherwise-correct settlement code
-had nothing to join to.
-
-For old PRED4 stragglers that are outside The Odds API short scores lookback, the
-repair path reuses the already-stored API-Football/PXG1 completed-match row.  A
-repair is accepted only when sport, date/time and both team names match at high
-confidence.  No market/outcome/model threshold is changed.
+Fixes the shared football result collector so PRED4 (and any still-open football
+ledger) creates a result obligation. It also repairs old PRED4 misses from the
+already-stored API-Football/PXG1 final-score data when the fixture match is
+high-confidence, and exposes a stale-open audit.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -30,17 +24,9 @@ from results import settle_event_signals
 
 VERSION = "SETTLEMENT_INTEGRITY_V1"
 STALE_HOURS = 6.0
-PXG_MATCH_WINDOW_HOURS = 30.0
-MIN_TEAM_MATCH = 0.90
-MIN_PAIR_MATCH = 1.84
-MIN_BEST_MARGIN = 0.05
-
+PXG_WINDOW_HOURS = 30.0
 _INSTALLED = False
 
-# These are the primary selection ledgers whose OPEN state should not survive
-# long after a scheduled event has completed.  Derived multiple/system cards are
-# intentionally excluded: their health follows from their constituent legs and
-# is audited on their own dashboards.
 LANES = (
     ("CORE_EXECUTION", "execution_shadow_bets", "events"),
     ("PRED1_H2H", "football_predictive_bets", "events"),
@@ -62,10 +48,10 @@ def _parse(value: Any) -> Optional[datetime]:
     if not text:
         return None
     try:
-        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt.astimezone(timezone.utc)
+        out = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if out.tzinfo is None:
+            out = out.replace(tzinfo=timezone.utc)
+        return out.astimezone(timezone.utc)
     except Exception:
         return None
 
@@ -77,22 +63,13 @@ def _team_score(left: Any, right: Any) -> float:
         return 0.0
     if a == b:
         return 1.0
-    # API-Football commonly includes/removes suffixes such as City/United after
-    # the generic FC/CF tokens have already been stripped.  Containment plus the
-    # opposite-team, sport and time checks is much safer than a single fuzzy name.
-    shorter, longer = (a, b) if len(a) <= len(b) else (b, a)
-    if len(shorter) >= 5 and shorter in longer:
+    short, long = (a, b) if len(a) <= len(b) else (b, a)
+    if len(short) >= 5 and short in long:
         return 0.96
     return float(SequenceMatcher(None, a, b).ratio())
 
 
-def _result_collector_due_events(self, now: datetime):
-    """Result obligations based on unfinished work, including PRED4.
-
-    This replaces the old hard-coded PRED1/PRED2/PRED3-only predicate.  It also
-    protects against a future model being partly settled while an actual bet is
-    still OPEN by checking the bet ledgers directly.
-    """
+def _due_events_with_all_football_obligations(self, now: datetime):
     cutoff = now - timedelta(minutes=self.min_minutes_after_kickoff)
     return self.db.fetchall(
         """
@@ -102,22 +79,22 @@ def _result_collector_due_events(self, now: datetime):
         WHERE r.event_id IS NULL
           AND e.commence_time<=?
           AND (
-                EXISTS (SELECT 1 FROM signals s WHERE s.event_id=e.event_id AND s.status='OPEN')
-                OR EXISTS (SELECT 1 FROM canonical_bets c WHERE c.event_id=e.event_id AND c.status='OPEN')
-                OR EXISTS (SELECT 1 FROM execution_shadow_bets x WHERE x.event_id=e.event_id AND x.status='OPEN')
-                OR EXISTS (SELECT 1 FROM football_predictive_predictions p WHERE p.event_id=e.event_id AND p.actual_outcome IS NULL)
-                OR EXISTS (SELECT 1 FROM football_predictive_bets b WHERE b.event_id=e.event_id AND b.status='OPEN')
-                OR EXISTS (SELECT 1 FROM football_predictive_market_bets b WHERE b.event_id=e.event_id AND b.status='OPEN')
-                OR EXISTS (SELECT 1 FROM football_predictive2_predictions p WHERE p.event_id=e.event_id AND p.actual_outcome IS NULL)
-                OR EXISTS (SELECT 1 FROM football_predictive2_bets b WHERE b.event_id=e.event_id AND b.status='OPEN')
-                OR EXISTS (SELECT 1 FROM football_predictive2_market_bets b WHERE b.event_id=e.event_id AND b.status='OPEN')
-                OR EXISTS (SELECT 1 FROM football_predictive3_predictions p WHERE p.event_id=e.event_id AND p.actual_outcome IS NULL)
-                OR EXISTS (SELECT 1 FROM football_predictive3_bets b WHERE b.event_id=e.event_id AND b.status='OPEN')
-                OR EXISTS (SELECT 1 FROM football_predictive3_market_bets b WHERE b.event_id=e.event_id AND b.status='OPEN')
-                OR EXISTS (SELECT 1 FROM football_predictive4_predictions p WHERE p.event_id=e.event_id AND p.actual_outcome IS NULL)
-                OR EXISTS (SELECT 1 FROM football_predictive4_bets b WHERE b.event_id=e.event_id AND b.status='OPEN')
-                OR EXISTS (SELECT 1 FROM football_predictive4_market_bets b WHERE b.event_id=e.event_id AND b.status='OPEN')
-              )
+            EXISTS (SELECT 1 FROM signals s WHERE s.event_id=e.event_id AND s.status='OPEN')
+            OR EXISTS (SELECT 1 FROM canonical_bets c WHERE c.event_id=e.event_id AND c.status='OPEN')
+            OR EXISTS (SELECT 1 FROM execution_shadow_bets x WHERE x.event_id=e.event_id AND x.status='OPEN')
+            OR EXISTS (SELECT 1 FROM football_predictive_predictions p WHERE p.event_id=e.event_id AND p.actual_outcome IS NULL)
+            OR EXISTS (SELECT 1 FROM football_predictive_bets b WHERE b.event_id=e.event_id AND b.status='OPEN')
+            OR EXISTS (SELECT 1 FROM football_predictive_market_bets b WHERE b.event_id=e.event_id AND b.status='OPEN')
+            OR EXISTS (SELECT 1 FROM football_predictive2_predictions p WHERE p.event_id=e.event_id AND p.actual_outcome IS NULL)
+            OR EXISTS (SELECT 1 FROM football_predictive2_bets b WHERE b.event_id=e.event_id AND b.status='OPEN')
+            OR EXISTS (SELECT 1 FROM football_predictive2_market_bets b WHERE b.event_id=e.event_id AND b.status='OPEN')
+            OR EXISTS (SELECT 1 FROM football_predictive3_predictions p WHERE p.event_id=e.event_id AND p.actual_outcome IS NULL)
+            OR EXISTS (SELECT 1 FROM football_predictive3_bets b WHERE b.event_id=e.event_id AND b.status='OPEN')
+            OR EXISTS (SELECT 1 FROM football_predictive3_market_bets b WHERE b.event_id=e.event_id AND b.status='OPEN')
+            OR EXISTS (SELECT 1 FROM football_predictive4_predictions p WHERE p.event_id=e.event_id AND p.actual_outcome IS NULL)
+            OR EXISTS (SELECT 1 FROM football_predictive4_bets b WHERE b.event_id=e.event_id AND b.status='OPEN')
+            OR EXISTS (SELECT 1 FROM football_predictive4_market_bets b WHERE b.event_id=e.event_id AND b.status='OPEN')
+          )
         ORDER BY e.commence_time ASC
         """,
         (cutoff.isoformat(),),
@@ -143,47 +120,47 @@ def _pred4_missing_result_events(db, now: datetime):
     )
 
 
-def _pxg_match(db, event: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+def _find_pxg_result(db, event: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
     kickoff = _parse(event.get("commence_time"))
     if kickoff is None:
         return None
-    lo = (kickoff - timedelta(hours=PXG_MATCH_WINDOW_HOURS)).isoformat()
-    hi = (kickoff + timedelta(hours=PXG_MATCH_WINDOW_HOURS)).isoformat()
     rows = db.fetchall(
         """
         SELECT * FROM football_pxg_current_matches
         WHERE sport_key=?
           AND home_goals IS NOT NULL AND away_goals IS NOT NULL
           AND played_at>=? AND played_at<=?
-        ORDER BY played_at ASC,id ASC
+        ORDER BY played_at,id
         """,
-        (event.get("sport_key"), lo, hi),
+        (
+            event.get("sport_key"),
+            (kickoff - timedelta(hours=PXG_WINDOW_HOURS)).isoformat(),
+            (kickoff + timedelta(hours=PXG_WINDOW_HOURS)).isoformat(),
+        ),
     )
-    scored = []
-    for row in rows:
+    ranked = []
+    for raw in rows:
+        row = dict(raw)
         played = _parse(row.get("played_at"))
         if played is None:
             continue
         home = _team_score(event.get("home_team"), row.get("home_team"))
         away = _team_score(event.get("away_team"), row.get("away_team"))
-        if home < MIN_TEAM_MATCH or away < MIN_TEAM_MATCH:
+        if home < 0.90 or away < 0.90 or home + away < 1.84:
             continue
-        pair = home + away
-        if pair < MIN_PAIR_MATCH:
-            continue
-        delta = abs((played - kickoff).total_seconds()) / 3600.0
-        composite = pair - min(delta, PXG_MATCH_WINDOW_HOURS) * 0.002
-        scored.append((composite, pair, -delta, dict(row), home, away, delta))
-    if not scored:
+        hours = abs((played - kickoff).total_seconds()) / 3600.0
+        score = home + away - min(hours, PXG_WINDOW_HOURS) * 0.002
+        ranked.append((score, home + away, -hours, row, home, away, hours))
+    if not ranked:
         return None
-    scored.sort(key=lambda x: (x[0], x[1], x[2]), reverse=True)
-    best = scored[0]
-    if len(scored) > 1 and best[0] - scored[1][0] < MIN_BEST_MARGIN:
+    ranked.sort(reverse=True, key=lambda x: (x[0], x[1], x[2]))
+    best = ranked[0]
+    if len(ranked) > 1 and best[0] - ranked[1][0] < 0.05:
         return None
     out = dict(best[3])
-    out["_home_match"] = best[4]
-    out["_away_match"] = best[5]
-    out["_time_delta_hours"] = best[6]
+    out["match_home"] = best[4]
+    out["match_away"] = best[5]
+    out["time_delta_hours"] = best[6]
     return out
 
 
@@ -193,12 +170,11 @@ def repair_pred4_missing_results(db, now: Optional[datetime] = None) -> Dict[str
     repaired = []
     unresolved = []
     for event in due:
-        match = _pxg_match(db, event)
+        match = _find_pxg_result(db, event)
         if match is None:
             unresolved.append({
                 "event_id": event.get("event_id"),
-                "home_team": event.get("home_team"),
-                "away_team": event.get("away_team"),
+                "fixture": f"{event.get('home_team')} v {event.get('away_team')}",
                 "commence_time": event.get("commence_time"),
             })
             continue
@@ -208,9 +184,9 @@ def repair_pred4_missing_results(db, now: Optional[datetime] = None) -> Dict[str
             "repair": VERSION,
             "fixture_id": match.get("fixture_id"),
             "pxg_played_at": match.get("played_at"),
-            "home_match": round(float(match.get("_home_match") or 0.0), 4),
-            "away_match": round(float(match.get("_away_match") or 0.0), 4),
-            "time_delta_hours": round(float(match.get("_time_delta_hours") or 0.0), 3),
+            "home_match": round(float(match.get("match_home") or 0), 4),
+            "away_match": round(float(match.get("match_away") or 0), 4),
+            "time_delta_hours": round(float(match.get("time_delta_hours") or 0), 3),
         }
         db.execute(
             """
@@ -222,8 +198,10 @@ def repair_pred4_missing_results(db, now: Optional[datetime] = None) -> Dict[str
             """,
             (
                 event["event_id"], utc_now_iso(), match.get("played_at"), hs, aws,
-                "api_football_pxg_repair", json.dumps(provenance, separators=(",", ":")),
-                "A", json.dumps(provenance, separators=(",", ":")),
+                "api_football_pxg_repair",
+                json.dumps(provenance, separators=(",", ":")),
+                "A",
+                json.dumps(provenance, separators=(",", ":")),
             ),
         )
         db.execute("UPDATE events SET status='COMPLETED' WHERE event_id=?", (event["event_id"],))
@@ -244,7 +222,7 @@ def repair_pred4_missing_results(db, now: Optional[datetime] = None) -> Dict[str
     }
 
 
-def _settle_predictive_engines(web_module) -> Dict[str, Any]:
+def _settle_predictive(web_module) -> Dict[str, Any]:
     out: Dict[str, Any] = {}
     engines = (
         ("PRED1", getattr(web_module, "predictive_football_engine", None)),
@@ -266,6 +244,18 @@ def _settle_predictive_engines(web_module) -> Dict[str, Any]:
                 lane[f"{method}_error"] = f"{type(exc).__name__}: {exc}"
         out[label] = lane
     return out
+
+
+def _event_label(db, event_table: str, event_id: Any) -> str:
+    try:
+        row = db.fetchone(f"SELECT * FROM {event_table} WHERE event_id=?", (event_id,)) or {}
+    except Exception:
+        return str(event_id or "")
+    home = row.get("home_team") or row.get("player_one")
+    away = row.get("away_team") or row.get("player_two")
+    if home or away:
+        return f"{home or '?'} v {away or '?'}"
+    return str(event_id or "")
 
 
 def settlement_health(db, now: Optional[datetime] = None) -> Dict[str, Any]:
@@ -293,31 +283,28 @@ def settlement_health(db, now: Optional[datetime] = None) -> Dict[str, Any]:
             item["oldest_commence_time"] = agg.get("oldest")
             if item["stale_open"]:
                 item["status"] = "LAGGING"
-                rows = db.fetchall(
-                    f"""SELECT b.id AS bet_id,b.event_id,b.market_key,b.selection,b.point,
-                               e.commence_time,e.home_team,e.away_team
+                examples = db.fetchall(
+                    f"""SELECT b.id AS bet_id,b.event_id,b.market_key,b.selection,b.point,e.commence_time
                         FROM {table} b JOIN {event_table} e ON e.event_id=b.event_id
                         WHERE b.status='OPEN' AND e.commence_time<=?
-                        ORDER BY e.commence_time ASC,b.id ASC LIMIT 12""",
+                        ORDER BY e.commence_time,b.id LIMIT 12""",
                     (cutoff.isoformat(),),
                 )
-                for row in rows:
+                for raw in examples:
+                    row = dict(raw)
                     kick = _parse(row.get("commence_time"))
-                    age = ((now - kick).total_seconds() / 3600.0) if kick else None
-                    item["examples"].append({
-                        **dict(row),
-                        "age_hours": round(age, 2) if age is not None else None,
-                    })
+                    row["age_hours"] = round((now - kick).total_seconds() / 3600.0, 2) if kick else None
+                    row["fixture"] = _event_label(db, event_table, row.get("event_id"))
+                    item["examples"].append(row)
         except Exception as exc:
             item["status"] = "ERROR"
             item["error"] = f"{type(exc).__name__}: {exc}"
         total += int(item.get("stale_open") or 0)
         lanes.append(item)
     errors = sum(1 for x in lanes if x.get("status") == "ERROR")
-    status = "ERROR" if errors else "LAGGING" if total else "HEALTHY"
     return {
         "version": VERSION,
-        "status": status,
+        "status": "ERROR" if errors else "LAGGING" if total else "HEALTHY",
         "stale_after_hours": STALE_HOURS,
         "checked_at": now.isoformat(),
         "total_stale_open": total,
@@ -330,34 +317,33 @@ def _health_page(web_module) -> str:
     health = settlement_health(web_module.db)
     status = str(health.get("status") or "UNKNOWN")
     css = "ok" if status == "HEALTHY" else "warn" if status == "LAGGING" else "bad"
-    rows = []
-    details = []
+    lane_rows = []
+    detail_rows = []
     for lane in health.get("lanes", []):
         lane_status = str(lane.get("status") or "UNKNOWN")
         lane_css = "ok" if lane_status == "HEALTHY" else "warn" if lane_status == "LAGGING" else "bad"
-        rows.append(
+        lane_rows.append(
             f"<tr><td><strong>{escape(str(lane.get('lane') or ''))}</strong><div class='muted'>{escape(str(lane.get('table') or ''))}</div></td>"
             f"<td class='{lane_css}'><strong>{escape(lane_status)}</strong></td>"
             f"<td>{int(lane.get('stale_open') or 0)}</td><td>{escape(str(lane.get('oldest_commence_time') or '—'))}</td></tr>"
         )
         for ex in lane.get("examples", []):
-            market = str(ex.get("market_key") or "")
-            selection = str(ex.get("selection") or "")
+            age = "—" if ex.get("age_hours") is None else f"{float(ex.get('age_hours')):.1f}h"
             point = "" if ex.get("point") is None else f" {ex.get('point')}"
-            details.append(
+            detail_rows.append(
                 f"<tr><td>{escape(str(lane.get('lane') or ''))}</td>"
-                f"<td>{escape(str(ex.get('home_team') or ''))} v {escape(str(ex.get('away_team') or ''))}</td>"
-                f"<td>{escape(market)} · {escape(selection)}{escape(point)}</td>"
-                f"<td>{escape(str(ex.get('commence_time') or ''))}</td>"
-                f"<td>{'—' if ex.get('age_hours') is None else f'{float(ex['age_hours']):.1f}h'}</td></tr>"
+                f"<td>{escape(str(ex.get('fixture') or ex.get('event_id') or ''))}</td>"
+                f"<td>{escape(str(ex.get('market_key') or ''))} · {escape(str(ex.get('selection') or ''))}{escape(point)}</td>"
+                f"<td>{escape(str(ex.get('commence_time') or ''))}</td><td>{escape(age)}</td></tr>"
             )
+    details_html = "".join(detail_rows) or "<tr><td colspan='5'>No stale primary selections.</td></tr>"
     return f"""<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Settlement Integrity</title><style>{web_module.BASE_STYLE}</style></head><body>
     <a href='/'>← Betting Lab</a><h1>Settlement Integrity <span class='pill {css}'>{escape(status)}</span></h1>
-    <div class='sub'>Primary-ledger stale-open audit. A bet is stale when it is still OPEN more than {STALE_HOURS:.0f} hours after scheduled start.</div>
+    <div class='sub'>Primary-ledger stale-open audit. A row becomes stale after {STALE_HOURS:.0f} hours past scheduled start.</div>
     <div class='grid'><div class='card'><div class='label'>STALE OPEN</div><div class='value'>{int(health.get('total_stale_open') or 0)}</div></div><div class='card'><div class='label'>LANES CHECKED</div><div class='value'>{len(health.get('lanes', []))}</div></div></div>
-    <div class='panel'><h2>Lane health</h2><div class='table-wrap'><table><thead><tr><th>Lane</th><th>Status</th><th>Stale open</th><th>Oldest</th></tr></thead><tbody>{''.join(rows)}</tbody></table></div></div>
-    <div class='panel'><h2>Stale examples</h2><div class='table-wrap'><table><thead><tr><th>Lane</th><th>Fixture</th><th>Pick</th><th>Kickoff</th><th>Age</th></tr></thead><tbody>{''.join(details) or "<tr><td colspan='5'>No stale primary selections.</td></tr>"}</tbody></table></div></div>
-    <div class='muted'>PRED4 old-result repair accepts only high-confidence matches to already-stored API-Football/PXG1 final scores. Unresolved rows remain visible here rather than being guessed.</div>
+    <div class='panel'><h2>Lane health</h2><div class='table-wrap'><table><thead><tr><th>Lane</th><th>Status</th><th>Stale open</th><th>Oldest</th></tr></thead><tbody>{''.join(lane_rows)}</tbody></table></div></div>
+    <div class='panel'><h2>Stale examples</h2><div class='table-wrap'><table><thead><tr><th>Lane</th><th>Fixture</th><th>Pick</th><th>Kickoff</th><th>Age</th></tr></thead><tbody>{details_html}</tbody></table></div></div>
+    <div class='muted'>Old PRED4 misses are only auto-repaired when the stored API-Football/PXG1 final score matches sport, time and both teams at high confidence. Anything ambiguous stays visible instead of being guessed.</div>
     </body></html>"""
 
 
@@ -367,11 +353,18 @@ def _install_routes(web_module) -> None:
         @app.get("/api/settlement-health")
         def settlement_health_api():
             return settlement_health(web_module.db)
+
         @app.get("/settlement-health", response_class=HTMLResponse)
         def settlement_health_page():
             return HTMLResponse(_health_page(web_module))
 
-    root = next((r for r in list(app.router.routes) if getattr(r, "path", None) == "/" and "GET" in (getattr(r, "methods", set()) or set())), None)
+    root = next(
+        (
+            r for r in list(app.router.routes)
+            if getattr(r, "path", None) == "/" and "GET" in (getattr(r, "methods", set()) or set())
+        ),
+        None,
+    )
     if root is None or getattr(root.endpoint, "_settlement_health_wrapped", False):
         return
     original = root.endpoint
@@ -386,15 +379,14 @@ def _install_routes(web_module) -> None:
             return response
         html = response.body.decode("utf-8")
         if "href='/settlement-health'" not in html:
-            link = "<a href='/settlement-health'>Settlement Health</a>"
-            html = html.replace("<div class='nav'>", "<div class='nav'>" + link, 1)
+            html = html.replace("<div class='nav'>", "<div class='nav'><a href='/settlement-health'>Settlement Health</a>", 1)
         try:
-            h = settlement_health(web_module.db)
-            status = str(h.get("status") or "UNKNOWN")
+            health = settlement_health(web_module.db)
+            status = str(health.get("status") or "UNKNOWN")
             css = "ok" if status == "HEALTHY" else "warn" if status == "LAGGING" else "bad"
             panel = (
                 f"<div class='panel'><h2>Settlement Integrity <span class='pill {css}'>{escape(status)}</span></h2>"
-                f"<div class='summary'>Primary ledgers stale-open &gt;{STALE_HOURS:.0f}h: <strong>{int(h.get('total_stale_open') or 0)}</strong>. "
+                f"<div class='summary'>Primary rows still OPEN &gt;{STALE_HOURS:.0f}h after start: <strong>{int(health.get('total_stale_open') or 0)}</strong>. "
                 "<a href='/settlement-health'>Audit settlement →</a></div></div>"
             )
             html = html.replace("</body>", panel + "</body>", 1)
@@ -413,11 +405,13 @@ def install() -> Dict[str, Any]:
         return {"installed": True, "already_installed": True, "version": VERSION}
 
     import web as web_module
-
-    # Patch the live collector instance (and its class for any later instance).
     from results import ResultCollector
-    ResultCollector._due_events = _result_collector_due_events
-    web_module.result_collector._due_events = types.MethodType(_result_collector_due_events, web_module.result_collector)
+
+    ResultCollector._due_events = _due_events_with_all_football_obligations
+    web_module.result_collector._due_events = types.MethodType(
+        _due_events_with_all_football_obligations,
+        web_module.result_collector,
+    )
     _install_routes(web_module)
 
     worker = web_module.worker
@@ -425,49 +419,47 @@ def install() -> Dict[str, Any]:
     original_start = worker.start
 
     def run_guard(stage: str) -> Dict[str, Any]:
-        repair: Dict[str, Any]
-        settled: Dict[str, Any] = {}
         try:
             repair = repair_pred4_missing_results(web_module.db)
-            if int(repair.get("repaired") or 0):
-                settled = _settle_predictive_engines(web_module)
         except Exception as exc:
             repair = {"error": f"{type(exc).__name__}: {exc}"}
+        settled: Dict[str, Any] = {}
+        if int(repair.get("repaired") or 0):
+            settled = _settle_predictive(web_module)
         try:
             health = settlement_health(web_module.db)
         except Exception as exc:
             health = {"status": "ERROR", "error": f"{type(exc).__name__}: {exc}"}
         payload = {"stage": stage, "repair": repair, "settled": settled, "health": health}
-        ok = str(health.get("status") or "ERROR") != "ERROR" and not repair.get("error")
+        ok = not repair.get("error") and health.get("status") != "ERROR"
         try:
-            web_module.db.record_collector_run("SETTLEMENT_INTEGRITY", ok, detail=json.dumps(payload, separators=(",", ":"), default=str))
+            web_module.db.record_collector_run(
+                "SETTLEMENT_INTEGRITY",
+                bool(ok),
+                detail=json.dumps(payload, separators=(",", ":"), default=str),
+            )
         except Exception:
             pass
-        # Always print startup; subsequent cycles only when there is something to
-        # inspect so normal Railway logs remain compact.
         if stage == "startup" or int(repair.get("repaired") or 0) or int(health.get("total_stale_open") or 0) or health.get("status") == "ERROR":
-            print(f"SETTLEMENT_INTEGRITY_{stage.upper()} {json.dumps(payload, separators=(',', ':'), default=str)}", flush=True)
+            print(
+                f"SETTLEMENT_INTEGRITY_{stage.upper()} {json.dumps(payload, separators=(',', ':'), default=str)}",
+                flush=True,
+            )
         return payload
 
     def cycle_with_integrity():
-        # Repair old PRED4 misses before model maintenance so the same cycle can
-        # consume the newly-stored result.  Then run the ordinary worker.
         run_guard("pre_cycle")
         result = original_cycle()
-        # Re-audit after the normal result collector has had its chance to settle
-        # recent fixtures (now including PRED4 obligations).
         run_guard("post_cycle")
         return result
 
     def start_with_integrity():
-        # Lifespan has initialized the schema before worker.start() is called.
         run_guard("startup")
         return original_start()
 
     worker.one_cycle = cycle_with_integrity
     worker.start = start_with_integrity
     worker._settlement_integrity_installed = True
-
     web_module.VERSION = "0.19.51"
     _INSTALLED = True
     return {
