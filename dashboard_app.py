@@ -4,6 +4,7 @@ import app as base_app
 import dashboard_layout_v2
 from dashboard_layout_v2 import install as install_dashboard_layout_v2
 from historical_rescue_patch import install as install_historical_rescue
+from settlement_rescue_final_tennis import install as install_final_tennis_rescue
 
 # Resolve legacy stale-result debt before presenting the dashboard. This only
 # backfills verified event results / voids cancelled events and adds a 72h
@@ -14,6 +15,11 @@ rescue = install_historical_rescue(
     base_app.web_module,
 )
 print(f"HISTORICAL_RESCUE_INSTALL {rescue}", flush=True)
+
+# A same-day tennis result crossed the six-hour stale threshold while the
+# provider result was delayed. Clear it under the existing tennis winner rule.
+final_tennis = install_final_tennis_rescue(base_app.db)
+print(f"HISTORICAL_RESCUE_FINAL_TENNIS {final_tennis}", flush=True)
 
 # Curated homepage up-rev for the settlement rescue release.
 dashboard_layout_v2.VERSION = "0.19.56"
