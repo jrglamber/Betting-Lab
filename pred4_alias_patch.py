@@ -18,6 +18,7 @@ from api_sports_paid_dashboard_patch import install as install_paid_sports_dashb
 from live_yankee_expiry_fallback_patch import install as install_yankee_expiry_fallback
 from api_sports_paid_status_patch import install as install_paid_sports_status
 from live_yankee_results_patch import install as install_yankee_results
+from live_yankee_same_book_only_patch import install as install_yankee_same_book_only
 from hit_rate_multiples_lab import install as install_hit_rate_multiples
 from settlement_integrity_training_fallback_patch import install as install_settlement_integrity
 from settlement_lookback_patch import install as install_settlement_lookback
@@ -35,7 +36,7 @@ CURRENT_ALIASES = {
 }
 
 # Expand PXG1/PRED4 collection only into regular domestic leagues that already
-# exist in Betting Lab's Odds API football universe.  Multiple aliases are
+# exist in Betting Lab's Odds API football universe. Multiple aliases are
 # intentionally explicit because API-Football league labels can vary by season.
 # PRED4's model, minimum-history gates and forecasting rules remain unchanged.
 PRED4_DOMESTIC_LEAGUE_EXPANSION = {
@@ -87,10 +88,14 @@ def apply() -> dict:
     yankee_expiry_fallback = install_yankee_expiry_fallback()
     paid_sports_status = install_paid_sports_status()
     yankee_results = install_yankee_results()
+    # Final assembly authority: never consume a cross-book synthetic card.
+    # Search the whole queue bookmaker-first, permit only bounded same-book
+    # consolidation, and purge/requeue any legacy synthetic card candidates.
+    yankee_same_book_only = install_yankee_same_book_only()
     hit_rate_multiples = install_hit_rate_multiples()
     settlement_integrity = install_settlement_integrity()
     settlement_lookback = install_settlement_lookback()
-    web_module.VERSION = "0.19.54"
+    web_module.VERSION = "0.19.55"
     return {
         "aliases_applied": len(CURRENT_ALIASES),
         "changed": sum(1 for key, value in CURRENT_ALIASES.items() if before.get(key) != value),
@@ -112,6 +117,7 @@ def apply() -> dict:
         "yankee_expiry_fallback": yankee_expiry_fallback,
         "paid_sports_status": paid_sports_status,
         "yankee_results": yankee_results,
+        "yankee_same_book_only": yankee_same_book_only,
         "hit_rate_multiples": hit_rate_multiples,
         "settlement_integrity": settlement_integrity,
         "settlement_lookback": settlement_lookback,
