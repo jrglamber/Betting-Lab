@@ -28,6 +28,10 @@ CURRENT_ALIASES = {
     "sjk seinajoki": "sjk",
     "west ham united": "west ham",
     "queens park rangers": "qpr",
+    # Championship naming used by Odds API vs API-Football.
+    "charlton athletic": "charlton",
+    "west bromwich albion": "west brom",
+    "preston north end": "preston",
 }
 
 # Expand PXG1/PRED4 collection only into regular domestic leagues that already
