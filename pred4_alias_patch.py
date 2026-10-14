@@ -20,6 +20,7 @@ from api_sports_paid_status_patch import install as install_paid_sports_status
 from live_yankee_results_patch import install as install_yankee_results
 from live_yankee_same_book_only_patch import install as install_yankee_same_book_only
 from hit_rate_multiples_lab import install as install_hit_rate_multiples
+from hit_rate_same_book_only_patch import install as install_hit_rate_same_book_only
 from settlement_integrity_training_fallback_patch import install as install_settlement_integrity
 from settlement_lookback_patch import install as install_settlement_lookback
 
@@ -88,14 +89,18 @@ def apply() -> dict:
     yankee_expiry_fallback = install_yankee_expiry_fallback()
     paid_sports_status = install_paid_sports_status()
     yankee_results = install_yankee_results()
-    # Final assembly authority: never consume a cross-book synthetic card.
-    # Search the whole queue bookmaker-first, permit only bounded same-book
-    # consolidation, and purge/requeue any legacy synthetic card candidates.
+    # Final live-Yankee assembly authority: never consume a cross-book synthetic
+    # card. Search the whole queue bookmaker-first and allow only bounded
+    # same-book consolidation.
     yankee_same_book_only = install_yankee_same_book_only()
     hit_rate_multiples = install_hit_rate_multiples()
+    # Apply the same placeability rule to every HR1/HR2 Yankee and Heinz. The
+    # existing synthetic cards remain immutable historical research evidence,
+    # but no new forward synthetic card can be formed or consume candidates.
+    hit_rate_same_book_only = install_hit_rate_same_book_only()
     settlement_integrity = install_settlement_integrity()
     settlement_lookback = install_settlement_lookback()
-    web_module.VERSION = "0.19.55"
+    web_module.VERSION = "0.19.56"
     return {
         "aliases_applied": len(CURRENT_ALIASES),
         "changed": sum(1 for key, value in CURRENT_ALIASES.items() if before.get(key) != value),
@@ -119,6 +124,7 @@ def apply() -> dict:
         "yankee_results": yankee_results,
         "yankee_same_book_only": yankee_same_book_only,
         "hit_rate_multiples": hit_rate_multiples,
+        "hit_rate_same_book_only": hit_rate_same_book_only,
         "settlement_integrity": settlement_integrity,
         "settlement_lookback": settlement_lookback,
         "dashboard_version": web_module.VERSION,
