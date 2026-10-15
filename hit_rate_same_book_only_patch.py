@@ -24,6 +24,7 @@ from math import prod
 from typing import Any, Dict, Mapping, Sequence
 
 import hit_rate_multiples_lab as hr
+import web as web_module
 from db import sanitize_sensitive_text, utc_now_iso
 from telegram_alerts import _send_telegram
 
@@ -439,11 +440,11 @@ def install() -> Dict[str, Any]:
     hr._choose = _choose_same_book
     hr._form = _form_same_book
 
-    # The HR lab has already created its tables by this point in bootstrap.
-    # Mark every existing card as pre-wire, then only notify cards formed after
-    # this deployment. This avoids replaying historical HR results to Telegram.
+    # Mark every existing card as pre-wire before the maintenance loop can send
+    # notifications. Use the shared production web DB explicitly; the HR module
+    # itself intentionally does not expose a web_module attribute.
     try:
-        prewire_seeded = _seed_existing_cards(hr.web_module.db)
+        prewire_seeded = _seed_existing_cards(web_module.db)
     except Exception as exc:
         prewire_seeded = 0
         print(
