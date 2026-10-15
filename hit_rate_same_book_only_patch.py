@@ -1,38 +1,40 @@
 from __future__ import annotations
 
-"""Make every HR1/HR2 forward multiple genuinely placeable at one bookmaker.
+"""Make HR1/HR2 forward multiples placeable and notify Telegram.
 
-The original Hit-Rate Multiples Lab already preferred same-book cards, but it
-only examined the first N ready candidates and fell back to a
-CROSS_BOOK_SYNTHETIC card when that exact group could not be consolidated.
-That is useful as a theoretical research construct, but it is not a bet a user
-can actually place.
-
-This patch changes forward card assembly only:
+Forward assembly policy:
 - HR1 and HR2 are both covered.
 - Yankees (4 legs) and Heinz (6 legs) are both covered.
-- The whole price-ready queue is searched bookmaker-first, rather than only the
-  first N candidates.
+- The whole price-ready queue is searched bookmaker-first.
 - Fully qualifying one-book cards are preferred.
-- If necessary, the existing tightly-bounded price compromise is allowed at a
-  single bookmaker (same leg/card retention thresholds as the frozen lab).
-- If no same-book card is currently possible, candidates stay queued and keep
-  refreshing. A synthetic cross-book card is never created or consumed.
+- The frozen bounded same-book price compromise is allowed when needed.
+- If no same-book card is possible, candidates remain queued.
+- No new CROSS_BOOK_SYNTHETIC card is created.
 
-Historical CROSS_BOOK_SYNTHETIC cards are deliberately retained as immutable
-research evidence and remain clearly labelled non-placeable on the dashboard.
+Telegram policy:
+- Every new placeable HR1/HR2 Yankee or Heinz created after this patch is
+  deployed is sent through the existing Betting Lab Telegram bot.
+- Historical cards are marked PRE_WIRE and are not replayed/spammed.
+- Failed sends are retried on later maintenance cycles (up to five attempts).
+- No bookmaker bet is placed automatically; Telegram is a manual bet-ready
+  notification only.
 """
 
-from collections import defaultdict
 from math import prod
-from typing import Any, Dict, Mapping, Optional, Sequence
+from typing import Any, Dict, Mapping, Sequence
 
 import hit_rate_multiples_lab as hr
+from db import sanitize_sensitive_text, utc_now_iso
+from telegram_alerts import _send_telegram
 
-VERSION = "HIT_RATE_SAME_BOOK_ONLY_V1"
+VERSION = "HIT_RATE_SAME_BOOK_ONLY_V2_TELEGRAM"
 _INSTALLED = False
 _ORIGINAL_CHOOSE = None
 _ORIGINAL_FORM = None
+_ORIGINAL_MAINTENANCE = None
+
+YANKEE_LINES = 11
+HEINZ_LINES = 57
 
 
 def _first_seen(candidate: Mapping[str, Any]) -> str:
@@ -74,8 +76,6 @@ def _verified(states, need: int):
         eligible = [state for state in states if book in state["strict"]]
         if len(eligible) < need:
             continue
-        # Preserve the lab's queue-first behaviour within a bookmaker. The
-        # important change is that we search the whole queue, not just ready[:N].
         chosen = sorted(
             eligible,
             key=lambda state: (
@@ -127,8 +127,6 @@ def _consolidated(states, need: int):
                     "candidate": state["candidate"],
                     "quote": alt,
                     "price_retention": price_retention,
-                    # Match the frozen lab's anchor definition: the target book
-                    # is the candidate's best strict price, not merely available.
                     "anchor": str(state["best"].get("bookmaker_key") or "") == book,
                 }
             )
@@ -136,10 +134,6 @@ def _consolidated(states, need: int):
         if len(options) < need or sum(int(x["anchor"]) for x in options) < min_anchor:
             continue
 
-        # Start with the least-compromised N legs. If that set lacks the lab's
-        # required same-book anchors, replace the weakest non-anchors with the
-        # strongest unused anchors. This maximises retained card price subject
-        # to the frozen anchor requirement without a combinatorial search.
         ranked = sorted(
             options,
             key=lambda x: (
@@ -208,14 +202,11 @@ def _pick_from_ready(db, ready: Sequence[Mapping[str, Any]], need: int, now):
 
 
 def _choose_same_book(db, candidates: Sequence[Mapping[str, Any]], now):
-    """Defensive replacement for any direct callers of the original _choose."""
+    """Defensive replacement for direct callers of the original _choose."""
     picked = _pick_from_ready(db, candidates, len(candidates), now)
     if picked is None:
         return None
     chosen, quotes, mode = picked
-    # A direct _choose caller supplied an exact candidate set, so never silently
-    # substitute a different set. _form_same_book is responsible for whole-queue
-    # candidate selection.
     supplied = [int(x.get("id") or 0) for x in candidates]
     selected = [int(x.get("id") or 0) for x in chosen]
     if supplied != selected:
@@ -236,8 +227,6 @@ def _form_same_book(db, now) -> Dict[str, int]:
         system = str(stream["system_type"])
         need = int(hr.SYSTEMS[system]["legs"])
 
-        # Keep the existing maximum of three new cards per stream/cycle. Each
-        # iteration recomputes the queue after consumed legs are removed.
         for _ in range(3):
             ready = hr._ready(db, policy, exp, system, now)
             if len(ready) < need:
@@ -245,8 +234,6 @@ def _form_same_book(db, now) -> Dict[str, int]:
             picked = _pick_from_ready(db, ready, need, now)
             if picked is None:
                 blocked += 1
-                # Crucial policy: do not consume candidates into a theoretical
-                # cross-book card. Leave them queued for the next quote refresh.
                 break
             candidates, quotes, mode = picked
             if not hr._make_card(db, policy, exp, system, candidates, quotes, mode):
@@ -264,8 +251,180 @@ def _form_same_book(db, now) -> Dict[str, int]:
     }
 
 
+def _ensure_telegram_schema(db) -> None:
+    """Create a separate notification ledger without mutating frozen card data."""
+    db.execute(
+        """CREATE TABLE IF NOT EXISTS hit_rate_telegram_state (
+            card_id INTEGER PRIMARY KEY,
+            status TEXT NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            sent_at TEXT,
+            error TEXT,
+            created_at TEXT NOT NULL
+        )"""
+    )
+
+
+def _seed_existing_cards(db) -> int:
+    """Prevent pre-wire historical cards from being replayed to Telegram."""
+    _ensure_telegram_schema(db)
+    seeded = 0
+    for row in db.fetchall("SELECT id FROM hit_rate_cards ORDER BY id"):
+        card_id = int(row["id"])
+        try:
+            seeded += int(
+                db.execute(
+                    """INSERT INTO hit_rate_telegram_state(card_id,status,attempts,created_at)
+                       VALUES(?,?,?,?) ON CONFLICT(card_id) DO NOTHING""",
+                    (card_id, "PRE_WIRE", 0, utc_now_iso()),
+                )
+                > 0
+            )
+        except Exception:
+            pass
+    return seeded
+
+
+def _market_label(leg: Mapping[str, Any]) -> str:
+    market = str(leg.get("market_key") or "h2h").lower()
+    selection = str(leg.get("selection") or "").strip()
+    point = leg.get("point")
+    if market == "btts":
+        return f"BTTS {selection}".strip()
+    if market == "totals":
+        if point is not None and str(point) not in selection:
+            return f"{selection} {point}".strip()
+        return selection
+    if market == "h2h":
+        return selection
+    return f"{market.replace('_', ' ').title()} {selection}".strip()
+
+
+def _fmt_kickoff(value: Any) -> str:
+    dt = hr._parse(value)
+    if dt is None:
+        return str(value or "—")
+    return dt.strftime("%d %b %H:%M UTC")
+
+
+def _telegram_message(card: Mapping[str, Any], legs: Sequence[Mapping[str, Any]]) -> str:
+    exp = str(card.get("experiment_key") or "HR?")
+    system = str(card.get("system_type") or "MULTIPLE").upper()
+    lines_count = YANKEE_LINES if system == "YANKEE" else HEINZ_LINES
+    stake = float(card.get("reference_stake_gbp") or hr.REFERENCE_STAKE_GBP)
+    bookmaker = str(legs[0].get("bookmaker_title") or legs[0].get("bookmaker_key") or "—") if legs else "—"
+    assembly = str(card.get("assembly_mode") or "SAME_BOOK")
+
+    out = [
+        f"🟢 {exp} {system} — BET READY",
+        "",
+        f"🏦 Bookmaker: {bookmaker}",
+        f"✅ Assembly: {assembly}",
+        f"💷 Reference stake: £{stake:.2f} total · {lines_count} lines (~£{stake/lines_count:.2f}/line)",
+        "",
+    ]
+    for i, leg in enumerate(legs, 1):
+        fixture = f"{leg.get('home_team') or ''} v {leg.get('away_team') or ''}".strip()
+        out.extend(
+            [
+                f"{i}. [{leg.get('source_lane')}] {_market_label(leg)} @ {float(leg.get('entry_odds') or 0):.2f}",
+                f"   {fixture} · {_fmt_kickoff(leg.get('commence_time'))}",
+            ]
+        )
+    out.extend(["", "Manual placement only — no automatic bookmaker order has been submitted."])
+    return "\n".join(out)
+
+
+def _send_pending(db, settings, limit: int = 8) -> Dict[str, Any]:
+    _ensure_telegram_schema(db)
+    enabled = bool(getattr(settings, "telegram_alerts_enabled", False))
+    if not enabled:
+        return {"enabled": False, "eligible": 0, "sent": 0, "failed": 0, "reason": "disabled"}
+
+    token = str(getattr(settings, "telegram_bot_token", "") or "").strip()
+    chat = str(getattr(settings, "telegram_chat_id", "") or "").strip()
+    if not token or not chat:
+        return {"enabled": True, "eligible": 0, "sent": 0, "failed": 0, "reason": "credentials_missing"}
+
+    cards = db.fetchall(
+        """SELECT c.*
+           FROM hit_rate_cards c
+           LEFT JOIN hit_rate_telegram_state t ON t.card_id=c.id
+           WHERE t.card_id IS NULL OR (t.status='FAILED' AND t.attempts < 5)
+           ORDER BY c.id
+           LIMIT ?""",
+        (limit,),
+    )
+
+    sent = failed = skipped = 0
+    for card in cards:
+        card_id = int(card["id"])
+        mode = str(card.get("assembly_mode") or "")
+        legs = db.fetchall("SELECT * FROM hit_rate_legs WHERE card_id=? ORDER BY leg_order", (card_id,))
+        expected = int(hr.SYSTEMS.get(str(card.get("system_type") or ""), {}).get("legs") or 0)
+
+        if not mode.startswith("SAME_BOOK") or len(legs) != expected or expected not in (4, 6):
+            db.execute(
+                """INSERT INTO hit_rate_telegram_state(card_id,status,attempts,created_at)
+                   VALUES(?,?,?,?)
+                   ON CONFLICT(card_id) DO UPDATE SET status=excluded.status""",
+                (card_id, "SKIPPED_NON_PLACEABLE", 0, utc_now_iso()),
+            )
+            skipped += 1
+            continue
+
+        prior = db.fetchone("SELECT * FROM hit_rate_telegram_state WHERE card_id=?", (card_id,)) or {}
+        attempts = int(prior.get("attempts") or 0)
+        try:
+            _send_telegram(token, chat, _telegram_message(card, legs))
+            db.execute(
+                """INSERT INTO hit_rate_telegram_state(card_id,status,attempts,sent_at,error,created_at)
+                   VALUES(?,?,?,?,?,?)
+                   ON CONFLICT(card_id) DO UPDATE SET
+                     status=excluded.status,attempts=excluded.attempts,
+                     sent_at=excluded.sent_at,error=NULL""",
+                (card_id, "SENT", attempts + 1, utc_now_iso(), None, utc_now_iso()),
+            )
+            sent += 1
+        except Exception as exc:
+            db.execute(
+                """INSERT INTO hit_rate_telegram_state(card_id,status,attempts,error,created_at)
+                   VALUES(?,?,?,?,?)
+                   ON CONFLICT(card_id) DO UPDATE SET
+                     status=excluded.status,attempts=excluded.attempts,error=excluded.error""",
+                (card_id, "FAILED", attempts + 1, sanitize_sensitive_text(exc), utc_now_iso()),
+            )
+            failed += 1
+
+    return {
+        "enabled": True,
+        "eligible": len(cards),
+        "sent": sent,
+        "failed": failed,
+        "skipped": skipped,
+    }
+
+
+def _maintenance_with_telegram(db, collector, settings, now=None):
+    out = _ORIGINAL_MAINTENANCE(db, collector, settings, now)
+    try:
+        out["telegram"] = _send_pending(db, settings)
+    except Exception as exc:
+        out["telegram"] = {
+            "enabled": bool(getattr(settings, "telegram_alerts_enabled", False)),
+            "sent": 0,
+            "failed": 1,
+            "error": sanitize_sensitive_text(exc),
+        }
+        print(
+            f"HIT_RATE_TELEGRAM_ERROR {type(exc).__name__}: {sanitize_sensitive_text(exc)}",
+            flush=True,
+        )
+    return out
+
+
 def install() -> Dict[str, Any]:
-    global _INSTALLED, _ORIGINAL_CHOOSE, _ORIGINAL_FORM
+    global _INSTALLED, _ORIGINAL_CHOOSE, _ORIGINAL_FORM, _ORIGINAL_MAINTENANCE
     if _INSTALLED:
         return {
             "installed": True,
@@ -275,8 +434,24 @@ def install() -> Dict[str, Any]:
 
     _ORIGINAL_CHOOSE = hr._choose
     _ORIGINAL_FORM = hr._form
+    _ORIGINAL_MAINTENANCE = hr.run_maintenance
+
     hr._choose = _choose_same_book
     hr._form = _form_same_book
+
+    # The HR lab has already created its tables by this point in bootstrap.
+    # Mark every existing card as pre-wire, then only notify cards formed after
+    # this deployment. This avoids replaying historical HR results to Telegram.
+    try:
+        prewire_seeded = _seed_existing_cards(hr.web_module.db)
+    except Exception as exc:
+        prewire_seeded = 0
+        print(
+            f"HIT_RATE_TELEGRAM_SEED_ERROR {type(exc).__name__}: {sanitize_sensitive_text(exc)}",
+            flush=True,
+        )
+
+    hr.run_maintenance = _maintenance_with_telegram
     _INSTALLED = True
 
     return {
@@ -290,6 +465,10 @@ def install() -> Dict[str, Any]:
         "bounded_consolidation": True,
         "cross_book_forward_enabled": False,
         "historical_synthetics_retained": True,
+        "telegram_enabled_for_new_cards": True,
+        "telegram_manual_only": True,
+        "telegram_prewire_cards_seeded": prewire_seeded,
+        "telegram_retry_attempts": 5,
         "thresholds": {
             "min_leg_price_retention": hr.MIN_LEG_PRICE_RETENTION,
             "min_required_odds_retention": hr.MIN_REQUIRED_ODDS_RETENTION,
