@@ -23,6 +23,7 @@ from hit_rate_multiples_lab import install as install_hit_rate_multiples
 from hit_rate_same_book_only_patch import install as install_hit_rate_same_book_only
 from settlement_integrity_training_fallback_patch import install as install_settlement_integrity
 from settlement_lookback_patch import install as install_settlement_lookback
+from first_half_goal_lab import install as install_first_half_goal_lab
 
 CURRENT_ALIASES = {
     "stade lavallois": "laval",
@@ -100,7 +101,8 @@ def apply() -> dict:
     hit_rate_same_book_only = install_hit_rate_same_book_only()
     settlement_integrity = install_settlement_integrity()
     settlement_lookback = install_settlement_lookback()
-    web_module.VERSION = "0.19.56"
+    first_half_goal_lab = install_first_half_goal_lab(web_module.app, web_module.db, web_module.BASE_STYLE)
+    web_module.VERSION = "0.19.57"
     return {
         "aliases_applied": len(CURRENT_ALIASES),
         "changed": sum(1 for key, value in CURRENT_ALIASES.items() if before.get(key) != value),
@@ -127,5 +129,6 @@ def apply() -> dict:
         "hit_rate_same_book_only": hit_rate_same_book_only,
         "settlement_integrity": settlement_integrity,
         "settlement_lookback": settlement_lookback,
+        "first_half_goal_lab": first_half_goal_lab,
         "dashboard_version": web_module.VERSION,
     }
