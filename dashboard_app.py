@@ -23,6 +23,7 @@ from tennis_predictive import install_schema as install_tpred_schema
 from tennis_predictive_runtime_patch import install as install_tpred_runtime
 from tennis_predictive_dashboard import install as install_tpred_dashboard
 from tennis_predictive_export_patch import install as install_tpred_exports
+from pocket_freeze_hr2_patch import install as install_audited_pockets
 
 # Resolve legacy stale-result debt before presenting the dashboard. This only
 # backfills verified event results / voids cancelled events and adds a 72h
@@ -84,6 +85,14 @@ print(f"DASHBOARD_PROVIDER_CREDITS {credit_panel}", flush=True)
 cumulative_pnl = install_cumulative_pnl(base_app.db)
 print(f"CUMULATIVE_PNL_DASHBOARDS {cumulative_pnl}", flush=True)
 
+# Freeze the robust pockets found in the 17-Oct full audit and extend HR2 only
+# where the opportunity was absent from Live Yankee/HR1/HR2. HR1 remains
+# unchanged; the HR2 policy version is bumped so historical cards/candidates are
+# immutable. No singles/execution authority is changed and no provider calls are
+# added by this patch.
+audited_pockets = install_audited_pockets(base_app.db)
+print(f"AUDITED_POCKETS_INSTALL {audited_pockets}", flush=True)
+
 # The original curated homepage intentionally showed only Live Yankee assembly
 # state, so its Settled and ROI cells were hard-coded as em dashes. The
 # cumulative-P/L patch now exposes canonical placeable settlement totals on the
@@ -144,9 +153,9 @@ print(f"TPRED_RUNTIME {tpred_runtime}", flush=True)
 tpred_exports = install_tpred_exports()
 print(f"TPRED_EXPORTS {tpred_exports}", flush=True)
 
-# Curated homepage up-rev for FHG1, TPRED, Live Yankee parity, and
-# non-blocking/stale-while-refresh dashboard serving.
-dashboard_layout_v2.VERSION = "0.19.68"
+# Curated homepage up-rev for FHG1, TPRED, frozen audited pockets, Live Yankee
+# parity, and non-blocking/stale-while-refresh dashboard serving.
+dashboard_layout_v2.VERSION = "0.19.69"
 install_dashboard_layout_v2(base_app.app, base_app.db, base_app.BASE_STYLE)
 first_half_goal_curated = install_first_half_goal_curated(base_app.app, base_app.db)
 print(f"FIRST_HALF_GOAL_CURATED {first_half_goal_curated}", flush=True)
