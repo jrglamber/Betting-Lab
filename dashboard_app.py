@@ -19,6 +19,10 @@ from settlement_rescue_final_tennis import install as install_final_tennis_rescu
 from settlement_rescue_queue_guard import install as install_rescue_queue_guard
 from first_half_goal_lab import run_maintenance as run_first_half_goal_maintenance
 from first_half_goal_curated_patch import install as install_first_half_goal_curated
+from tennis_predictive import install_schema as install_tpred_schema
+from tennis_predictive_runtime_patch import install as install_tpred_runtime
+from tennis_predictive_dashboard import install as install_tpred_dashboard
+from tennis_predictive_export_patch import install as install_tpred_exports
 
 # Resolve legacy stale-result debt before presenting the dashboard. This only
 # backfills verified event results / voids cancelled events and adds a 72h
@@ -126,12 +130,28 @@ except Exception as exc:
     }
 print(f"FIRST_HALF_GOAL_STARTUP {first_half_goal_startup}", flush=True)
 
-# Curated homepage up-rev for the FHG1 research section, Live Yankee parity,
-# and non-blocking/stale-while-refresh dashboard serving.
-dashboard_layout_v2.VERSION = "0.19.67"
+# TPRED is research-only and deliberately reuses the already-collected tennis
+# universe. Install its schema synchronously, but let the existing tennis worker
+# cycle perform historical walk-forward/forward forecast maintenance so startup
+# and web serving remain responsive. Zero new provider credits are required.
+tpred_schema = install_tpred_schema(base_app.db)
+print(f"TPRED_SCHEMA {tpred_schema}", flush=True)
+tpred_runtime = install_tpred_runtime(
+    getattr(base_app.web_module, "tennis_engine", None),
+    base_app.db,
+)
+print(f"TPRED_RUNTIME {tpred_runtime}", flush=True)
+tpred_exports = install_tpred_exports()
+print(f"TPRED_EXPORTS {tpred_exports}", flush=True)
+
+# Curated homepage up-rev for FHG1, TPRED, Live Yankee parity, and
+# non-blocking/stale-while-refresh dashboard serving.
+dashboard_layout_v2.VERSION = "0.19.68"
 install_dashboard_layout_v2(base_app.app, base_app.db, base_app.BASE_STYLE)
 first_half_goal_curated = install_first_half_goal_curated(base_app.app, base_app.db)
 print(f"FIRST_HALF_GOAL_CURATED {first_half_goal_curated}", flush=True)
+tpred_dashboard = install_tpred_dashboard(base_app.app, base_app.db, base_app.BASE_STYLE)
+print(f"TPRED_DASHBOARD {tpred_dashboard}", flush=True)
 dashboard_responsiveness = install_dashboard_responsiveness(base_app.app)
 print(f"DASHBOARD_RESPONSIVENESS {dashboard_responsiveness}", flush=True)
 
