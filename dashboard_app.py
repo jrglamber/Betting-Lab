@@ -1,7 +1,10 @@
 """Production bootstrap that layers the curated homepage over the existing app."""
 
+import re
+
 import app as base_app
 import dashboard_layout_v2
+import live_yankee_feed
 from credit_policy_unlimited_patch import install as install_credit_policy_unlimited
 from cumulative_pnl_dashboard_patch import install as install_cumulative_pnl
 from dashboard_credit_usage_patch import install as install_dashboard_credit_usage
@@ -76,6 +79,39 @@ print(f"DASHBOARD_PROVIDER_CREDITS {credit_panel}", flush=True)
 cumulative_pnl = install_cumulative_pnl(base_app.db)
 print(f"CUMULATIVE_PNL_DASHBOARDS {cumulative_pnl}", flush=True)
 
+# The original curated homepage intentionally showed only Live Yankee assembly
+# state, so its Settled and ROI cells were hard-coded as em dashes. The
+# cumulative-P/L patch now exposes canonical placeable settlement totals on the
+# Live Yankee scoreboard; wire those values into the homepage summary row too.
+_original_curated_page = dashboard_layout_v2._page
+
+
+def _curated_page_with_live_yankee_settlement(db, base_style: str) -> str:
+    html = _original_curated_page(db, base_style)
+    try:
+        yankee = dict(live_yankee_feed.scoreboard(db))
+        pnl = dict(yankee.get("cumulative_pnl") or {})
+        settled = int(pnl.get("placeable_settled_cards") or 0)
+        roi_value = pnl.get("placeable_roi_pct")
+        roi = "—" if roi_value is None else f"{float(roi_value):.1f}%"
+        pattern = (
+            r"(<tr><td><a href='/live-yankee'><strong>Live Yankee Feed</strong></a></td>"
+            r"<td>[^<]*</td>)<td>—</td><td>—</td>"
+            r"(<td class='muted'>[^<]*</td></tr>)"
+        )
+        html = re.sub(
+            pattern,
+            lambda m: f"{m.group(1)}<td>{settled}</td><td>{roi}</td>{m.group(2)}",
+            html,
+            count=1,
+        )
+    except Exception:
+        pass
+    return html
+
+
+dashboard_layout_v2._page = _curated_page_with_live_yankee_settlement
+
 # Seed and audit FHG1 immediately at process startup so a same-day slate is
 # frozen before kickoff rather than waiting for a later worker cycle. The lane
 # uses football-data.co.uk half-time scores only and has no betting authority.
@@ -89,8 +125,8 @@ except Exception as exc:
     }
 print(f"FIRST_HALF_GOAL_STARTUP {first_half_goal_startup}", flush=True)
 
-# Curated homepage up-rev for the FHG1 research section.
-dashboard_layout_v2.VERSION = "0.19.65"
+# Curated homepage up-rev for the FHG1 research section and Live Yankee parity.
+dashboard_layout_v2.VERSION = "0.19.66"
 install_dashboard_layout_v2(base_app.app, base_app.db, base_app.BASE_STYLE)
 first_half_goal_curated = install_first_half_goal_curated(base_app.app, base_app.db)
 print(f"FIRST_HALF_GOAL_CURATED {first_half_goal_curated}", flush=True)
