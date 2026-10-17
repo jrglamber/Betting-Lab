@@ -89,10 +89,10 @@ except Exception as exc:
     }
 print(f"FIRST_HALF_GOAL_STARTUP {first_half_goal_startup}", flush=True)
 
-# Curated homepage up-rev for the FHG1 research lane.
-dashboard_layout_v2.VERSION = "0.19.64"
+# Curated homepage up-rev for the FHG1 research section.
+dashboard_layout_v2.VERSION = "0.19.65"
 install_dashboard_layout_v2(base_app.app, base_app.db, base_app.BASE_STYLE)
-first_half_goal_curated = install_first_half_goal_curated(base_app.app)
+first_half_goal_curated = install_first_half_goal_curated(base_app.app, base_app.db)
 print(f"FIRST_HALF_GOAL_CURATED {first_half_goal_curated}", flush=True)
 
 app = base_app.app
