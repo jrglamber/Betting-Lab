@@ -11,6 +11,7 @@ from dashboard_credit_usage_patch import install as install_dashboard_credit_usa
 from dashboard_layout_v2 import install as install_dashboard_layout_v2
 from dashboard_metric_parity_patch import install as install_dashboard_metric_parity
 from dashboard_api_sports_health_patch import install as install_dashboard_api_sports_health
+from dashboard_responsiveness_patch import install as install_dashboard_responsiveness
 from historical_rescue_patch import install as install_historical_rescue
 from postponed_event_revival_patch import install as install_postponed_event_revival
 from settlement_rescue_final_football import install as install_final_football_rescue
@@ -125,10 +126,13 @@ except Exception as exc:
     }
 print(f"FIRST_HALF_GOAL_STARTUP {first_half_goal_startup}", flush=True)
 
-# Curated homepage up-rev for the FHG1 research section and Live Yankee parity.
-dashboard_layout_v2.VERSION = "0.19.66"
+# Curated homepage up-rev for the FHG1 research section, Live Yankee parity,
+# and non-blocking/stale-while-refresh dashboard serving.
+dashboard_layout_v2.VERSION = "0.19.67"
 install_dashboard_layout_v2(base_app.app, base_app.db, base_app.BASE_STYLE)
 first_half_goal_curated = install_first_half_goal_curated(base_app.app, base_app.db)
 print(f"FIRST_HALF_GOAL_CURATED {first_half_goal_curated}", flush=True)
+dashboard_responsiveness = install_dashboard_responsiveness(base_app.app)
+print(f"DASHBOARD_RESPONSIVENESS {dashboard_responsiveness}", flush=True)
 
 app = base_app.app
