@@ -13,6 +13,8 @@ from postponed_event_revival_patch import install as install_postponed_event_rev
 from settlement_rescue_final_football import install as install_final_football_rescue
 from settlement_rescue_final_tennis import install as install_final_tennis_rescue
 from settlement_rescue_queue_guard import install as install_rescue_queue_guard
+from first_half_goal_lab import run_maintenance as run_first_half_goal_maintenance
+from first_half_goal_curated_patch import install as install_first_half_goal_curated
 
 # Resolve legacy stale-result debt before presenting the dashboard. This only
 # backfills verified event results / voids cancelled events and adds a 72h
@@ -74,8 +76,23 @@ print(f"DASHBOARD_PROVIDER_CREDITS {credit_panel}", flush=True)
 cumulative_pnl = install_cumulative_pnl(base_app.db)
 print(f"CUMULATIVE_PNL_DASHBOARDS {cumulative_pnl}", flush=True)
 
-# Curated homepage up-rev for cumulative P/L observability.
-dashboard_layout_v2.VERSION = "0.19.63"
+# Seed and audit FHG1 immediately at process startup so a same-day slate is
+# frozen before kickoff rather than waiting for a later worker cycle. The lane
+# uses football-data.co.uk half-time scores only and has no betting authority.
+try:
+    first_half_goal_startup = run_first_half_goal_maintenance(base_app.db)
+except Exception as exc:
+    first_half_goal_startup = {
+        "ok": False,
+        "error": f"{type(exc).__name__}: {exc}",
+        "betting_authority": False,
+    }
+print(f"FIRST_HALF_GOAL_STARTUP {first_half_goal_startup}", flush=True)
+
+# Curated homepage up-rev for the FHG1 research lane.
+dashboard_layout_v2.VERSION = "0.19.64"
 install_dashboard_layout_v2(base_app.app, base_app.db, base_app.BASE_STYLE)
+first_half_goal_curated = install_first_half_goal_curated(base_app.app)
+print(f"FIRST_HALF_GOAL_CURATED {first_half_goal_curated}", flush=True)
 
 app = base_app.app
