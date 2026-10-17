@@ -1,0 +1,183 @@
+from __future__ import annotations
+
+"""Presentation-only dashboard for TPRED1/TPRED2."""
+
+import inspect
+from html import escape
+from typing import Any, Dict, Mapping
+
+from fastapi.responses import HTMLResponse
+
+from tennis_predictive import scoreboard, pocket_report
+
+VERSION = "TPRED_DASHBOARD_V1"
+
+
+def _fmt(value: Any, digits: int = 2, suffix: str = "") -> str:
+    try:
+        return f"{float(value):.{digits}f}{suffix}"
+    except Exception:
+        return "—"
+
+
+def _metric(label: str, value: str, note: str = "") -> str:
+    return (
+        "<div class='card metric-card'>"
+        f"<div class='label'>{escape(label)}</div>"
+        f"<div class='value'>{escape(value)}</div>"
+        f"<div class='muted'>{escape(note)}</div>"
+        "</div>"
+    )
+
+
+def _model_panel(name: str, model: Mapping[str, Any]) -> str:
+    ready = dict(model.get("evidence_ready_walkforward") or {})
+    all_wf = dict(model.get("all_walkforward") or {})
+    return f"""
+    <div class='panel'>
+      <h3>{escape(name)}</h3>
+      <div class='grid compact'>
+        {_metric("Walk-forward samples", str(ready.get("samples") or 0), f"{all_wf.get('samples') or 0} including low-history matches")}
+        {_metric("Accuracy", _fmt(ready.get("accuracy_pct"),1,"%"), "chronological walk-forward")}
+        {_metric("Brier", _fmt(ready.get("brier"),4), "lower is better")}
+        {_metric("Log loss", _fmt(ready.get("log_loss"),4), "lower is better")}
+        {_metric("Market Brier", _fmt(ready.get("market_brier"),4), f"{ready.get('market_samples') or 0} comparable samples")}
+        {_metric("Vs market", _fmt(ready.get("brier_improvement_vs_market_pct"),1,"%"), "positive = lower Brier than market")}
+      </div>
+    </div>
+    """
+
+
+def _pocket_rows(values: Mapping[str, Any]) -> str:
+    rows = []
+    for label, m in values.items():
+        rows.append(
+            "<tr>"
+            f"<td><strong>{escape(str(label))}</strong></td>"
+            f"<td>{int(m.get('settled') or 0)}</td>"
+            f"<td>{_fmt(m.get('net_pnl_units'),2)}</td>"
+            f"<td>{_fmt(m.get('net_roi_pct'),1,'%')}</td>"
+            f"<td>{int(m.get('ab_clv_samples') or 0)}</td>"
+            f"<td>{_fmt(m.get('avg_ab_clv_pct'),2,'%')}</td>"
+            "</tr>"
+        )
+    return "".join(rows)
+
+
+def _home_section(db) -> str:
+    s = scoreboard(db)
+    m1 = dict((s.get("models") or {}).get("TPRED1") or {})
+    m2 = dict((s.get("models") or {}).get("TPRED2") or {})
+    r1 = dict(m1.get("evidence_ready_walkforward") or {})
+    r2 = dict(m2.get("evidence_ready_walkforward") or {})
+    return f"""
+    <section id='tennis-predictive'>
+      <div class='section-title'>
+        <div><h2>Tennis Predictive Lab (TPRED)</h2>
+        <div class='muted'>TPRED1 = pure tennis history model. TPRED2 = market-aware challenger. Research only; no betting authority.</div></div>
+        <a href='/tennis-predictive'>Full detail →</a>
+      </div>
+      <div class='grid compact'>
+        {_metric("TPRED1 Brier", _fmt(r1.get("brier"),4), f"{r1.get('samples') or 0} evidence-ready walk-forward matches")}
+        {_metric("TPRED1 accuracy", _fmt(r1.get("accuracy_pct"),1,"%"), "chronological only")}
+        {_metric("TPRED2 Brier", _fmt(r2.get("brier"),4), f"{r2.get('samples') or 0} market-comparable matches")}
+        {_metric("TPRED2 vs market", _fmt(r2.get("brier_improvement_vs_market_pct"),1,"%"), "positive is better")}
+        {_metric("Forward TPRED1", str(m1.get("forward_open") or 0), "open frozen selection forecasts")}
+        {_metric("Rich features", str(s.get("rich_feature_status") or "—"), "ranking/surface/serve source not yet connected")}
+      </div>
+    </section>
+    """
+
+
+def _page(db, base_style: str) -> str:
+    s = scoreboard(db)
+    p = pocket_report(db)
+    m1 = dict((s.get("models") or {}).get("TPRED1") or {})
+    m2 = dict((s.get("models") or {}).get("TPRED2") or {})
+    disagreements = s.get("top_forward_disagreements") or []
+    drows = []
+    for r in disagreements:
+        drows.append(
+            "<tr>"
+            f"<td>{escape(str(r.get('tour') or ''))}</td>"
+            f"<td><strong>{escape(str(r.get('selection') or ''))}</strong><div class='muted'>v {escape(str(r.get('opponent') or ''))}</div></td>"
+            f"<td>{_fmt(r.get('probability'),3)}</td>"
+            f"<td>{_fmt(r.get('market_probability'),3)}</td>"
+            f"<td>{_fmt(r.get('model_edge_vs_market_pct'),1,'%')}</td>"
+            f"<td>{escape(str(r.get('confidence_tier') or ''))}</td>"
+            f"<td>{escape(str(r.get('commence_time') or ''))}</td>"
+            "</tr>"
+        )
+    dbody = "".join(drows) or "<tr><td colspan='7'>No current model/market disagreement forecasts.</td></tr>"
+
+    return f"""<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>
+    <title>Tennis Predictive Lab</title><style>{base_style}</style></head><body><main class='wrap'>
+    <div class='section-title'><div><h1>Tennis Predictive Lab</h1>
+      <div class='muted'>Independent TPRED research stack. No execution or betting authority.</div></div><a href='/'>← Main dashboard</a></div>
+    <div class='grid compact'>
+      {_metric("Historical results", str(s.get("historical_results") or 0), "all stored completed tennis matches")}
+      {_metric("Feature snapshots", str(s.get("feature_snapshot_rows") or 0), str(s.get("rich_feature_status") or ""))}
+      {_metric("Last walk-forward", str(s.get("last_walkforward_at") or "—"), "rebuilds only when result count changes")}
+      {_metric("Provider credits", "0", "TPRED uses stored data only")}
+    </div>
+    {_model_panel("TPRED1 — pure tennis", m1)}
+    {_model_panel("TPRED2 — market-aware challenger", m2)}
+    <div class='panel'><h2>Current forward disagreement</h2>
+      <p class='muted'>Largest frozen differences between TPRED and the latest pre-match consensus. These are observations, not bets.</p>
+      <div class='table-wrap'><table><thead><tr><th>Tour</th><th>Selection</th><th>Model P</th><th>Market P</th><th>Δ</th><th>Tier</th><th>Starts</th></tr></thead><tbody>{dbody}</tbody></table></div>
+    </div>
+    <div class='panel'><h2>TS1 descriptive pockets</h2><p class='muted'>Tracked alongside TPRED, never used as hard-coded model rules.</p>
+      <h3>Odds bands</h3><div class='table-wrap'><table><thead><tr><th>Band</th><th>Settled</th><th>Net P&L</th><th>ROI</th><th>A/B CLV n</th><th>A/B CLV</th></tr></thead><tbody>{_pocket_rows(p.get('odds_bands') or {})}</tbody></table></div>
+      <h3>TS1 edge bands</h3><div class='table-wrap'><table><thead><tr><th>Band</th><th>Settled</th><th>Net P&L</th><th>ROI</th><th>A/B CLV n</th><th>A/B CLV</th></tr></thead><tbody>{_pocket_rows(p.get('edge_bands') or {})}</tbody></table></div>
+      <h3>Tour</h3><div class='table-wrap'><table><thead><tr><th>Tour</th><th>Settled</th><th>Net P&L</th><th>ROI</th><th>A/B CLV n</th><th>A/B CLV</th></tr></thead><tbody>{_pocket_rows(p.get('tours') or {})}</tbody></table></div>
+      <h3>Reference depth</h3><div class='table-wrap'><table><thead><tr><th>Books</th><th>Settled</th><th>Net P&L</th><th>ROI</th><th>A/B CLV n</th><th>A/B CLV</th></tr></thead><tbody>{_pocket_rows(p.get('reference_books') or {})}</tbody></table></div>
+    </div>
+    <div class='panel'><h2>Model governance</h2>
+      <p>TPRED1 uses only previous match results: Elo, rolling form, recent workload/rest and low-weight head-to-head. TPRED2 blends TPRED1 with the de-vigged market consensus.</p>
+      <p class='muted'>Surface, rankings and serve/return statistics are intentionally not guessed. Their feature table exists but remains WAITING_FOR_SOURCE until a reliable licensed source is connected. Model weights are frozen in V1; today's profitable TS1 pockets are diagnostics only.</p>
+    </div>
+    </main></body></html>"""
+
+
+def install(app, db, base_style: str) -> Dict[str, Any]:
+    paths = {getattr(r, "path", None) for r in app.router.routes}
+    if "/tennis-predictive" not in paths:
+        @app.get("/tennis-predictive", response_class=HTMLResponse)
+        def tennis_predictive_page():
+            return HTMLResponse(_page(db, base_style))
+
+    root = next((r for r in list(app.router.routes) if getattr(r,"path",None)=="/" and "GET" in (getattr(r,"methods",set()) or set())), None)
+    if root is None:
+        return {"installed": False, "reason": "root_not_found", "version": VERSION}
+    if getattr(root.endpoint, "_tpred_home_section", False):
+        return {"installed": True, "already_installed": True, "version": VERSION}
+
+    original = root.endpoint
+    name = root.name
+    include = getattr(root, "include_in_schema", True)
+    app.router.routes.remove(root)
+
+    async def wrapped_home():
+        response = original()
+        if inspect.isawaitable(response):
+            response = await response
+        if not isinstance(response, HTMLResponse):
+            return response
+        html = response.body.decode("utf-8", errors="replace")
+        if "<section id='tennis-predictive'>" not in html:
+            block = _home_section(db)
+            anchor = "<section id='predictive'>"
+            if anchor in html:
+                html = html.replace(anchor, block + anchor, 1)
+            else:
+                html = html.replace("</body>", block + "</body>", 1)
+        if "href='/tennis-predictive'" not in html:
+            marker = "<a href='/tennis'>Tennis</a>"
+            if marker in html:
+                html = html.replace(marker, marker + " · <a href='/tennis-predictive'>TPRED</a>", 1)
+        headers = {k:v for k,v in response.headers.items() if k.lower()!="content-length"}
+        return HTMLResponse(html, status_code=response.status_code, headers=headers)
+
+    wrapped_home._tpred_home_section = True
+    app.add_api_route("/", wrapped_home, methods=["GET"], response_class=HTMLResponse, name=name, include_in_schema=include)
+    return {"installed": True, "version": VERSION, "route": "/tennis-predictive", "homepage_section": "#tennis-predictive"}
