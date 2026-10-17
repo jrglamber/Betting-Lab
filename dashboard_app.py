@@ -3,6 +3,7 @@
 import app as base_app
 import dashboard_layout_v2
 from credit_policy_unlimited_patch import install as install_credit_policy_unlimited
+from cumulative_pnl_dashboard_patch import install as install_cumulative_pnl
 from dashboard_credit_usage_patch import install as install_dashboard_credit_usage
 from dashboard_layout_v2 import install as install_dashboard_layout_v2
 from dashboard_metric_parity_patch import install as install_dashboard_metric_parity
@@ -67,8 +68,14 @@ print(f"DASHBOARD_API_SPORTS_HEALTH {api_health}", flush=True)
 credit_panel = install_dashboard_credit_usage(base_app.db)
 print(f"DASHBOARD_PROVIDER_CREDITS {credit_panel}", flush=True)
 
-# Curated homepage up-rev for provider-credit observability.
-dashboard_layout_v2.VERSION = "0.19.62"
+# Surface running settled P/L on both execution-facing multiples dashboards.
+# This is presentation/accounting only. Synthetic cross-book research cards are
+# deliberately excluded from the placeable headline totals.
+cumulative_pnl = install_cumulative_pnl(base_app.db)
+print(f"CUMULATIVE_PNL_DASHBOARDS {cumulative_pnl}", flush=True)
+
+# Curated homepage up-rev for cumulative P/L observability.
+dashboard_layout_v2.VERSION = "0.19.63"
 install_dashboard_layout_v2(base_app.app, base_app.db, base_app.BASE_STYLE)
 
 app = base_app.app
