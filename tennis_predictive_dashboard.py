@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Presentation-only dashboard for TPRED1/TPRED2/TPRED3."""
 
+from datetime import datetime, timezone
 import inspect
 from html import escape
 from typing import Any, Dict, Mapping
@@ -12,7 +13,7 @@ from tennis_predictive import scoreboard, pocket_report
 from tennis_predictive3 import scoreboard as scoreboard3
 from tennis_rich_source import status as rich_source_status
 
-VERSION = "TPRED_DASHBOARD_V2"
+VERSION = "TPRED_DASHBOARD_V2_1"
 
 
 def _fmt(value: Any, digits: int = 2, suffix: str = "") -> str:
@@ -20,6 +21,19 @@ def _fmt(value: Any, digits: int = 2, suffix: str = "") -> str:
         return f"{float(value):.{digits}f}{suffix}"
     except Exception:
         return "—"
+
+
+def _short_ts(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return "—"
+    try:
+        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc).strftime("%d %b %H:%M UTC")
+    except Exception:
+        return text[:19].replace("T", " ")
 
 
 def _metric(label: str, value: str, note: str = "") -> str:
@@ -157,7 +171,7 @@ def _page(db, base_style: str) -> str:
         {_metric("Status", str(s3.get("status") or "BACKFILLING"), "research-only lifecycle")}
         {_metric("Players mapped", str(rich.get("players") or 0), "provider IDs cached locally")}
         {_metric("TPRED3 forward", str(s3.get("forward_open") or 0), f"{s3.get('forward_settled') or 0} settled")}
-        {_metric("Last TPRED3 rebuild", str(s3.get("last_walkforward_at") or "—"), "rebuilds as chronological evidence grows")}
+        {_metric("Last TPRED3 rebuild", _short_ts(s3.get("last_walkforward_at")), "rebuilds as chronological evidence grows")}
       </div>
     </div>
     <div class='panel'><h2>Current TPRED1/2 forward disagreement</h2>
