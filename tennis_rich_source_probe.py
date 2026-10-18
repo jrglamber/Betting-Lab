@@ -3,8 +3,8 @@ from __future__ import annotations
 """Bounded connectivity probe for the optional RapidAPI tennis rich-data source.
 
 This is diagnostics only. It never changes TPRED forecasts, betting authority,
-or stored research data. The probe makes at most one small fixtures request per
-dataset (ATP/WTA) and never logs the API key or response bodies.
+or stored research data. The external probe is opt-in so routine Railway deploys
+do not burn provider requests after connectivity has already been validated.
 """
 
 import os
@@ -12,7 +12,7 @@ from typing import Any, Dict
 
 import requests
 
-VERSION = "TENNIS_RICH_SOURCE_PROBE_V1"
+VERSION = "TENNIS_RICH_SOURCE_PROBE_V1_1"
 HOST = "tennis-api-atp-wta-itf.p.rapidapi.com"
 BASE_URL = f"https://{HOST}"
 
@@ -37,6 +37,18 @@ def _count_rows(payload: Any) -> int:
 
 
 def probe() -> Dict[str, Any]:
+    enabled = os.getenv("TENNIS_RICH_SOURCE_PROBE_ENABLED", "").strip().lower()
+    if enabled not in {"1", "true", "yes", "on"}:
+        return {
+            "ok": True,
+            "version": VERSION,
+            "skipped": True,
+            "reason": "one_off_probe_disabled",
+            "requests": 0,
+            "betting_authority": False,
+            "data_written": False,
+        }
+
     key = os.getenv("TENNIS_RAPIDAPI_KEY", "").strip()
     if not key:
         return {
