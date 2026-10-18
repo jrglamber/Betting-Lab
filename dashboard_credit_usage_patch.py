@@ -15,7 +15,7 @@ from typing import Any, Dict, List
 
 import dashboard_layout_v2
 
-VERSION = "DASHBOARD_PROVIDER_CREDITS_V2"
+VERSION = "DASHBOARD_PROVIDER_CREDITS_V2_1"
 MONTHLY_PROVIDER_BUDGET = 100_000
 _INSTALLED = False
 _ORIGINAL_PAGE = None
@@ -107,6 +107,31 @@ def _usage(db) -> Dict[str, Any]:
             }
         )
 
+    # Aggregate the same ledger by run family as well. This is the cleanest
+    # answer to 'which subsystem should we throttle?' because a single subsystem
+    # may fan out across many sports.
+    seven_by_type: Dict[str, int] = {}
+    seven_runs_by_type: Dict[str, int] = {}
+    yesterday_by_type: Dict[str, int] = {}
+    for row in seven:
+        key = str(row.get("run_type") or "UNKNOWN")
+        seven_by_type[key] = seven_by_type.get(key, 0) + int(row.get("credits") or 0)
+        seven_runs_by_type[key] = seven_runs_by_type.get(key, 0) + int(row.get("runs") or 0)
+    for row in yesterday:
+        key = str(row.get("run_type") or "UNKNOWN")
+        yesterday_by_type[key] = yesterday_by_type.get(key, 0) + int(row.get("credits") or 0)
+    run_type_totals = [
+        {
+            "run_type": key,
+            "yesterday": yesterday_by_type.get(key, 0),
+            "seven_days": credits,
+            "avg_day": credits / 7.0,
+            "runs": seven_runs_by_type.get(key, 0),
+        }
+        for key, credits in seven_by_type.items()
+    ]
+    run_type_totals.sort(key=lambda row: int(row["seven_days"]), reverse=True)
+
     return {
         "today": today_used,
         "yesterday": yesterday_used,
@@ -115,6 +140,7 @@ def _usage(db) -> Dict[str, Any]:
         "budget": MONTHLY_PROVIDER_BUDGET,
         "projected_pct": projected_pct,
         "top_spend": top_spend,
+        "run_type_totals": run_type_totals,
     }
 
 
@@ -127,16 +153,17 @@ def _metric(label: str, value: str, note: str = "", css: str = "") -> str:
     )
 
 
-def _spend_table(rows: List[Dict[str, Any]]) -> str:
+def _spend_table(rows: List[Dict[str, Any]], label_key: str = "sport_key") -> str:
     if not rows:
         return "<div class='muted'>No paid-run attribution available yet.</div>"
     body = []
     for row in rows[:12]:
         lane = str(row["run_type"])
-        sport = str(row["sport_key"] or "all")
+        secondary = str(row.get(label_key) or "") if label_key else ""
+        subtitle = f"<div class='muted'>{escape(secondary)}</div>" if secondary else ""
         body.append(
             "<tr>"
-            f"<td><strong>{escape(lane)}</strong><div class='muted'>{escape(sport)}</div></td>"
+            f"<td><strong>{escape(lane)}</strong>{subtitle}</td>"
             f"<td>{int(row['yesterday']):,}</td>"
             f"<td>{int(row['seven_days']):,}</td>"
             f"<td>{float(row['avg_day']):,.0f}</td>"
@@ -168,10 +195,12 @@ def _panel(db) -> str:
     return (
         "<section id='credits'>"
         "<div class='section-title'><div><h2>Provider Credits</h2>"
-        "<div class='muted'>Actual paid-provider spend. The attribution table shows which run types and sports are consuming the allowance so weak lanes can be cut selectively.</div>"
+        "<div class='muted'>Actual paid-provider spend. Attribution shows which paid subsystem and sport consume the allowance so weak lanes can be cut selectively.</div>"
         "</div></div>"
         f"<div class='grid compact'>{cards}</div>"
-        "<h3>Top paid spend</h3>"
+        "<h3>Spend by subsystem</h3>"
+        f"{_spend_table(list(u['run_type_totals']), label_key='')}"
+        "<h3>Top paid sport lanes</h3>"
         f"{_spend_table(list(u['top_spend']))}"
         "</section>"
     )
@@ -182,8 +211,6 @@ def install(db) -> Dict[str, Any]:
     if _INSTALLED:
         return {"installed": True, "already_installed": True, "version": VERSION}
 
-    # Print the same attribution at startup so Railway can be audited without
-    # scraping the rendered dashboard.
     diagnostic = _usage(db)
     print(
         "PROVIDER_CREDIT_BREAKDOWN "
@@ -192,6 +219,7 @@ def install(db) -> Dict[str, Any]:
                 "yesterday": diagnostic["yesterday"],
                 "avg7": round(float(diagnostic["avg7"]), 2),
                 "projected30": round(float(diagnostic["projected30"]), 2),
+                "run_type_totals": list(diagnostic["run_type_totals"])[:12],
                 "top_spend": list(diagnostic["top_spend"])[:12],
             }
         ),
