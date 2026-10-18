@@ -15,7 +15,7 @@ from typing import Any, Dict, List
 
 import dashboard_layout_v2
 
-VERSION = "DASHBOARD_PROVIDER_CREDITS_V2_1"
+VERSION = "DASHBOARD_PROVIDER_CREDITS_V2_2"
 MONTHLY_PROVIDER_BUDGET = 100_000
 _INSTALLED = False
 _ORIGINAL_PAGE = None
@@ -179,6 +179,23 @@ def _spend_table(rows: List[Dict[str, Any]], label_key: str = "sport_key") -> st
     )
 
 
+def _collapsible(title: str, content: str) -> str:
+    # Native <details> keeps this dependency-free and mobile friendly. It is
+    # intentionally closed by default so the headline provider-credit tiles
+    # remain prominent without the attribution tables dominating the page.
+    return (
+        "<details style='margin:14px 0;border:1px solid rgba(148,163,184,.22);"
+        "border-radius:12px;padding:0 14px;background:rgba(15,23,42,.18)'>"
+        "<summary style='cursor:pointer;padding:14px 0;font-size:1.05rem;font-weight:700;"
+        "list-style-position:inside'>"
+        f"{escape(title)}"
+        "<span class='muted' style='font-size:.85rem;font-weight:400;margin-left:8px'>Tap to expand</span>"
+        "</summary>"
+        f"<div style='padding:0 0 14px'>{content}</div>"
+        "</details>"
+    )
+
+
 def _panel(db) -> str:
     u = _usage(db)
     projection_css = "good" if float(u["projected30"]) <= float(u["budget"]) else "badx"
@@ -192,16 +209,21 @@ def _panel(db) -> str:
             _metric("Total provider budget", f"{int(u['budget']):,}", "monthly credit allowance"),
         )
     )
+    subsystem = _collapsible(
+        "Spend by subsystem",
+        _spend_table(list(u["run_type_totals"]), label_key=""),
+    )
+    sports = _collapsible(
+        "Top paid sport lanes",
+        _spend_table(list(u["top_spend"])),
+    )
     return (
         "<section id='credits'>"
         "<div class='section-title'><div><h2>Provider Credits</h2>"
         "<div class='muted'>Actual paid-provider spend. Attribution shows which paid subsystem and sport consume the allowance so weak lanes can be cut selectively.</div>"
         "</div></div>"
         f"<div class='grid compact'>{cards}</div>"
-        "<h3>Spend by subsystem</h3>"
-        f"{_spend_table(list(u['run_type_totals']), label_key='')}"
-        "<h3>Top paid sport lanes</h3>"
-        f"{_spend_table(list(u['top_spend']))}"
+        f"{subsystem}{sports}"
         "</section>"
     )
 
@@ -251,4 +273,5 @@ def install(db) -> Dict[str, Any]:
         "monthly_provider_budget": MONTHLY_PROVIDER_BUDGET,
         "placement": "after_executive_snapshot",
         "spend_attribution": True,
+        "spend_sections_collapsed_by_default": True,
     }
