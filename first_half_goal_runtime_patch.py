@@ -7,8 +7,8 @@ from typing import Any, Dict
 
 from first_half_goal_lab import run_maintenance
 
-VERSION = "FHG1_HEARTBEAT_MAINT_V2"
-HEARTBEAT_SECONDS = 15 * 60
+VERSION = "FHG1_HEARTBEAT_MAINT_V2_1"
+HEARTBEAT_SECONDS = 5 * 60
 _INSTALLED = False
 _MAINT_LOCK = threading.Lock()
 
@@ -16,7 +16,7 @@ _MAINT_LOCK = threading.Lock()
 def _run_once(db, source: str) -> None:
     # Never overlap startup/worker/heartbeat maintenance. The underlying source
     # modules have their own due-throttles (6h history, 30m API-Football
-    # settlement), so a 15m wake-up does not mean a paid call every 15 minutes.
+    # settlement), so a 5m wake-up does not mean a paid call every 5 minutes.
     if not _MAINT_LOCK.acquire(blocking=False):
         return
     try:
@@ -77,15 +77,17 @@ def install(web_module, db) -> Dict[str, Any]:
     worker._fhg1_worker_maint = True
 
     # More importantly, FHG1 now has its own lightweight heartbeat and no longer
-    # depends on the large worker cycle finishing. Wait one heartbeat before the
-    # first pass because dashboard_app already performs an immediate startup pass.
+    # depends on the large worker cycle finishing. The API-Football fallback has
+    # its own 30m due-throttle, so checking every five minutes only reduces wait
+    # after a result becomes due; it does not multiply provider calls.
     def heartbeat() -> None:
         print(
             f"FHG1_HEARTBEAT started interval_seconds={HEARTBEAT_SECONDS}",
             flush=True,
         )
+        waiter = threading.Event()
         while True:
-            threading.Event().wait(HEARTBEAT_SECONDS)
+            waiter.wait(HEARTBEAT_SECONDS)
             _run_once(db, "heartbeat")
 
     thread = threading.Thread(target=heartbeat, daemon=True, name="fhg1-heartbeat")
