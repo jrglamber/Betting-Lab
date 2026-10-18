@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Attach TPRED maintenance and rich-source research workers to tennis runtime."""
 
+from datetime import datetime, timezone
 import threading
 import time
 from typing import Any, Dict
@@ -10,14 +11,43 @@ from tennis_predictive import run_maintenance
 import tennis_predictive3 as tpred3
 from tennis_predictive3_safety_patch import install as install_tpred3_safety
 from tennis_predictive3_refresh_patch import install as install_tpred3_refresh
+import tennis_rich_source as rich_source
 from tennis_rich_context import maintenance as run_rich_context_maintenance
 from tennis_rich_source import maintenance as run_rich_maintenance
 from tennis_rich_source import status as rich_status
 
-VERSION = "TPRED_RUNTIME_PATCH_V5"
+VERSION = "TPRED_RUNTIME_PATCH_V6"
 RICH_FIRST_DELAY_SECONDS = 20
 RICH_BACKFILL_INTERVAL_SECONDS = 15 * 60
 RICH_IDLE_INTERVAL_SECONDS = 4 * 60 * 60
+
+# One-day acceleration for the initial paid rich-data cache fill. This is
+# deliberately date-scoped so the normal provider guard restores itself after
+# 18 Oct 2026 UTC without any Railway config change or follow-up deployment.
+TEMP_BOOST_DATE_UTC = "2026-10-18"
+TEMP_DAILY_CAP = 7500
+TEMP_CYCLE_CAP = 500
+NORMAL_DAILY_CAP = int(rich_source.DAILY_REQUEST_CAP)
+NORMAL_CYCLE_CAP = int(rich_source.PER_CYCLE_CAP)
+
+
+def _rich_limits(now: datetime | None = None) -> Dict[str, Any]:
+    now = now or datetime.now(timezone.utc)
+    boosted = now.astimezone(timezone.utc).date().isoformat() == TEMP_BOOST_DATE_UTC
+    daily_cap = max(NORMAL_DAILY_CAP, TEMP_DAILY_CAP) if boosted else NORMAL_DAILY_CAP
+    cycle_cap = max(NORMAL_CYCLE_CAP, TEMP_CYCLE_CAP) if boosted else NORMAL_CYCLE_CAP
+    # RichClient reads DAILY_REQUEST_CAP at construction time, so update the
+    # module guard immediately before each maintenance pass.
+    rich_source.DAILY_REQUEST_CAP = int(daily_cap)
+    return {
+        "boosted": boosted,
+        "date_utc": now.astimezone(timezone.utc).date().isoformat(),
+        "daily_cap": int(daily_cap),
+        "cycle_cap": int(cycle_cap),
+        "normal_daily_cap": NORMAL_DAILY_CAP,
+        "normal_cycle_cap": NORMAL_CYCLE_CAP,
+        "boost_expires_after_utc_date": TEMP_BOOST_DATE_UTC,
+    }
 
 
 def _stats_backlog(db) -> int:
@@ -54,13 +84,17 @@ def _start_rich_worker(tennis_engine, db) -> bool:
         time.sleep(RICH_FIRST_DELAY_SECONDS)
         while True:
             try:
+                limits = _rich_limits()
+
                 # Base collector: result universe + cached per-match stats.
-                result = run_rich_maintenance(db)
+                result = run_rich_maintenance(db, max_requests=int(limits["cycle_cap"]))
+                result = dict(result or {})
+                result["temporary_backfill_boost"] = limits
                 print(f"TPRED_RICH_MAINTENANCE {result}", flush=True)
 
                 # Separate chronological context: dated rankings + upcoming
                 # fixture surface. This deliberately never uses today's rank
-                # for a historical prediction.
+                # for a historical prediction. It shares the same daily guard.
                 context = run_rich_context_maintenance(db)
                 print(f"TPRED_RICH_CONTEXT {context}", flush=True)
 
@@ -107,6 +141,7 @@ def install(tennis_engine, db) -> Dict[str, Any]:
     # Track that cache growth separately so the walk-forward is refreshed when
     # serve/return evidence fills in without a new match/ranking row.
     tpred3_refresh = install_tpred3_refresh(db)
+    limits = _rich_limits()
 
     original = tennis_engine.one_cycle
 
@@ -145,9 +180,10 @@ def install(tennis_engine, db) -> Dict[str, Any]:
         },
         "tpred3": tpred3_safety,
         "tpred3_stats_refresh": tpred3_refresh,
+        "temporary_rich_backfill_boost": limits,
         "odds_api_provider_credits": 0,
         "tpred3_provider_requests": 0,
         "rich_provider": "RapidAPI Tennis",
-        "rich_provider_daily_cap": 2500,
+        "rich_provider_daily_cap": int(limits["daily_cap"]),
         "betting_authority": False,
     }
