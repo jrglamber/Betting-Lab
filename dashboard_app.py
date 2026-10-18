@@ -19,6 +19,7 @@ from settlement_rescue_final_tennis import install as install_final_tennis_rescu
 from settlement_rescue_queue_guard import install as install_rescue_queue_guard
 from first_half_goal_lab import run_maintenance as run_first_half_goal_maintenance
 from first_half_goal_runtime_patch import install as install_first_half_goal_runtime
+from first_half_goal_settlement_patch import install as install_first_half_goal_settlement
 from first_half_goal_curated_patch import install as install_first_half_goal_curated
 from tennis_predictive import install_schema as install_tpred_schema
 from tennis_predictive_runtime_patch import install as install_tpred_runtime
@@ -127,9 +128,15 @@ def _curated_page_with_live_yankee_settlement(db, base_style: str) -> str:
 
 dashboard_layout_v2._page = _curated_page_with_live_yankee_settlement
 
+# football-data.co.uk remains the FHG1 historical/training source, but it can
+# publish weekend results with a material delay. Install a settlement-only
+# API-Football fallback before the startup maintenance pass. It reads only the
+# half-time score of already-frozen candidates and never changes their forecast.
+first_half_goal_settlement = install_first_half_goal_settlement(base_app.db)
+print(f"FIRST_HALF_GOAL_SETTLEMENT {first_half_goal_settlement}", flush=True)
+
 # Seed and audit FHG1 immediately at process startup so a same-day slate is
-# frozen before kickoff rather than waiting for a later worker cycle. The lane
-# uses football-data.co.uk half-time scores only and has no betting authority.
+# frozen before kickoff rather than waiting for a later worker cycle.
 try:
     first_half_goal_startup = run_first_half_goal_maintenance(base_app.db)
 except Exception as exc:
@@ -142,7 +149,7 @@ print(f"FIRST_HALF_GOAL_STARTUP {first_half_goal_startup}", flush=True)
 
 # Startup alone is not enough to settle completed FHG1 candidates on a long-
 # running container. Attach the same idempotent maintenance pass to the normal
-# worker cycle; its own source-due throttle prevents repeated history downloads.
+# worker cycle; source-specific throttles prevent repeated external requests.
 first_half_goal_runtime = install_first_half_goal_runtime(
     base_app.web_module,
     base_app.db,
@@ -164,8 +171,8 @@ tpred_exports = install_tpred_exports()
 print(f"TPRED_EXPORTS {tpred_exports}", flush=True)
 
 # Curated homepage up-rev for FHG1, TPRED, frozen audited pockets, Live Yankee
-# parity, recurring FHG1 settlement, and non-blocking dashboard serving.
-dashboard_layout_v2.VERSION = "0.19.70"
+# parity, recurring/timely FHG1 settlement, and non-blocking dashboard serving.
+dashboard_layout_v2.VERSION = "0.19.71"
 install_dashboard_layout_v2(base_app.app, base_app.db, base_app.BASE_STYLE)
 first_half_goal_curated = install_first_half_goal_curated(base_app.app, base_app.db)
 print(f"FIRST_HALF_GOAL_CURATED {first_half_goal_curated}", flush=True)
