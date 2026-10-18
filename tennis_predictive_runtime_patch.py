@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-"""Attach TPRED maintenance and the rich-source cache to tennis research runtime."""
+"""Attach TPRED maintenance and rich-source research workers to tennis runtime."""
 
 import threading
 import time
 from typing import Any, Dict
 
 from tennis_predictive import run_maintenance
+from tennis_rich_context import maintenance as run_rich_context_maintenance
 from tennis_rich_source import maintenance as run_rich_maintenance
 from tennis_rich_source import status as rich_status
 
-VERSION = "TPRED_RUNTIME_PATCH_V2"
+VERSION = "TPRED_RUNTIME_PATCH_V3"
 RICH_FIRST_DELAY_SECONDS = 20
 RICH_BACKFILL_INTERVAL_SECONDS = 15 * 60
 RICH_IDLE_INTERVAL_SECONDS = 4 * 60 * 60
@@ -25,8 +26,16 @@ def _start_rich_worker(tennis_engine, db) -> bool:
         time.sleep(RICH_FIRST_DELAY_SECONDS)
         while True:
             try:
+                # Base collector: result universe + cached per-match stats.
                 result = run_rich_maintenance(db)
                 print(f"TPRED_RICH_MAINTENANCE {result}", flush=True)
+
+                # Separate chronological context: dated rankings + upcoming
+                # fixture surface. This deliberately never uses today's rank
+                # for a historical prediction.
+                context = run_rich_context_maintenance(db)
+                print(f"TPRED_RICH_CONTEXT {context}", flush=True)
+
                 state = rich_status(db)
                 cursor = state.get("history_cursor")
                 end = state.get("history_end")
