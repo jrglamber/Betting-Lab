@@ -18,6 +18,7 @@ from settlement_rescue_final_football import install as install_final_football_r
 from settlement_rescue_final_tennis import install as install_final_tennis_rescue
 from settlement_rescue_queue_guard import install as install_rescue_queue_guard
 from first_half_goal_lab import run_maintenance as run_first_half_goal_maintenance
+from first_half_goal_runtime_patch import install as install_first_half_goal_runtime
 from first_half_goal_curated_patch import install as install_first_half_goal_curated
 from tennis_predictive import install_schema as install_tpred_schema
 from tennis_predictive_runtime_patch import install as install_tpred_runtime
@@ -139,6 +140,15 @@ except Exception as exc:
     }
 print(f"FIRST_HALF_GOAL_STARTUP {first_half_goal_startup}", flush=True)
 
+# Startup alone is not enough to settle completed FHG1 candidates on a long-
+# running container. Attach the same idempotent maintenance pass to the normal
+# worker cycle; its own source-due throttle prevents repeated history downloads.
+first_half_goal_runtime = install_first_half_goal_runtime(
+    base_app.web_module,
+    base_app.db,
+)
+print(f"FIRST_HALF_GOAL_RUNTIME {first_half_goal_runtime}", flush=True)
+
 # TPRED is research-only and deliberately reuses the already-collected tennis
 # universe. Install its schema synchronously, but let the existing tennis worker
 # cycle perform historical walk-forward/forward forecast maintenance so startup
@@ -154,8 +164,8 @@ tpred_exports = install_tpred_exports()
 print(f"TPRED_EXPORTS {tpred_exports}", flush=True)
 
 # Curated homepage up-rev for FHG1, TPRED, frozen audited pockets, Live Yankee
-# parity, and non-blocking/stale-while-refresh dashboard serving.
-dashboard_layout_v2.VERSION = "0.19.69"
+# parity, recurring FHG1 settlement, and non-blocking dashboard serving.
+dashboard_layout_v2.VERSION = "0.19.70"
 install_dashboard_layout_v2(base_app.app, base_app.db, base_app.BASE_STYLE)
 first_half_goal_curated = install_first_half_goal_curated(base_app.app, base_app.db)
 print(f"FIRST_HALF_GOAL_CURATED {first_half_goal_curated}", flush=True)
