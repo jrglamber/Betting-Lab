@@ -28,6 +28,7 @@ from tennis_predictive_export_patch import install as install_tpred_exports
 from tennis_rich_source_probe import probe as probe_tennis_rich_source
 from pocket_freeze_hr2_patch import install as install_audited_pockets
 from multiples_funnel_diagnostic_patch import install as install_multiples_funnel_diagnostic
+from multiples_theoretical_queue_patch import install as install_multiples_theoretical_queue
 
 # Resolve legacy stale-result debt before presenting the dashboard. This only
 # backfills verified event results / voids cancelled events and adds a 72h
@@ -96,6 +97,13 @@ print(f"CUMULATIVE_PNL_DASHBOARDS {cumulative_pnl}", flush=True)
 # added by this patch.
 audited_pockets = install_audited_pockets(base_app.db)
 print(f"AUDITED_POCKETS_INSTALL {audited_pockets}", flush=True)
+
+# Move the multiples observation boundary upstream: theoretical/model/reference
+# selections can queue up to 72h before start, while the existing 30h paid quote
+# horizon, freshness, target bands, same-book checks and betting authority stay
+# unchanged. HR uses a new policy version so older forward evidence is not mixed.
+multiples_theoretical_queue = install_multiples_theoretical_queue(base_app.db)
+print(f"MULTIPLES_THEORETICAL_QUEUE {multiples_theoretical_queue}", flush=True)
 
 # The original curated homepage intentionally showed only Live Yankee assembly
 # state, so its Settled and ROI cells were hard-coded as em dashes. The
@@ -185,9 +193,9 @@ tpred_exports = install_tpred_exports()
 print(f"TPRED_EXPORTS {tpred_exports}", flush=True)
 
 # Curated homepage up-rev for FHG1, TPRED, frozen audited pockets, Live Yankee
-# parity, the queue-to-price funnel, recurring/timely FHG1 settlement, and
-# non-blocking dashboard serving.
-dashboard_layout_v2.VERSION = "0.19.72"
+# parity, the queue-to-price funnel, pre-price candidate queues,
+# recurring/timely FHG1 settlement, and non-blocking dashboard serving.
+dashboard_layout_v2.VERSION = "0.19.73"
 install_dashboard_layout_v2(base_app.app, base_app.db, base_app.BASE_STYLE)
 multiples_funnel = install_multiples_funnel_diagnostic(base_app.app, base_app.db)
 print(f"MULTIPLES_FUNNEL_INSTALL {multiples_funnel}", flush=True)
