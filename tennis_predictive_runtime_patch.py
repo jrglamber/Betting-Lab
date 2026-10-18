@@ -9,6 +9,7 @@ from typing import Any, Dict
 from tennis_predictive import run_maintenance
 import tennis_predictive3 as tpred3
 from tennis_predictive3_safety_patch import install as install_tpred3_safety
+from tennis_predictive3_refresh_patch import install as install_tpred3_refresh
 from tennis_rich_context import maintenance as run_rich_context_maintenance
 from tennis_rich_source import maintenance as run_rich_maintenance
 from tennis_rich_source import status as rich_status
@@ -102,6 +103,10 @@ def install(tennis_engine, db) -> Dict[str, Any]:
     # Install the leakage/stat-schema guard before any TPRED3 maintenance can
     # run. This bumps TPRED3 to V2 and keeps old experimental rows versioned.
     tpred3_safety = install_tpred3_safety()
+    # Historical rich matches often arrive before their detailed match stats.
+    # Track that cache growth separately so the walk-forward is refreshed when
+    # serve/return evidence fills in without a new match/ranking row.
+    tpred3_refresh = install_tpred3_refresh(db)
 
     original = tennis_engine.one_cycle
 
@@ -139,6 +144,7 @@ def install(tennis_engine, db) -> Dict[str, Any]:
             "idle_requires_stats_backlog_zero": True,
         },
         "tpred3": tpred3_safety,
+        "tpred3_stats_refresh": tpred3_refresh,
         "odds_api_provider_credits": 0,
         "tpred3_provider_requests": 0,
         "rich_provider": "RapidAPI Tennis",
