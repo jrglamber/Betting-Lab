@@ -18,11 +18,12 @@ import requests
 import first_half_goal_lab as fhg
 from db import sanitize_sensitive_text
 
-VERSION = "FHG1_API_FOOTBALL_SETTLEMENT_V2_1"
+VERSION = "FHG1_API_FOOTBALL_SETTLEMENT_V2_2"
 BASE_URL = "https://v3.football.api-sports.io/fixtures"
 MIN_AGE_MINUTES = 60
 POLL_MINUTES = 30
 REQUEST_TIMEOUT = 20
+SOURCE_STATE_PREFIX = "FHG1:API_FOOTBALL_SETTLEMENT_V2_2"
 
 # Stable API-Football competition IDs for the FHG1 league universe.
 API_LEAGUES = {
@@ -238,7 +239,10 @@ def _settle_from_api(db, now: datetime) -> int:
         "User-Agent": "Project-Exit-Plan-Betting-Lab/FHG1-settlement",
     }
     for (sport, day_text), candidates in grouped.items():
-        key = f"FHG1:API_FOOTBALL_SETTLEMENT:{sport}:{day_text}"
+        # Version the throttle key when matcher semantics change. That permits a
+        # one-time immediate recheck of candidates previously missed only due to
+        # provider naming, without reducing the normal 30-minute polling cadence.
+        key = f"{SOURCE_STATE_PREFIX}:{sport}:{day_text}"
         if not _due(db, key, now):
             continue
         league_id = API_LEAGUES[sport]
