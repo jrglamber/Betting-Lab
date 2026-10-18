@@ -29,6 +29,7 @@ from tennis_rich_source_probe import probe as probe_tennis_rich_source
 from pocket_freeze_hr2_patch import install as install_audited_pockets
 from multiples_funnel_diagnostic_patch import install as install_multiples_funnel_diagnostic
 from multiples_theoretical_queue_patch import install as install_multiples_theoretical_queue
+from api_sports_settlement_side_patch import reconcile_ncaaf
 
 # Resolve legacy stale-result debt before presenting the dashboard. This only
 # backfills verified event results / voids cancelled events and adds a 72h
@@ -77,6 +78,15 @@ print(f"DASHBOARD_METRIC_PARITY {parity}", flush=True)
 # diagnostics use. This fixes the false '0 current-season games' dashboard tile.
 api_health = install_dashboard_api_sports_health()
 print(f"DASHBOARD_API_SPORTS_HEALTH {api_health}", flush=True)
+
+# NCAAF price-linked shadow bets can carry Odds-API mascot names while the
+# provider forecast carries the school-only label. Reconcile historical settled
+# accounting by the already-matched event's home/away side; zero provider calls.
+try:
+    ncaaf_settlement_repair = reconcile_ncaaf(base_app.db)
+except Exception as exc:
+    ncaaf_settlement_repair = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+print(f"NCAAF_SETTLEMENT_SIDE_REPAIR {ncaaf_settlement_repair}", flush=True)
 
 # Restore provider-credit observability from the legacy dashboard near the top
 # of the curated homepage. This is presentation-only and reads the existing
@@ -193,9 +203,10 @@ tpred_exports = install_tpred_exports()
 print(f"TPRED_EXPORTS {tpred_exports}", flush=True)
 
 # Curated homepage up-rev for FHG1, TPRED, frozen audited pockets, Live Yankee
-# parity, the queue-to-price funnel, pre-price candidate queues,
-# recurring/timely FHG1 settlement, and non-blocking dashboard serving.
-dashboard_layout_v2.VERSION = "0.19.73"
+# parity, the queue-to-price funnel, pre-price candidate queues, corrected
+# API-Sports settlement accounting, recurring/timely FHG1 settlement, and
+# non-blocking dashboard serving.
+dashboard_layout_v2.VERSION = "0.19.74"
 install_dashboard_layout_v2(base_app.app, base_app.db, base_app.BASE_STYLE)
 multiples_funnel = install_multiples_funnel_diagnostic(base_app.app, base_app.db)
 print(f"MULTIPLES_FUNNEL_INSTALL {multiples_funnel}", flush=True)
