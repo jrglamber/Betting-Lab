@@ -13,10 +13,35 @@ from tennis_rich_context import maintenance as run_rich_context_maintenance
 from tennis_rich_source import maintenance as run_rich_maintenance
 from tennis_rich_source import status as rich_status
 
-VERSION = "TPRED_RUNTIME_PATCH_V4"
+VERSION = "TPRED_RUNTIME_PATCH_V5"
 RICH_FIRST_DELAY_SECONDS = 20
 RICH_BACKFILL_INTERVAL_SECONDS = 15 * 60
 RICH_IDLE_INTERVAL_SECONDS = 4 * 60 * 60
+
+
+def _stats_backlog(db) -> int:
+    """Rich rows still missing a terminal match-stat cache entry."""
+    try:
+        return int((db.fetchone(
+            """
+            SELECT COUNT(*) AS n FROM tennis_rich_matches
+            WHERE stats_json IS NULL
+              AND COALESCE(result_type,'completed') NOT IN ('walkover','w/o')
+            """
+        ) or {}).get("n") or 0)
+    except Exception:
+        return 0
+
+
+def _run_tpred3(db) -> Dict[str, Any]:
+    try:
+        return tpred3.run_maintenance(db)
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": f"{type(exc).__name__}: {exc}",
+            "betting_authority": False,
+        }
 
 
 def _start_rich_worker(tennis_engine, db) -> bool:
@@ -41,20 +66,20 @@ def _start_rich_worker(tennis_engine, db) -> bool:
                 # TPRED3 is isolated from TPRED1/2 and runs only after the rich
                 # cache/context passes. Its safety patch removes the provider's
                 # completed-result winner-first ordering before prediction.
-                try:
-                    tpred3_result = tpred3.run_maintenance(db)
-                except Exception as exc:
-                    tpred3_result = {
-                        "ok": False,
-                        "error": f"{type(exc).__name__}: {exc}",
-                        "betting_authority": False,
-                    }
+                tpred3_result = _run_tpred3(db)
                 print(f"TPRED3_MAINTENANCE {tpred3_result}", flush=True)
 
                 state = rich_status(db)
                 cursor = state.get("history_cursor")
                 end = state.get("history_end")
-                complete = bool(cursor and end and str(cursor) > str(end))
+                history_complete = bool(cursor and end and str(cursor) > str(end))
+                stats_backlog = _stats_backlog(db)
+
+                # Do not drop to the four-hour idle cadence merely because the
+                # result calendar is complete. During the paid-data month keep
+                # using the 15-minute backfill cadence until per-match rich
+                # stats are also cached (subject to the provider daily cap).
+                complete = history_complete and stats_backlog == 0
                 delay = RICH_IDLE_INTERVAL_SECONDS if complete else RICH_BACKFILL_INTERVAL_SECONDS
             except Exception as exc:
                 print(
@@ -86,9 +111,16 @@ def install(tennis_engine, db) -> Dict[str, Any]:
             tpred = run_maintenance(db)
         except Exception as exc:
             tpred = {"ok": False, "error": f"{type(exc).__name__}: {exc}", "betting_authority": False}
+
+        # TPRED3 also gets a lightweight normal-cycle pass. This makes forward
+        # forecast creation and result settlement independent of the slower rich
+        # backfill thread; it performs no RapidAPI calls itself.
+        tpred3_result = _run_tpred3(db)
+
         if isinstance(result, dict):
             result = dict(result)
             result["tpred"] = tpred
+            result["tpred3"] = tpred3_result
         return result
 
     tennis_engine.one_cycle = wrapped_one_cycle
@@ -104,9 +136,11 @@ def install(tennis_engine, db) -> Dict[str, Any]:
             "first_delay_seconds": RICH_FIRST_DELAY_SECONDS,
             "backfill_interval_seconds": RICH_BACKFILL_INTERVAL_SECONDS,
             "idle_interval_seconds": RICH_IDLE_INTERVAL_SECONDS,
+            "idle_requires_stats_backlog_zero": True,
         },
         "tpred3": tpred3_safety,
         "odds_api_provider_credits": 0,
+        "tpred3_provider_requests": 0,
         "rich_provider": "RapidAPI Tennis",
         "rich_provider_daily_cap": 2500,
         "betting_authority": False,
