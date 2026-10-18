@@ -18,7 +18,7 @@ import requests
 import first_half_goal_lab as fhg
 from db import sanitize_sensitive_text
 
-VERSION = "FHG1_API_FOOTBALL_SETTLEMENT_V2"
+VERSION = "FHG1_API_FOOTBALL_SETTLEMENT_V2_1"
 BASE_URL = "https://v3.football.api-sports.io/fixtures"
 MIN_AGE_MINUTES = 60
 POLL_MINUTES = 30
@@ -38,6 +38,18 @@ API_LEAGUES = {
 
 _INSTALLED = False
 _DROP_TOKENS = {"fc", "afc", "cf", "sc"}
+# Explicit provider aliases only. Keep this narrow: settlement must never rely
+# on broad suffix stripping that could confuse e.g. Manchester City/United.
+_TEAM_ALIASES = {
+    "queens park rangers": "qpr",
+    "qpr": "qpr",
+    "york city": "york",
+    "york": "york",
+    "newport county": "newport",
+    "newport": "newport",
+    "birmingham city": "birmingham",
+    "birmingham": "birmingham",
+}
 
 
 def _season_start(day) -> int:
@@ -93,7 +105,8 @@ def _team_key(value: str) -> str:
     """Conservative settlement-only team key; forecasting is untouched."""
     norm = fhg._normalize_text(str(value or ""))
     tokens = [t for t in norm.split() if t not in _DROP_TOKENS]
-    return " ".join(tokens) or norm
+    key = " ".join(tokens) or norm
+    return _TEAM_ALIASES.get(key, key)
 
 
 def _team_similarity(left: str, right: str) -> float:
