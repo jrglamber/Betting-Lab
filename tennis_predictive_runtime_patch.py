@@ -7,14 +7,27 @@ import time
 from typing import Any, Dict
 
 from tennis_predictive import run_maintenance
+from tennis_predictive3 import run_maintenance as run_tpred3_maintenance
 from tennis_rich_context import maintenance as run_rich_context_maintenance
 from tennis_rich_source import maintenance as run_rich_maintenance
 from tennis_rich_source import status as rich_status
 
-VERSION = "TPRED_RUNTIME_PATCH_V3"
+VERSION = "TPRED_RUNTIME_PATCH_V4"
 RICH_FIRST_DELAY_SECONDS = 20
 RICH_BACKFILL_INTERVAL_SECONDS = 15 * 60
 RICH_IDLE_INTERVAL_SECONDS = 4 * 60 * 60
+
+
+def _stats_backlog(db) -> int:
+    try:
+        return int((db.fetchone(
+            """
+            SELECT COUNT(*) AS n FROM tennis_rich_matches
+            WHERE stats_json IS NULL AND COALESCE(result_type,'completed') NOT IN ('walkover','w/o')
+            """
+        ) or {}).get("n") or 0)
+    except Exception:
+        return 0
 
 
 def _start_rich_worker(tennis_engine, db) -> bool:
@@ -26,20 +39,29 @@ def _start_rich_worker(tennis_engine, db) -> bool:
         time.sleep(RICH_FIRST_DELAY_SECONDS)
         while True:
             try:
-                # Base collector: result universe + cached per-match stats.
+                # Base collector: historical result universe + cached per-match
+                # stats.  All provider calls are separately ledgered/capped.
                 result = run_rich_maintenance(db)
                 print(f"TPRED_RICH_MAINTENANCE {result}", flush=True)
 
-                # Separate chronological context: dated rankings + upcoming
-                # fixture surface. This deliberately never uses today's rank
-                # for a historical prediction.
+                # Chronological context: dated rankings + upcoming surface.
+                # Today's ranking is never projected backwards into old games.
                 context = run_rich_context_maintenance(db)
                 print(f"TPRED_RICH_CONTEXT {context}", flush=True)
+
+                # Rebuild/freeze the rich challenger only from data now cached
+                # locally.  TPRED3 itself makes zero provider calls.
+                tpred3 = run_tpred3_maintenance(db)
+                print(f"TPRED3_MAINTENANCE {tpred3}", flush=True)
 
                 state = rich_status(db)
                 cursor = state.get("history_cursor")
                 end = state.get("history_end")
-                complete = bool(cursor and end and str(cursor) > str(end))
+                history_complete = bool(cursor and end and str(cursor) > str(end))
+                backlog = _stats_backlog(db)
+                # Do not idle merely because the result calendar is complete:
+                # use the paid month to finish the serve/return cache too.
+                complete = history_complete and backlog == 0
                 delay = RICH_IDLE_INTERVAL_SECONDS if complete else RICH_BACKFILL_INTERVAL_SECONDS
             except Exception as exc:
                 print(
@@ -67,9 +89,14 @@ def install(tennis_engine, db) -> Dict[str, Any]:
             tpred = run_maintenance(db)
         except Exception as exc:
             tpred = {"ok": False, "error": f"{type(exc).__name__}: {exc}", "betting_authority": False}
+        try:
+            tpred3 = run_tpred3_maintenance(db)
+        except Exception as exc:
+            tpred3 = {"ok": False, "error": f"{type(exc).__name__}: {exc}", "betting_authority": False}
         if isinstance(result, dict):
             result = dict(result)
             result["tpred"] = tpred
+            result["tpred3"] = tpred3
         return result
 
     tennis_engine.one_cycle = wrapped_one_cycle
@@ -86,7 +113,8 @@ def install(tennis_engine, db) -> Dict[str, Any]:
             "backfill_interval_seconds": RICH_BACKFILL_INTERVAL_SECONDS,
             "idle_interval_seconds": RICH_IDLE_INTERVAL_SECONDS,
         },
-        "provider_credits": 0,
+        "base_tpred_provider_credits": 0,
+        "tpred3_provider_credits": 0,
         "rich_provider_daily_cap": 2500,
         "betting_authority": False,
     }
