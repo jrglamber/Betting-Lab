@@ -18,7 +18,7 @@ from typing import Any, Dict, Mapping, Optional, Tuple
 
 import tennis_predictive3 as tp3
 
-VERSION = "TPRED3_SAFETY_PATCH_V1"
+VERSION = "TPRED3_SAFETY_PATCH_V1_1"
 MODEL_VERSION = "TPRED3_RICH_PREQUENTIAL_V2"
 
 
@@ -58,8 +58,6 @@ def _exact_stats(payload_text: Any) -> Tuple[Dict[str, float], Dict[str, float]]
             own_service_won = 0.0
         service = _ratio(own_service_won, total_service_points)
 
-        # Prefer explicit return-point fields when available. Otherwise derive
-        # return points won from the opponent's service points.
         return_pct = _ratio(
             raw.get("returnPtsWin") if raw.get("returnPtsWin") is not None else raw.get("rpw"),
             raw.get("returnPtsWinOf") if raw.get("returnPtsWinOf") is not None else raw.get("rpwOf"),
@@ -100,7 +98,6 @@ def _ordered_match(row: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
     if original_p1 == original_p2:
         return None
 
-    # Results endpoint contract: provider player1 is the realised winner.
     winner_id = original_p1
     original_stats1, original_stats2 = _exact_stats(row.get("stats_json"))
     if original_p1 < original_p2:
@@ -224,11 +221,55 @@ def _build_current_state(db, before) -> Tuple[Dict[str, Any], Dict[Any, Any]]:
     return state,rankings
 
 
+def _run_maintenance(db, now=None) -> Dict[str, Any]:
+    tp3.install_schema(db)
+    now = now or tp3._now()
+    rich_count = int((db.fetchone("SELECT COUNT(*) AS n FROM tennis_rich_matches") or {}).get("n") or 0)
+    rank_count = int((db.fetchone("SELECT COUNT(*) AS n FROM tennis_rich_rankings") or {}).get("n") or 0)
+    prior = db.fetchone("SELECT * FROM tennis_predictive3_state WHERE singleton_id=1") or {}
+    if rich_count < tp3.MIN_RICH_MATCHES_TO_BUILD:
+        db.execute(
+            """
+            UPDATE tennis_predictive3_state SET last_rich_match_count=?,last_ranking_count=?,
+                last_maintenance_at=?,status='BACKFILLING' WHERE singleton_id=1
+            """,
+            (rich_count,rank_count,tp3._iso(now)),
+        )
+        return {"ok": True, "status": "BACKFILLING", "rich_matches": rich_count, "rankings": rank_count, "minimum_matches": tp3.MIN_RICH_MATCHES_TO_BUILD, "betting_authority": False}
+
+    rebuilt = rich_count != int(prior.get("last_rich_match_count") or 0) or rank_count != int(prior.get("last_ranking_count") or 0)
+    walk = None
+    if rebuilt:
+        walk = tp3.rebuild_walkforward(db)
+    forward = tp3.create_forward_predictions(db, now)
+    settled = tp3.settle_forward_predictions(db)
+    weights = walk.get("weights") if walk else json.loads(str(prior.get("model_weights_json") or "{}"))
+    db.execute(
+        """
+        UPDATE tennis_predictive3_state SET last_rich_match_count=?,last_ranking_count=?,
+            last_walkforward_at=CASE WHEN ?=1 THEN ? ELSE last_walkforward_at END,
+            last_maintenance_at=?,status='ACTIVE_RESEARCH',model_weights_json=? WHERE singleton_id=1
+        """,
+        (rich_count,rank_count,int(rebuilt),tp3._iso(now),tp3._iso(now),json.dumps(weights,separators=(",",":"))),
+    )
+    return {
+        "ok": True,
+        "status": "ACTIVE_RESEARCH",
+        "model": tp3.MODEL_VERSION,
+        "walkforward_rebuilt": rebuilt,
+        "walkforward": {k:v for k,v in (walk or {}).items() if k != "state"},
+        "forward": forward,
+        "settled": settled,
+        "betting_authority": False,
+    }
+
+
 def install() -> Dict[str, Any]:
     tp3.MODEL_VERSION = MODEL_VERSION
     tp3._extract_stats = _exact_stats
     tp3.rebuild_walkforward = _rebuild_walkforward
     tp3._build_current_state = _build_current_state
+    tp3.run_maintenance = _run_maintenance
     return {
         "installed": True,
         "version": VERSION,
@@ -236,5 +277,6 @@ def install() -> Dict[str, Any]:
         "historical_orientation": "provider_id_sorted_before_prediction",
         "provider_completed_order": "winner_first",
         "exact_stat_schema": True,
+        "postgres_state_update_safe": True,
         "betting_authority": False,
     }
