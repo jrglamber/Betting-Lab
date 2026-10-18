@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Presentation-only dashboard for TPRED1/TPRED2."""
+"""Presentation-only dashboard for TPRED1/TPRED2/TPRED3."""
 
 import inspect
 from html import escape
@@ -9,8 +9,9 @@ from typing import Any, Dict, Mapping
 from fastapi.responses import HTMLResponse
 
 from tennis_predictive import scoreboard, pocket_report
+from tennis_predictive3 import scoreboard as scoreboard3
 
-VERSION = "TPRED_DASHBOARD_V1"
+VERSION = "TPRED_DASHBOARD_V2"
 
 
 def _fmt(value: Any, digits: int = 2, suffix: str = "") -> str:
@@ -64,26 +65,37 @@ def _pocket_rows(values: Mapping[str, Any]) -> str:
     return "".join(rows)
 
 
+def _rich_label(s3: Mapping[str, Any]) -> str:
+    counts = dict(s3.get("source_counts") or {})
+    matches = int(counts.get("matches") or 0)
+    stats = int(counts.get("stats") or 0)
+    if not s3.get("source_ready"):
+        return f"COLLECTING {matches}"
+    return f"ACTIVE {stats}/{matches}"
+
+
 def _home_section(db) -> str:
     s = scoreboard(db)
+    s3 = scoreboard3(db)
     m1 = dict((s.get("models") or {}).get("TPRED1") or {})
     m2 = dict((s.get("models") or {}).get("TPRED2") or {})
     r1 = dict(m1.get("evidence_ready_walkforward") or {})
     r2 = dict(m2.get("evidence_ready_walkforward") or {})
+    r3 = dict(s3.get("evidence_ready_walkforward") or {})
     return f"""
     <section id='tennis-predictive'>
       <div class='section-title'>
         <div><h2>Tennis Predictive Lab (TPRED)</h2>
-        <div class='muted'>TPRED1 = pure tennis history model. TPRED2 = market-aware challenger. Research only; no betting authority.</div></div>
+        <div class='muted'>TPRED1 = history control. TPRED2 = market-aware control. TPRED3 = chronological ranking/surface/serve-return challenger. Research only.</div></div>
         <a href='/tennis-predictive'>Full detail →</a>
       </div>
       <div class='grid compact'>
-        {_metric("TPRED1 Brier", _fmt(r1.get("brier"),4), f"{r1.get('samples') or 0} evidence-ready walk-forward matches")}
-        {_metric("TPRED1 accuracy", _fmt(r1.get("accuracy_pct"),1,"%"), "chronological only")}
-        {_metric("TPRED2 Brier", _fmt(r2.get("brier"),4), f"{r2.get('samples') or 0} market-comparable matches")}
-        {_metric("TPRED2 vs market", _fmt(r2.get("brier_improvement_vs_market_pct"),1,"%"), "positive is better")}
-        {_metric("Forward TPRED1", str(m1.get("forward_open") or 0), "open frozen selection forecasts")}
-        {_metric("Rich features", str(s.get("rich_feature_status") or "—"), "ranking/surface/serve source not yet connected")}
+        {_metric("TPRED1 Brier", _fmt(r1.get("brier"),4), f"{r1.get('samples') or 0} evidence-ready")}
+        {_metric("TPRED2 Brier", _fmt(r2.get("brier"),4), f"{r2.get('samples') or 0} evidence-ready")}
+        {_metric("TPRED3 Brier", _fmt(r3.get("brier"),4), f"{r3.get('samples') or 0} rich walk-forward")}
+        {_metric("TPRED3 vs market", _fmt(r3.get("brier_improvement_vs_market_pct"),1,"%"), "positive is better")}
+        {_metric("Forward TPRED3", str(s3.get("forward_evidence_ready_open") or 0), "open A/B/C frozen forecasts")}
+        {_metric("Rich features", _rich_label(s3), f"{_fmt(s3.get('stats_coverage_pct'),1,'%')} match-stat coverage")}
       </div>
     </section>
     """
@@ -91,9 +103,12 @@ def _home_section(db) -> str:
 
 def _page(db, base_style: str) -> str:
     s = scoreboard(db)
+    s3 = scoreboard3(db)
     p = pocket_report(db)
     m1 = dict((s.get("models") or {}).get("TPRED1") or {})
     m2 = dict((s.get("models") or {}).get("TPRED2") or {})
+    rich = dict(s3.get("rich_source") or {})
+    counts = dict(s3.get("source_counts") or {})
     disagreements = s.get("top_forward_disagreements") or []
     drows = []
     for r in disagreements:
@@ -108,22 +123,31 @@ def _page(db, base_style: str) -> str:
             f"<td>{escape(str(r.get('commence_time') or ''))}</td>"
             "</tr>"
         )
-    dbody = "".join(drows) or "<tr><td colspan='7'>No current model/market disagreement forecasts.</td></tr>"
+    dbody = "".join(drows) or "<tr><td colspan='7'>No current TPRED1/2 model-market disagreement forecasts.</td></tr>"
 
     return f"""<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>
     <title>Tennis Predictive Lab</title><style>{base_style}</style></head><body><main class='wrap'>
     <div class='section-title'><div><h1>Tennis Predictive Lab</h1>
       <div class='muted'>Independent TPRED research stack. No execution or betting authority.</div></div><a href='/'>← Main dashboard</a></div>
     <div class='grid compact'>
-      {_metric("Historical results", str(s.get("historical_results") or 0), "all stored completed tennis matches")}
-      {_metric("Feature snapshots", str(s.get("feature_snapshot_rows") or 0), str(s.get("rich_feature_status") or ""))}
-      {_metric("Last walk-forward", str(s.get("last_walkforward_at") or "—"), "rebuilds only when result count changes")}
-      {_metric("Provider credits", "0", "TPRED uses stored data only")}
+      {_metric("Canonical results", str(s.get("historical_results") or 0), "existing TPRED1/2 history")}
+      {_metric("Rich matches", str(counts.get("matches") or 0), f"{counts.get('stats') or 0} with serve/return stats")}
+      {_metric("Rich stat coverage", _fmt(s3.get("stats_coverage_pct"),1,"%"), f"{counts.get('rankings') or 0} dated ranking rows")}
+      {_metric("Rich API today", str(rich.get("daily_used") or 0), f"separate cap {rich.get('daily_cap') or 0}/day; cached locally")}
     </div>
-    {_model_panel("TPRED1 — pure tennis", m1)}
-    {_model_panel("TPRED2 — market-aware challenger", m2)}
-    <div class='panel'><h2>Current forward disagreement</h2>
-      <p class='muted'>Largest frozen differences between TPRED and the latest pre-match consensus. These are observations, not bets.</p>
+    {_model_panel("TPRED1 — pure tennis control", m1)}
+    {_model_panel("TPRED2 — market-aware control", m2)}
+    {_model_panel("TPRED3 — rich chronological challenger", s3)}
+    <div class='panel'><h2>TPRED3 source progress</h2>
+      <div class='grid compact'>
+        {_metric("Players mapped", str(counts.get("players") or 0), "provider IDs cached")}
+        {_metric("Upcoming fixtures", str(counts.get("fixtures") or 0), "surface/tournament context")}
+        {_metric("TPRED3 forward", str(s3.get("forward_open") or 0), f"{s3.get('forward_evidence_ready_open') or 0} evidence-ready")}
+        {_metric("Last TPRED3 rebuild", str(s3.get("last_walkforward_at") or "—"), "rebuilds as rich evidence grows")}
+      </div>
+    </div>
+    <div class='panel'><h2>Current TPRED1/2 forward disagreement</h2>
+      <p class='muted'>Largest frozen differences between the original TPRED stack and the latest pre-match consensus. These are observations, not bets.</p>
       <div class='table-wrap'><table><thead><tr><th>Tour</th><th>Selection</th><th>Model P</th><th>Market P</th><th>Δ</th><th>Tier</th><th>Starts</th></tr></thead><tbody>{dbody}</tbody></table></div>
     </div>
     <div class='panel'><h2>TS1 descriptive pockets</h2><p class='muted'>Tracked alongside TPRED, never used as hard-coded model rules.</p>
@@ -133,8 +157,8 @@ def _page(db, base_style: str) -> str:
       <h3>Reference depth</h3><div class='table-wrap'><table><thead><tr><th>Books</th><th>Settled</th><th>Net P&L</th><th>ROI</th><th>A/B CLV n</th><th>A/B CLV</th></tr></thead><tbody>{_pocket_rows(p.get('reference_books') or {})}</tbody></table></div>
     </div>
     <div class='panel'><h2>Model governance</h2>
-      <p>TPRED1 uses only previous match results: Elo, rolling form, recent workload/rest and low-weight head-to-head. TPRED2 blends TPRED1 with the de-vigged market consensus.</p>
-      <p class='muted'>Surface, rankings and serve/return statistics are intentionally not guessed. Their feature table exists but remains WAITING_FOR_SOURCE until a reliable licensed source is connected. Model weights are frozen in V1; today's profitable TS1 pockets are diagnostics only.</p>
+      <p>TPRED1 remains the result-history control. TPRED2 remains the frozen market-aware blend. TPRED3 is independent and adds dated ranking strength, surface-adjusted Elo/form, cached serve/return quality and workload/rest.</p>
+      <p class='muted'>TPRED3 V1 weights are fixed before judging its outcomes. Historical rankings are date-specific and per-match statistics enter state only after that match, preventing look-ahead leakage. TPRED3 has no selection, staking or execution authority.</p>
     </div>
     </main></body></html>"""
 
