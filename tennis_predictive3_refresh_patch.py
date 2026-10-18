@@ -7,14 +7,22 @@ During the paid historical backfill, serve/return statistics can arrive later
 for matches that are already present, leaving historical walk-forward metrics
 stale. This patch adds stats-count awareness without changing model features,
 weights, thresholds, betting authority or provider polling.
+
+TPRED3 maintenance can be reached from both the normal tennis cycle and the
+independent rich-source worker. Rebuilding the same walk-forward table from
+both threads at once races the delete/insert refresh and can trip the table's
+unique key. A process-local non-blocking guard keeps those research refreshes
+serialized while allowing the normal tennis cycle to continue immediately.
 """
 
 import json
+import threading
 from typing import Any, Dict
 
 import tennis_predictive3 as tp3
 
-VERSION = "TPRED3_STATS_REFRESH_V1"
+VERSION = "TPRED3_STATS_REFRESH_V2"
+_MAINTENANCE_LOCK = threading.Lock()
 
 
 def _stats_count(db) -> int:
@@ -47,6 +55,23 @@ def _ensure_schema(db) -> None:
     )
 
 
+def _busy_result(db) -> Dict[str, Any]:
+    try:
+        state = db.fetchone(
+            "SELECT status,last_walkforward_at,last_maintenance_at FROM tennis_predictive3_state WHERE singleton_id=1"
+        ) or {}
+    except Exception:
+        state = {}
+    return {
+        "ok": True,
+        "status": state.get("status") or "ACTIVE_RESEARCH",
+        "walkforward_rebuilt": False,
+        "maintenance_skipped_busy": True,
+        "last_walkforward_at": state.get("last_walkforward_at"),
+        "betting_authority": False,
+    }
+
+
 def install(db) -> Dict[str, Any]:
     _ensure_schema(db)
     if getattr(tp3, "_stats_refresh_patch_installed", False):
@@ -55,55 +80,63 @@ def install(db) -> Dict[str, Any]:
     original = tp3.run_maintenance
 
     def wrapped_run_maintenance(runtime_db, now=None):
-        _ensure_schema(runtime_db)
-        prior = runtime_db.fetchone(
-            "SELECT * FROM tennis_predictive3_refresh_state WHERE singleton_id=1"
-        ) or {}
-        prior_stats = int(prior.get("last_stats_count") or 0)
-        current_stats = _stats_count(runtime_db)
+        # TPRED3 is called by two runtime paths. Never allow simultaneous
+        # delete/insert rebuilds of the same versioned walk-forward table.
+        if not _MAINTENANCE_LOCK.acquire(blocking=False):
+            return _busy_result(runtime_db)
+        try:
+            _ensure_schema(runtime_db)
+            prior = runtime_db.fetchone(
+                "SELECT * FROM tennis_predictive3_refresh_state WHERE singleton_id=1"
+            ) or {}
+            prior_stats = int(prior.get("last_stats_count") or 0)
+            current_stats = _stats_count(runtime_db)
 
-        result = original(runtime_db, now)
-        result = dict(result or {})
-        rebuilt = bool(result.get("walkforward_rebuilt"))
-        rich_count = int((runtime_db.fetchone(
-            "SELECT COUNT(*) AS n FROM tennis_rich_matches"
-        ) or {}).get("n") or 0)
+            result = original(runtime_db, now)
+            result = dict(result or {})
+            rebuilt = bool(result.get("walkforward_rebuilt"))
+            rich_count = int((runtime_db.fetchone(
+                "SELECT COUNT(*) AS n FROM tennis_rich_matches"
+            ) or {}).get("n") or 0)
 
-        stats_refresh = False
-        # If match/ranking changes already caused a rebuild, that rebuild also
-        # consumed the newly cached stats. Otherwise refresh explicitly when the
-        # terminal stats cache has grown.
-        if (
-            rich_count >= int(tp3.MIN_RICH_MATCHES_TO_BUILD)
-            and current_stats != prior_stats
-            and not rebuilt
-        ):
-            walk = tp3.rebuild_walkforward(runtime_db)
-            refreshed_at = tp3._iso(now or tp3._now())
-            weights = dict(walk.get("weights") or {})
+            stats_refresh = False
+            # If match/ranking changes already caused a rebuild, that rebuild also
+            # consumed the newly cached stats. Otherwise refresh explicitly when the
+            # terminal stats cache has grown.
+            if (
+                rich_count >= int(tp3.MIN_RICH_MATCHES_TO_BUILD)
+                and current_stats != prior_stats
+                and not rebuilt
+            ):
+                walk = tp3.rebuild_walkforward(runtime_db)
+                refreshed_at = tp3._iso(now or tp3._now())
+                weights = dict(walk.get("weights") or {})
+                runtime_db.execute(
+                    """
+                    UPDATE tennis_predictive3_state
+                    SET last_walkforward_at=?,model_weights_json=?
+                    WHERE singleton_id=1
+                    """,
+                    (refreshed_at,json.dumps(weights,separators=(",",":"))),
+                )
+                result["walkforward_rebuilt_for_stats"] = True
+                result["walkforward"] = {k:v for k,v in walk.items() if k != "state"}
+                stats_refresh = True
+
             runtime_db.execute(
                 """
-                UPDATE tennis_predictive3_state
-                SET last_walkforward_at=?,model_weights_json=?
+                UPDATE tennis_predictive3_refresh_state
+                SET last_stats_count=?,last_refresh_at=?,version=?
                 WHERE singleton_id=1
                 """,
-                (refreshed_at,json.dumps(weights,separators=(",",":"))),
+                (current_stats,tp3._iso(now or tp3._now()),VERSION),
             )
-            result["walkforward_rebuilt_for_stats"] = True
-            result["walkforward"] = {k:v for k,v in walk.items() if k != "state"}
-            stats_refresh = True
-
-        runtime_db.execute(
-            """
-            UPDATE tennis_predictive3_refresh_state
-            SET last_stats_count=?,last_refresh_at=?,version=?
-            WHERE singleton_id=1
-            """,
-            (current_stats,tp3._iso(now or tp3._now()),VERSION),
-        )
-        result["rich_stats_count"] = current_stats
-        result["stats_refresh_triggered"] = stats_refresh
-        return result
+            result["rich_stats_count"] = current_stats
+            result["stats_refresh_triggered"] = stats_refresh
+            result["maintenance_serialized"] = True
+            return result
+        finally:
+            _MAINTENANCE_LOCK.release()
 
     tp3.run_maintenance = wrapped_run_maintenance
     tp3._stats_refresh_patch_installed = True
@@ -112,6 +145,7 @@ def install(db) -> Dict[str, Any]:
         "already_installed": False,
         "version": VERSION,
         "trigger": "rich_stats_count_change_without_match_or_ranking_change",
+        "maintenance_serialized": True,
         "model_changed": False,
         "provider_calls_added": 0,
         "betting_authority": False,
