@@ -17,7 +17,7 @@ from tennis_rich_context import maintenance as run_rich_context_maintenance
 from tennis_rich_source import maintenance as run_rich_maintenance
 from tennis_rich_source import status as rich_status
 
-VERSION = "TPRED_RUNTIME_PATCH_V7"
+VERSION = "TPRED_RUNTIME_PATCH_V7_1"
 RICH_FIRST_DELAY_SECONDS = 20
 RICH_BACKFILL_INTERVAL_SECONDS = 15 * 60
 RICH_IDLE_INTERVAL_SECONDS = 4 * 60 * 60
@@ -76,6 +76,44 @@ def _run_tpred3(db) -> Dict[str, Any]:
         }
 
 
+def _forward_snapshot(db) -> Dict[str, Any]:
+    """Read-only compact view of frozen TPRED3 forward forecasts."""
+    try:
+        rows = db.fetchall(
+            """
+            SELECT event_id,generated_at,commence_time,tour,surface,tournament_title,
+                   selection,opponent,probability,fair_odds,market_probability,
+                   market_fair_odds,model_edge_vs_market_pct,confidence_tier,status
+            FROM tennis_predictive3_predictions
+            WHERE model_version=? AND status='OPEN'
+            ORDER BY commence_time,event_id,selection
+            """,
+            (tpred3.MODEL_VERSION,),
+        )
+        compact = []
+        event_ids = set()
+        for row in rows:
+            item = dict(row)
+            event_ids.add(str(item.get("event_id") or ""))
+            compact.append(item)
+        return {
+            "rows": len(compact),
+            "matches": len(event_ids),
+            "predictions": compact,
+            "provider_calls": 0,
+            "betting_authority": False,
+        }
+    except Exception as exc:
+        return {
+            "rows": 0,
+            "matches": 0,
+            "predictions": [],
+            "error": f"{type(exc).__name__}: {exc}",
+            "provider_calls": 0,
+            "betting_authority": False,
+        }
+
+
 def _start_rich_worker(tennis_engine, db) -> bool:
     if getattr(tennis_engine, "_tpred_rich_worker_started", False):
         return False
@@ -104,6 +142,7 @@ def _start_rich_worker(tennis_engine, db) -> bool:
                 # completed-result winner-first ordering before prediction.
                 tpred3_result = _run_tpred3(db)
                 print(f"TPRED3_MAINTENANCE {tpred3_result}", flush=True)
+                print(f"TPRED3_FORWARD_SNAPSHOT {_forward_snapshot(db)}", flush=True)
 
                 state = rich_status(db)
                 cursor = state.get("history_cursor")
@@ -171,6 +210,7 @@ def install(tennis_engine, db) -> Dict[str, Any]:
     tennis_engine.one_cycle = wrapped_one_cycle
     tennis_engine._tpred_runtime_installed = True
     rich_worker_started = _start_rich_worker(tennis_engine, db)
+    print(f"TPRED3_FORWARD_SNAPSHOT {_forward_snapshot(db)}", flush=True)
     return {
         "installed": True,
         "already_installed": False,
@@ -191,5 +231,6 @@ def install(tennis_engine, db) -> Dict[str, Any]:
         "tpred3_provider_requests": 0,
         "rich_provider": "RapidAPI Tennis",
         "rich_provider_daily_cap": int(limits["daily_cap"]),
+        "forward_snapshot_logging": True,
         "betting_authority": False,
     }
