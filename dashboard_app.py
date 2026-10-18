@@ -25,6 +25,7 @@ from tennis_predictive import install_schema as install_tpred_schema
 from tennis_predictive_runtime_patch import install as install_tpred_runtime
 from tennis_predictive_dashboard import install as install_tpred_dashboard
 from tennis_predictive_export_patch import install as install_tpred_exports
+from tennis_rich_source_probe import probe as probe_tennis_rich_source
 from pocket_freeze_hr2_patch import install as install_audited_pockets
 
 # Resolve legacy stale-result debt before presenting the dashboard. This only
@@ -155,6 +156,18 @@ first_half_goal_runtime = install_first_half_goal_runtime(
     base_app.db,
 )
 print(f"FIRST_HALF_GOAL_RUNTIME {first_half_goal_runtime}", flush=True)
+
+# Validate the optional rich tennis source with two tiny read-only requests.
+# This is diagnostics only: no TPRED rows or forecasts are changed by the probe.
+try:
+    tpred_rich_probe = probe_tennis_rich_source()
+except Exception as exc:
+    tpred_rich_probe = {
+        "ok": False,
+        "error": f"{type(exc).__name__}: {exc}",
+        "betting_authority": False,
+    }
+print(f"TPRED_RICH_SOURCE_PROBE {tpred_rich_probe}", flush=True)
 
 # TPRED is research-only and deliberately reuses the already-collected tennis
 # universe. Install its schema synchronously, but let the existing tennis worker
