@@ -7,8 +7,9 @@ from typing import Any, Dict
 
 from first_half_goal_lab import run_maintenance
 
-VERSION = "FHG1_HEARTBEAT_MAINT_V2_1"
+VERSION = "FHG1_HEARTBEAT_MAINT_V2_2"
 HEARTBEAT_SECONDS = 5 * 60
+FIRST_HEARTBEAT_SECONDS = 60
 _INSTALLED = False
 _MAINT_LOCK = threading.Lock()
 
@@ -16,7 +17,7 @@ _MAINT_LOCK = threading.Lock()
 def _run_once(db, source: str) -> None:
     # Never overlap startup/worker/heartbeat maintenance. The underlying source
     # modules have their own due-throttles (6h history, 30m API-Football
-    # settlement), so a 5m wake-up does not mean a paid call every 5 minutes.
+    # settlement), so a frequent wake-up does not multiply external calls.
     if not _MAINT_LOCK.acquire(blocking=False):
         return
     try:
@@ -64,9 +65,6 @@ def install(web_module, db) -> Dict[str, Any]:
     if _INSTALLED or getattr(worker, "_fhg1_worker_maint", False):
         return {"installed": True, "already_installed": True, "version": VERSION}
 
-    # Keep the worker-cycle hook as a belt-and-braces pass, but run it BEFORE
-    # the long research cycle. The previous implementation ran after the cycle,
-    # which could defer FHG1 settlement for hours when that cycle was busy.
     original_cycle = worker.one_cycle
 
     def cycle_with_fhg1_maintenance():
@@ -76,16 +74,18 @@ def install(web_module, db) -> Dict[str, Any]:
     worker.one_cycle = cycle_with_fhg1_maintenance
     worker._fhg1_worker_maint = True
 
-    # More importantly, FHG1 now has its own lightweight heartbeat and no longer
-    # depends on the large worker cycle finishing. The API-Football fallback has
-    # its own 30m due-throttle, so checking every five minutes only reduces wait
-    # after a result becomes due; it does not multiply provider calls.
+    # The startup maintenance pass may land just inside the settlement source's
+    # 30-minute due window after a deployment handover. Check once after one
+    # minute, then every five minutes thereafter. The source's own due-throttle
+    # remains authoritative, so this does not increase provider call cadence.
     def heartbeat() -> None:
         print(
-            f"FHG1_HEARTBEAT started interval_seconds={HEARTBEAT_SECONDS}",
+            f"FHG1_HEARTBEAT started first_seconds={FIRST_HEARTBEAT_SECONDS} interval_seconds={HEARTBEAT_SECONDS}",
             flush=True,
         )
         waiter = threading.Event()
+        waiter.wait(FIRST_HEARTBEAT_SECONDS)
+        _run_once(db, "heartbeat_early")
         while True:
             waiter.wait(HEARTBEAT_SECONDS)
             _run_once(db, "heartbeat")
@@ -98,6 +98,7 @@ def install(web_module, db) -> Dict[str, Any]:
         "installed": True,
         "already_installed": False,
         "version": VERSION,
+        "first_heartbeat_seconds": FIRST_HEARTBEAT_SECONDS,
         "heartbeat_seconds": HEARTBEAT_SECONDS,
         "worker_cycle_dependency": False,
     }
