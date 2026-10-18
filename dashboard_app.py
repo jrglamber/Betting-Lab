@@ -27,6 +27,7 @@ from tennis_predictive_dashboard import install as install_tpred_dashboard
 from tennis_predictive_export_patch import install as install_tpred_exports
 from tennis_rich_source_probe import probe as probe_tennis_rich_source
 from pocket_freeze_hr2_patch import install as install_audited_pockets
+from multiples_funnel_diagnostic_patch import install as install_multiples_funnel_diagnostic
 
 # Resolve legacy stale-result debt before presenting the dashboard. This only
 # backfills verified event results / voids cancelled events and adds a 72h
@@ -59,9 +60,9 @@ print(f"HISTORICAL_RESCUE_FINAL_TENNIS {final_tennis}", flush=True)
 queue_guard = install_rescue_queue_guard(base_app.web_module)
 print(f"HISTORICAL_RESCUE_QUEUE_GUARD {queue_guard}", flush=True)
 
-# Remove app-imposed daily credit ceilings from every configurable Odds API
-# lane via Railway variables, and lift the two newer hard-coded 500/day quote
-# caps here. The provider's real remaining-credit balance is still enforced.
+# Keep the provider's real remaining-credit guard authoritative while applying
+# explicit daily budgets to the two high-frequency multiples quote lanes and
+# backing off repeated no-price polls when kickoff is still distant.
 credit_policy = install_credit_policy_unlimited()
 print(f"CREDIT_POLICY_UNLIMITED {credit_policy}", flush=True)
 
@@ -184,9 +185,12 @@ tpred_exports = install_tpred_exports()
 print(f"TPRED_EXPORTS {tpred_exports}", flush=True)
 
 # Curated homepage up-rev for FHG1, TPRED, frozen audited pockets, Live Yankee
-# parity, recurring/timely FHG1 settlement, and non-blocking dashboard serving.
-dashboard_layout_v2.VERSION = "0.19.71"
+# parity, the queue-to-price funnel, recurring/timely FHG1 settlement, and
+# non-blocking dashboard serving.
+dashboard_layout_v2.VERSION = "0.19.72"
 install_dashboard_layout_v2(base_app.app, base_app.db, base_app.BASE_STYLE)
+multiples_funnel = install_multiples_funnel_diagnostic(base_app.app, base_app.db)
+print(f"MULTIPLES_FUNNEL_INSTALL {multiples_funnel}", flush=True)
 first_half_goal_curated = install_first_half_goal_curated(base_app.app, base_app.db)
 print(f"FIRST_HALF_GOAL_CURATED {first_half_goal_curated}", flush=True)
 tpred_dashboard = install_tpred_dashboard(base_app.app, base_app.db, base_app.BASE_STYLE)
