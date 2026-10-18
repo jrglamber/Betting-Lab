@@ -16,7 +16,7 @@ from typing import Any, Dict, Mapping, Optional, Sequence
 
 import api_sports_predictive as core
 
-VERSION = "APISPORTS_SETTLEMENT_SIDE_V2"
+VERSION = "APISPORTS_SETTLEMENT_SIDE_V2_1"
 _INSTALLED = False
 _ORIGINAL_SETTLE = None
 
@@ -123,11 +123,6 @@ def reconcile_model(db, model_name: str) -> Dict[str, Any]:
     }
 
 
-def reconcile_ncaaf(db) -> Dict[str, Any]:
-    """Backward-compatible helper used by the dashboard bootstrap."""
-    return reconcile_model(db, "NCAAF-PRED1")
-
-
 def reconcile_all(db, model_names: Optional[Sequence[str]] = None) -> Dict[str, Any]:
     if model_names is None:
         rows = db.fetchall(
@@ -148,6 +143,18 @@ def reconcile_all(db, model_names: Optional[Sequence[str]] = None) -> Dict[str, 
         "pricing_rules_changed": False,
         "betting_authority": False,
     }
+
+
+def reconcile_ncaaf(db) -> Dict[str, Any]:
+    """Backward-compatible dashboard helper that also audits every API-Sports lane."""
+    all_audit = reconcile_all(db)
+    ncaaf = dict((all_audit.get("models") or {}).get("NCAAF-PRED1") or reconcile_model(db, "NCAAF-PRED1"))
+    ncaaf["all_models"] = all_audit.get("models") or {}
+    ncaaf["all_models_settled_rows"] = int(all_audit.get("settled_rows") or 0)
+    ncaaf["all_models_corrected"] = int(all_audit.get("corrected") or 0)
+    ncaaf["all_models_unresolved"] = int(all_audit.get("unresolved") or 0)
+    ncaaf["all_models_ties_preserved"] = int(all_audit.get("ties_preserved") or 0)
+    return ncaaf
 
 
 def _settle_with_side_reconciliation(db, lane):
