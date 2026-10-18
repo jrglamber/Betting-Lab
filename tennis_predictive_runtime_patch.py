@@ -12,11 +12,12 @@ import tennis_predictive3 as tpred3
 from tennis_predictive3_safety_patch import install as install_tpred3_safety
 from tennis_predictive3_refresh_patch import install as install_tpred3_refresh
 import tennis_rich_source as rich_source
+from tennis_rich_source_safety_patch import install as install_rich_source_safety
 from tennis_rich_context import maintenance as run_rich_context_maintenance
 from tennis_rich_source import maintenance as run_rich_maintenance
 from tennis_rich_source import status as rich_status
 
-VERSION = "TPRED_RUNTIME_PATCH_V6"
+VERSION = "TPRED_RUNTIME_PATCH_V7"
 RICH_FIRST_DELAY_SECONDS = 20
 RICH_BACKFILL_INTERVAL_SECONDS = 15 * 60
 RICH_IDLE_INTERVAL_SECONDS = 4 * 60 * 60
@@ -134,6 +135,10 @@ def install(tennis_engine, db) -> Dict[str, Any]:
     if getattr(tennis_engine, "_tpred_runtime_installed", False):
         return {"installed": True, "already_installed": True, "version": VERSION}
 
+    # Provider-plumbing safety must be installed before the rich worker starts:
+    # exact request accounting and terminal caching for immutable 404 stats.
+    rich_source_safety = install_rich_source_safety()
+
     # Install the leakage/stat-schema guard before any TPRED3 maintenance can
     # run. This bumps TPRED3 to V2 and keeps old experimental rows versioned.
     tpred3_safety = install_tpred3_safety()
@@ -178,6 +183,7 @@ def install(tennis_engine, db) -> Dict[str, Any]:
             "idle_interval_seconds": RICH_IDLE_INTERVAL_SECONDS,
             "idle_requires_stats_backlog_zero": True,
         },
+        "rich_source_safety": rich_source_safety,
         "tpred3": tpred3_safety,
         "tpred3_stats_refresh": tpred3_refresh,
         "temporary_rich_backfill_boost": limits,
