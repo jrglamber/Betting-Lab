@@ -8,6 +8,7 @@ import db_pool_patch  # noqa: F401  -- must run before dashboard_app imports web
 import tennis_rich_throughput_patch  # noqa: F401 -- patch before runtime captures maintenance function
 import dashboard_app as _dashboard_app
 from dashboard_app import app
+import hit_rate_daily_boost_patch  # noqa: F401 -- one-day HR cap boost; auto-reverts by UTC date
 from hit_rate_price_tolerance_patch import install as install_hr_price_tolerance
 
 # Read-only startup evidence for the paid tennis subscription. RapidAPI's
