@@ -8,6 +8,7 @@ import db_pool_patch  # noqa: F401  -- must run before dashboard_app imports web
 import tennis_rich_throughput_patch  # noqa: F401 -- patch before runtime captures maintenance function
 import dashboard_app as _dashboard_app
 from dashboard_app import app
+from hit_rate_price_tolerance_patch import install as install_hr_price_tolerance
 
 # Read-only startup evidence for the paid tennis subscription. RapidAPI's
 # x-ratelimit-requests-remaining response header is already persisted in the
@@ -36,6 +37,18 @@ try:
 except Exception as exc:
     print(
         f"TPRED_RAPIDAPI_QUOTA_SNAPSHOT {{'error': '{type(exc).__name__}: {exc}'}}",
+        flush=True,
+    )
+
+# Forward-only price-tolerance challengers reuse the HR quote cache. They add
+# no provider/API requests: same-book is still mandatory and only the frozen
+# minimum acceptable price is relaxed to P98/P96/P94 for shadow comparison.
+try:
+    _hr_price_tolerance = install_hr_price_tolerance(_dashboard_app.base_app.db)
+    print(f"HR_PRICE_TOLERANCE_INSTALL {_hr_price_tolerance}", flush=True)
+except Exception as exc:
+    print(
+        f"HR_PRICE_TOLERANCE_INSTALL {{'ok': False, 'error': '{type(exc).__name__}: {exc}'}}",
         flush=True,
     )
 
