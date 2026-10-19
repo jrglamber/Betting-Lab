@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-"""Production entrypoint that installs DB pooling before app bootstrap."""
+"""Production entrypoint that installs DB and tennis efficiency patches first."""
 
 import os
 
 import db_pool_patch  # noqa: F401  -- must run before dashboard_app imports web/db instances
+import tennis_rich_throughput_patch  # noqa: F401 -- patch before runtime captures maintenance function
 import dashboard_app as _dashboard_app
 from dashboard_app import app
 
