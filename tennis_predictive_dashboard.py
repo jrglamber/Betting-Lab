@@ -13,7 +13,7 @@ from tennis_predictive import scoreboard, pocket_report
 from tennis_predictive3 import scoreboard as scoreboard3
 from tennis_rich_source import status as rich_source_status
 
-VERSION = "TPRED_DASHBOARD_V2_1"
+VERSION = "TPRED_DASHBOARD_V2_2"
 
 
 def _fmt(value: Any, digits: int = 2, suffix: str = "") -> str:
@@ -96,10 +96,107 @@ def _rich_label(s3: Mapping[str, Any], rich: Mapping[str, Any]) -> str:
     return f"ACTIVE {stats}/{matches}"
 
 
+def _tpred3_match_ledger(db) -> Dict[str, Any]:
+    """Collapse TPRED3's two side-probability rows into one model pick per match."""
+    try:
+        state = db.fetchone(
+            "SELECT model_version FROM tennis_predictive3_state WHERE singleton_id=1"
+        ) or {}
+        version = str(state.get("model_version") or "")
+        if not version:
+            return {"open": [], "settled": [], "raw_rows": 0}
+        raw = db.fetchall(
+            """
+            SELECT id,event_id,generated_at,commence_time,tour,surface,tournament_title,
+                   selection,opponent,probability,fair_odds,market_probability,
+                   market_fair_odds,model_edge_vs_market_pct,confidence_tier,
+                   status,outcome,settled_at
+            FROM tennis_predictive3_predictions
+            WHERE model_version=?
+            ORDER BY commence_time DESC,id DESC
+            """,
+            (version,),
+        )
+    except Exception:
+        return {"open": [], "settled": [], "raw_rows": 0}
+
+    grouped: Dict[str, list[dict[str, Any]]] = {}
+    for raw_row in raw:
+        row = dict(raw_row)
+        grouped.setdefault(str(row.get("event_id") or row.get("id")), []).append(row)
+
+    matches = []
+    for event_id, rows in grouped.items():
+        # TPRED3 deliberately stores P(player 1) and P(player 2). For a readable
+        # forward ledger, show only the higher-probability side as the model pick.
+        pick = max(rows, key=lambda r: (float(r.get("probability") or 0.0), -int(r.get("id") or 0)))
+        result = "PENDING"
+        if str(pick.get("status") or "").upper() == "SETTLED" and pick.get("outcome") is not None:
+            result = "WIN" if int(pick.get("outcome") or 0) == 1 else "LOSS"
+        item = dict(pick)
+        item["event_id"] = event_id
+        item["result"] = result
+        matches.append(item)
+
+    open_rows = sorted(
+        [r for r in matches if r.get("result") == "PENDING"],
+        key=lambda r: (str(r.get("commence_time") or ""), str(r.get("event_id") or "")),
+    )
+    settled_rows = sorted(
+        [r for r in matches if r.get("result") != "PENDING"],
+        key=lambda r: (str(r.get("commence_time") or ""), str(r.get("event_id") or "")),
+        reverse=True,
+    )
+    return {"open": open_rows, "settled": settled_rows, "raw_rows": len(raw)}
+
+
+def _tpred3_rows(rows) -> str:
+    rendered = []
+    for r in rows:
+        result = str(r.get("result") or "PENDING").upper()
+        cls = "ok" if result == "WIN" else "bad" if result == "LOSS" else ""
+        surface = str(r.get("surface") or "—")
+        tour = str(r.get("tour") or "").upper()
+        context = " · ".join(x for x in (tour, surface, str(r.get("tournament_title") or "")) if x and x != "—")
+        rendered.append(
+            "<tr>"
+            f"<td><strong>{escape(str(r.get('selection') or ''))}</strong><div class='muted'>v {escape(str(r.get('opponent') or ''))}</div>"
+            f"<div class='muted'>{escape(context)}</div></td>"
+            f"<td>{_fmt((float(r.get('probability') or 0.0) * 100.0),1,'%')}</td>"
+            f"<td>{_fmt(r.get('fair_odds'),2)}</td>"
+            f"<td>{_fmt(r.get('market_fair_odds'),2)}</td>"
+            f"<td>{_fmt(r.get('model_edge_vs_market_pct'),1,'pp')}</td>"
+            f"<td>{escape(str(r.get('confidence_tier') or ''))}</td>"
+            f"<td>{escape(_short_ts(r.get('commence_time')))}</td>"
+            f"<td class='{cls}'><strong>{escape(result)}</strong>"
+            + (f"<div class='muted'>{escape(_short_ts(r.get('settled_at')))}</div>" if result != "PENDING" else "")
+            + "</td></tr>"
+        )
+    return "".join(rendered)
+
+
+def _tpred3_ledger_panel(ledger: Mapping[str, Any]) -> str:
+    open_rows = list(ledger.get("open") or [])
+    settled_rows = list(ledger.get("settled") or [])
+    common_head = "<thead><tr><th>TPRED3 pick</th><th>Model P</th><th>Model fair</th><th>Market fair</th><th>Δ vs market</th><th>Tier</th><th>Starts</th><th>Settlement</th></tr></thead>"
+    open_body = _tpred3_rows(open_rows) or "<tr><td colspan='8'>No open TPRED3 match forecasts.</td></tr>"
+    settled_body = _tpred3_rows(settled_rows) or "<tr><td colspan='8'>No settled TPRED3 match forecasts yet.</td></tr>"
+    return f"""
+    <div class='panel'><h2>TPRED3 forward forecast ledger</h2>
+      <p class='muted'>One row per match, using the higher-probability player as the TPRED3 pick. The underlying model stores both player-side probabilities, so the old forward counters were double-counting matches. Model fair = 1/model probability. Market fair is the stored de-vigged consensus price, not necessarily an executable bookmaker quote. Research only; no betting authority.</p>
+      <h3>Open forecasts ({len(open_rows)})</h3>
+      <div class='table-wrap'><table>{common_head}<tbody>{open_body}</tbody></table></div>
+      <h3>Settled forecasts ({len(settled_rows)})</h3>
+      <div class='table-wrap'><table>{common_head}<tbody>{settled_body}</tbody></table></div>
+    </div>
+    """
+
+
 def _home_section(db) -> str:
     s = scoreboard(db)
     s3 = scoreboard3(db)
     rich = _rich_progress(db)
+    ledger = _tpred3_match_ledger(db)
     m1 = dict((s.get("models") or {}).get("TPRED1") or {})
     m2 = dict((s.get("models") or {}).get("TPRED2") or {})
     r1 = dict(m1.get("evidence_ready_walkforward") or {})
@@ -120,7 +217,7 @@ def _home_section(db) -> str:
         {_metric("TPRED2 Brier", _fmt(r2.get("brier"),4), f"{r2.get('samples') or 0} evidence-ready")}
         {_metric("TPRED3 Brier", _fmt(r3.get("brier"),4), f"{r3.get('samples') or 0} rich walk-forward")}
         {_metric("TPRED3 vs market", _fmt(r3.get("brier_improvement_vs_market_pct"),1,"%"), "positive is better")}
-        {_metric("Forward TPRED3", str(s3.get("forward_open") or 0), "open frozen rich forecasts")}
+        {_metric("Forward TPRED3", str(len(ledger.get('open') or [])), f"{len(ledger.get('settled') or [])} settled matches")}
         {_metric("Rich features", _rich_label(s3, rich), f"{coverage:.1f}% match-stat coverage")}
       </div>
     </section>
@@ -131,6 +228,7 @@ def _page(db, base_style: str) -> str:
     s = scoreboard(db)
     s3 = scoreboard3(db)
     rich = _rich_progress(db)
+    ledger = _tpred3_match_ledger(db)
     p = pocket_report(db)
     m1 = dict((s.get("models") or {}).get("TPRED1") or {})
     m2 = dict((s.get("models") or {}).get("TPRED2") or {})
@@ -170,10 +268,11 @@ def _page(db, base_style: str) -> str:
       <div class='grid compact'>
         {_metric("Status", str(s3.get("status") or "BACKFILLING"), "research-only lifecycle")}
         {_metric("Players mapped", str(rich.get("players") or 0), "provider IDs cached locally")}
-        {_metric("TPRED3 forward", str(s3.get("forward_open") or 0), f"{s3.get('forward_settled') or 0} settled")}
+        {_metric("TPRED3 forward matches", str(len(ledger.get('open') or [])), f"{len(ledger.get('settled') or [])} settled · {ledger.get('raw_rows') or 0} side rows stored")}
         {_metric("Last TPRED3 rebuild", _short_ts(s3.get("last_walkforward_at")), "rebuilds as chronological evidence grows")}
       </div>
     </div>
+    {_tpred3_ledger_panel(ledger)}
     <div class='panel'><h2>Current TPRED1/2 forward disagreement</h2>
       <p class='muted'>Largest frozen differences between the original TPRED stack and the latest pre-match consensus. These are observations, not bets.</p>
       <div class='table-wrap'><table><thead><tr><th>Tour</th><th>Selection</th><th>Model P</th><th>Market P</th><th>Δ</th><th>Tier</th><th>Starts</th></tr></thead><tbody>{dbody}</tbody></table></div>
