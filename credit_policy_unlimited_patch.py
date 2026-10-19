@@ -6,13 +6,14 @@ The provider's real remaining-credit guard remains authoritative, but the two
 high-frequency manual-price labs also get explicit daily budgets so a busy slate
 cannot consume the monthly allowance disproportionately.
 
-Live Yankee keeps the adaptive failed-price backoff introduced in V2. HR now
-adds card-feasibility and readiness pacing: it does not spend quote credits on a
-stream until there are enough distinct events to form the requested system, it
-polls distant non-near-card events more slowly, and it preserves five-minute
-refreshes when a same-book card is genuinely close to completion or kickoff is
-near. Candidate generation, modelling, settlement, card rules, staking and
-execution authority are unchanged.
+Live Yankee keeps the adaptive failed-price backoff introduced in V2. HR adds
+card-feasibility/readiness pacing and failure-aware retry backoff: it does not
+spend quote credits on a stream until there are enough distinct events to form
+the requested system, polls distant non-near-card events more slowly, preserves
+five-minute refreshes when a same-book card is genuinely close to completion or
+kickoff is near, and never hammers a provider event once recent calls are failing.
+Candidate generation, modelling, settlement, card rules, staking and execution
+authority are unchanged.
 """
 
 from collections import defaultdict
@@ -22,8 +23,8 @@ from typing import Any, Callable, Dict, Mapping, Sequence
 import hit_rate_multiples_lab
 import live_yankee_feed
 
-VERSION = "CREDIT_POLICY_TARGETED_BUDGET_V4"
-HIT_RATE_DAILY_CREDITS = 750
+VERSION = "CREDIT_POLICY_TARGETED_BUDGET_V5"
+HIT_RATE_DAILY_CREDITS = 500
 LIVE_YANKEE_DAILY_CREDITS = 1_500
 BASE_REFRESH_MINUTES = 5.0
 MID_BACKOFF_MINUTES = 20.0
@@ -37,9 +38,19 @@ REPEATED_MISS_POLLS = 2
 # distinct events to form its requested multiple. Distant streams get periodic
 # snapshots rather than continuous five-minute refreshes. If one bookmaker is
 # already one leg short of a complete card, normal five-minute polling resumes.
-HR_MID_REFRESH_MINUTES = 20.0
-HR_FAR_REFRESH_MINUTES = 60.0
+HR_MID_REFRESH_MINUTES = 30.0
+HR_FAR_REFRESH_MINUTES = 90.0
 HR_NEAR_CARD_MISSING_LEGS = 1
+
+# Failed provider calls used to be effectively retried every worker cycle because
+# the underlying collector's due logic only considers the last successful poll.
+# That can burn quota without improving quote coverage. Back off failed HR events
+# while still allowing faster recovery for a near-card or imminent kickoff.
+HR_FAILURE_BACKOFF_MINUTES = 30.0
+HR_REPEAT_FAILURE_BACKOFF_MINUTES = 90.0
+HR_PRIORITY_FAILURE_BACKOFF_MINUTES = 15.0
+HR_FAILURE_LOOKBACK_HOURS = 6.0
+HR_REPEAT_FAILURE_THRESHOLD = 2
 
 _INSTALLED = False
 _ORIGINAL_LY_TARGETS = None
@@ -73,6 +84,54 @@ def _last_success(db, run_type: str, event_id: str):
             (run_type, event_id),
         ) or {}
         return _dt(row.get("at"))
+    except Exception:
+        return None
+
+
+def _recent_attempts(db, run_type: str, event_id: str, now: datetime):
+    since = (now - timedelta(hours=HR_FAILURE_LOOKBACK_HOURS)).isoformat()
+    try:
+        return db.fetchall(
+            """SELECT started_at,ok FROM collector_runs
+               WHERE run_type=? AND event_id=? AND started_at>=?
+               ORDER BY started_at DESC,id DESC LIMIT 6""",
+            (run_type, event_id, since),
+        )
+    except Exception:
+        return []
+
+
+def _failure_retry_wait(db, run_type: str, event_id: str, now: datetime, *, priority: bool) -> float | None:
+    """Return required retry wait when the latest provider attempt failed."""
+    attempts = _recent_attempts(db, run_type, event_id, now)
+    if not attempts:
+        return None
+    latest = attempts[0] or {}
+    if bool(latest.get("ok")):
+        return None
+
+    consecutive_failures = 0
+    for raw in attempts:
+        if bool((raw or {}).get("ok")):
+            break
+        consecutive_failures += 1
+
+    if priority:
+        return HR_PRIORITY_FAILURE_BACKOFF_MINUTES
+    if consecutive_failures >= HR_REPEAT_FAILURE_THRESHOLD:
+        return HR_REPEAT_FAILURE_BACKOFF_MINUTES
+    return HR_FAILURE_BACKOFF_MINUTES
+
+
+def _last_attempt_at(db, run_type: str, event_id: str):
+    try:
+        row = db.fetchone(
+            """SELECT started_at FROM collector_runs
+               WHERE run_type=? AND event_id=?
+               ORDER BY started_at DESC,id DESC LIMIT 1""",
+            (run_type, event_id),
+        ) or {}
+        return _dt(row.get("started_at"))
     except Exception:
         return None
 
@@ -215,13 +274,29 @@ def _hit_rate_targets_with_pacing(db, now: datetime, targets: Sequence[Mapping[s
         if event_id not in eligible_events:
             continue
 
+        minutes_to_kickoff = (kickoff - now).total_seconds() / 60.0
+        priority = event_id in near_events or minutes_to_kickoff <= CLOSE_TO_KICKOFF_MINUTES
+
+        # The collector's native due check only remembers successful polls. If
+        # the provider starts rejecting a particular event, the event otherwise
+        # becomes due on every 60-second worker cycle. Back off failed attempts
+        # before applying the normal readiness cadence.
+        failure_wait = _failure_retry_wait(
+            db, "HIT_RATE_MULTIPLES_QUOTES", event_id, now, priority=priority
+        )
+        if failure_wait is not None:
+            last_attempt = _last_attempt_at(db, "HIT_RATE_MULTIPLES_QUOTES", event_id)
+            if last_attempt is not None:
+                elapsed = (now - last_attempt).total_seconds() / 60.0
+                if elapsed + 1e-9 < failure_wait:
+                    continue
+
         # Once a same-book card is one leg short, keep the original five-minute
         # reaction cadence so a short-lived price window is not missed.
         if event_id in near_events:
             kept.append(raw)
             continue
 
-        minutes_to_kickoff = (kickoff - now).total_seconds() / 60.0
         if minutes_to_kickoff <= CLOSE_TO_KICKOFF_MINUTES:
             kept.append(raw)
             continue
@@ -276,7 +351,7 @@ def install() -> dict:
         "installed": True,
         "already_installed": _INSTALLED,
         "version": VERSION,
-        "policy": "targeted_daily_caps_plus_card_readiness_pacing",
+        "policy": "targeted_daily_caps_plus_card_readiness_and_failure_backoff",
         "before": before,
         "after": {
             "hit_rate_multiples": int(hit_rate_multiples_lab.DAILY_REFRESH_CREDIT_BUDGET),
@@ -300,6 +375,10 @@ def install() -> dict:
             "far_refresh_minutes": HR_FAR_REFRESH_MINUTES,
             "close_to_kickoff_minutes": CLOSE_TO_KICKOFF_MINUTES,
             "far_from_kickoff_minutes": FAR_FROM_KICKOFF_MINUTES,
+            "failure_backoff_minutes": HR_FAILURE_BACKOFF_MINUTES,
+            "repeat_failure_backoff_minutes": HR_REPEAT_FAILURE_BACKOFF_MINUTES,
+            "priority_failure_backoff_minutes": HR_PRIORITY_FAILURE_BACKOFF_MINUTES,
+            "repeat_failure_threshold": HR_REPEAT_FAILURE_THRESHOLD,
         },
         "selection_rules_changed": False,
         "betting_authority_changed": False,
