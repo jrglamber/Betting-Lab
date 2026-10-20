@@ -6,6 +6,12 @@ This runs after MULTIPLES_CREDIT_EFFICIENCY_V1. It does not alter selection,
 pricing, same-book, card construction or betting authority. The extra allowance
 exists only on 2026-10-20 UTC; subsequent target cycles enforce the normal caps.
 Per-event pacing/backoff from the efficiency patch remains in force.
+
+V2 keeps the higher hard ceilings available for genuinely urgent/near-card work,
+but no longer bypasses the efficiency patch's time-of-day soft pacing. That means
+non-urgent quote refreshes are throttled once the day's paced allowance has been
+used, while imminent fixtures and near-complete HR cards can still consume the
+reserved headroom needed to form placeable cards.
 """
 
 from datetime import datetime, timezone
@@ -15,7 +21,7 @@ import hit_rate_multiples_lab
 import live_yankee_feed
 import multiples_credit_efficiency_patch as efficiency
 
-VERSION = "MULTIPLES_TODAY_HEADROOM_2026_10_20_V1"
+VERSION = "MULTIPLES_TODAY_HEADROOM_2026_10_20_V2_PACED"
 BOOST_DATE_UTC = "2026-10-20"
 NORMAL_LIVE_YANKEE_CAP = 1_200
 NORMAL_HIT_RATE_CAP = 400
@@ -63,19 +69,17 @@ def install(db) -> dict:
     if not all(callable(fn) for fn in (_ORIGINAL_LIVE_TARGETS, _ORIGINAL_HR_TARGETS, _ORIGINAL_SOFT_ALLOWANCE)):
         return {"installed": False, "version": VERSION, "error": "efficiency patch hooks unavailable"}
 
-    # Allow the base collectors to reach today's temporary ceiling. Dynamic
-    # wrappers below remain the final hard-stop authority and revert by UTC date.
+    # Allow the base collectors to reach today's temporary ceiling if urgent work
+    # needs it. The efficiency wrappers below still pace non-urgent work.
     _apply_provider_caps(BOOST_LIVE_YANKEE_CAP, BOOST_HIT_RATE_CAP)
 
     def soft_allowance(cap: int, now: datetime) -> int:
         if _is_boost_day(now):
-            # Today only, make the bounded extra headroom actually usable. The
-            # event-level 5/15/20/45/120-minute pacing remains unchanged.
-            if cap == BOOST_LIVE_YANKEE_CAP:
-                return BOOST_LIVE_YANKEE_CAP
-            if cap == BOOST_HIT_RATE_CAP:
-                return BOOST_HIT_RATE_CAP
-            return cap
+            # Keep the temporary hard ceiling, but restore paced spending across
+            # the day. Urgent Live Yankee events and HR near-card priority windows
+            # bypass this soft allowance in MULTIPLES_CREDIT_EFFICIENCY_V1, so the
+            # remaining quota is reserved for work most likely to form a card.
+            return _ORIGINAL_SOFT_ALLOWANCE(cap, now)
 
         normal_cap = cap
         if cap == BOOST_LIVE_YANKEE_CAP:
@@ -120,7 +124,9 @@ def install(db) -> dict:
             "hit_rate": max(0, hr_cap - hr_spent),
         },
         "automatic_revert_at": AUTO_REVERT_AT,
-        "soft_pacing_bypass_today_only": True,
+        "soft_pacing_bypass_today_only": False,
+        "boosted_caps_are_paced": True,
+        "urgent_headroom_preserved": True,
         "event_refresh_cadence_changed": False,
         "selection_rules_changed": False,
         "same_book_rules_changed": False,
