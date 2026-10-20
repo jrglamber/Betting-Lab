@@ -9,13 +9,14 @@ import bookmaker_exclusion_patch  # noqa: F401 -- exclude inaccessible prices be
 import tennis_rich_throughput_patch  # noqa: F401 -- patch before runtime captures maintenance function
 import dashboard_app as _dashboard_app
 from dashboard_app import app
-import hit_rate_daily_boost_patch  # noqa: F401 -- one-day HR cap boost; auto-reverts by UTC date
+import hit_rate_daily_boost_patch  # noqa: F401 -- historical wrapper; Oct20 reporting patch prevents stale cap conflict
 from first_half_goal_price_capture_patch import install as install_fhg_price_capture
 from frozen_shadow_portfolio_patch import install as install_frozen_shadow_portfolio
 from frozen_shadow_dashboard_patch import install as install_frozen_shadow_dashboard
 from hit_rate_price_tolerance_patch import install as install_hr_price_tolerance
 from multiples_credit_efficiency_patch import install as install_multiples_credit_efficiency
 from multiples_today_headroom_patch import install as install_multiples_today_headroom
+from oct20_runtime_reporting_fixes_patch import install as install_oct20_runtime_reporting_fixes
 
 # The base credit policy is installed during dashboard_app bootstrap. Tighten only
 # the high-frequency multiples quote cadence afterwards: preserve all selection,
@@ -74,6 +75,20 @@ try:
 except Exception as exc:
     print(
         f"FROZEN_SHADOW_DASHBOARD_INSTALL {{'ok': False, 'error': '{type(exc).__name__}: {exc}'}}",
+        flush=True,
+    )
+
+# Correct the stale HR 500-credit override, add open/today counts to Frozen
+# Shadow, and make TPRED market-Brier reporting explicitly paired/provisional.
+# Research/reporting only: no model, staking or betting authority changes.
+try:
+    _oct20_runtime_reporting = install_oct20_runtime_reporting_fixes(
+        _dashboard_app.base_app.db
+    )
+    print(f"OCT20_RUNTIME_REPORTING_FIXES_INSTALL {_oct20_runtime_reporting}", flush=True)
+except Exception as exc:
+    print(
+        f"OCT20_RUNTIME_REPORTING_FIXES_INSTALL {{'ok': False, 'error': '{type(exc).__name__}: {exc}'}}",
         flush=True,
     )
 
