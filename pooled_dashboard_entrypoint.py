@@ -14,6 +14,24 @@ from first_half_goal_price_capture_patch import install as install_fhg_price_cap
 from frozen_shadow_portfolio_patch import install as install_frozen_shadow_portfolio
 from frozen_shadow_dashboard_patch import install as install_frozen_shadow_dashboard
 from hit_rate_price_tolerance_patch import install as install_hr_price_tolerance
+from multiples_credit_efficiency_patch import install as install_multiples_credit_efficiency
+
+# The base credit policy is installed during dashboard_app bootstrap. Tighten only
+# the high-frequency multiples quote cadence afterwards: preserve all selection,
+# same-book and card rules while pacing non-urgent paid polling across the day.
+try:
+    _multiples_credit_efficiency = install_multiples_credit_efficiency(
+        _dashboard_app.base_app.db
+    )
+    print(
+        f"MULTIPLES_CREDIT_EFFICIENCY_INSTALL {_multiples_credit_efficiency}",
+        flush=True,
+    )
+except Exception as exc:
+    print(
+        f"MULTIPLES_CREDIT_EFFICIENCY_INSTALL {{'ok': False, 'error': '{type(exc).__name__}: {exc}'}}",
+        flush=True,
+    )
 
 # Freeze a production-style singles portfolio with a common forward boundary.
 # Existing component cohort freeze dates are preserved; this adds fixed reference
