@@ -10,7 +10,9 @@ import tennis_rich_throughput_patch  # noqa: F401 -- patch before runtime captur
 import dashboard_app as _dashboard_app
 from dashboard_app import app
 import hit_rate_daily_boost_patch  # noqa: F401 -- historical wrapper; Oct20 reporting patch prevents stale cap conflict
+from first_half_goal_free_settlement_patch import install as install_fhg_free_settlement
 from first_half_goal_price_capture_patch import install as install_fhg_price_capture
+from frozen_shadow_bet_detail_patch import install as install_frozen_shadow_bet_detail
 from frozen_shadow_portfolio_patch import install as install_frozen_shadow_portfolio
 from frozen_shadow_dashboard_patch import install as install_frozen_shadow_dashboard
 from hit_rate_price_tolerance_patch import install as install_hr_price_tolerance
@@ -89,6 +91,33 @@ try:
 except Exception as exc:
     print(
         f"OCT20_RUNTIME_REPORTING_FIXES_INSTALL {{'ok': False, 'error': '{type(exc).__name__}: {exc}'}}",
+        flush=True,
+    )
+
+# Add a collapsible per-bet audit trail after the open/today tile wrapper is in
+# place, so the dashboard shows exact frozen odds, bookmaker, stake, settlement,
+# nominal P/L and CLV without changing portfolio selection or accounting.
+try:
+    _frozen_bet_detail = install_frozen_shadow_bet_detail(
+        _dashboard_app.base_app.app,
+        _dashboard_app.base_app.db,
+    )
+    print(f"FROZEN_SHADOW_BET_DETAIL_INSTALL {_frozen_bet_detail}", flush=True)
+except Exception as exc:
+    print(
+        f"FROZEN_SHADOW_BET_DETAIL_INSTALL {{'ok': False, 'error': '{type(exc).__name__}: {exc}'}}",
+        flush=True,
+    )
+
+# Replace the inaccessible current-season API-Football FHG1 settlement fallback
+# with an hourly, zero-subscription football-data.co.uk refresh only when an
+# already-frozen candidate is >2h overdue. Canonical HT scores are reconciled.
+try:
+    _fhg_free_settlement = install_fhg_free_settlement(_dashboard_app.base_app.db)
+    print(f"FHG1_FREE_SETTLEMENT_BOOTSTRAP {_fhg_free_settlement}", flush=True)
+except Exception as exc:
+    print(
+        f"FHG1_FREE_SETTLEMENT_BOOTSTRAP {{'ok': False, 'error': '{type(exc).__name__}: {exc}'}}",
         flush=True,
     )
 
