@@ -15,6 +15,7 @@ from frozen_shadow_portfolio_patch import install as install_frozen_shadow_portf
 from frozen_shadow_dashboard_patch import install as install_frozen_shadow_dashboard
 from hit_rate_price_tolerance_patch import install as install_hr_price_tolerance
 from multiples_credit_efficiency_patch import install as install_multiples_credit_efficiency
+from multiples_today_headroom_patch import install as install_multiples_today_headroom
 
 # The base credit policy is installed during dashboard_app bootstrap. Tighten only
 # the high-frequency multiples quote cadence afterwards: preserve all selection,
@@ -30,6 +31,22 @@ try:
 except Exception as exc:
     print(
         f"MULTIPLES_CREDIT_EFFICIENCY_INSTALL {{'ok': False, 'error': '{type(exc).__name__}: {exc}'}}",
+        flush=True,
+    )
+
+# Today-only bounded headroom for the evening football slate. This sits on top of
+# the efficiency cadence and automatically returns to the normal caps by UTC date.
+try:
+    _multiples_today_headroom = install_multiples_today_headroom(
+        _dashboard_app.base_app.db
+    )
+    print(
+        f"MULTIPLES_TODAY_HEADROOM_INSTALL {_multiples_today_headroom}",
+        flush=True,
+    )
+except Exception as exc:
+    print(
+        f"MULTIPLES_TODAY_HEADROOM_INSTALL {{'ok': False, 'error': '{type(exc).__name__}: {exc}'}}",
         flush=True,
     )
 
