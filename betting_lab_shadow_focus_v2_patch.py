@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-"""Final shadow-only tightening for the 11 Oct 2026 Betting Lab review.
+"""Final shadow-only tightening for the Betting Lab focused Yankee feed.
 
 - Restrict the exploratory basketball Yankee pocket to EuroLeague 1.50-3.99.
-- Keep the focused football/NFL/NCAAF/baseball/PRED4 lanes unchanged.
+- Retire the broad football 4.00-4.99 source after its frozen forward test failed.
+- Keep the previously frozen NFL/NCAAF/baseball/PRED4 source definitions unchanged.
 - Backfill the already-stored NFL/EuroLeague historical games through the
   strict chronological PRED1 walk-forward immediately at web startup, so the
   research dashboard does not wait for the next six-hour API-Sports cron.
@@ -20,10 +21,9 @@ import live_yankee_feed as feed
 import live_yankee_source_focus_patch as focus
 import web as web_module
 
-VERSION = "YANKEE_LIVE_FEED_V2_1_FOCUSED_BANDS"
+VERSION = "YANKEE_LIVE_FEED_V2_2_RETIRE_4_TO_4_99"
 SOURCES = (
     "PRED4",
-    "FOOTBALL_4_TO_4_99",
     "NFL_2_TO_4_99",
     "NCAAF_3_TO_4_99",
     "EUROLEAGUE_1_50_TO_3_99",
@@ -40,6 +40,8 @@ def _source_rows(db, start_iso, now):
     out = []
     for row in rows:
         lane = str(row.get("source_lane") or "")
+        if lane == "FOOTBALL_4_TO_4_99":
+            continue
         if lane == "BASKETBALL_1_50_TO_3_99":
             if str(row.get("sport_key") or "").lower() != "basketball_euroleague":
                 continue
@@ -83,8 +85,8 @@ def install() -> Dict[str, Any]:
     feed.FROZEN_SOURCES = SOURCES
     feed.ALGORITHM_VERSION = VERSION
 
-    # Clean up any queued generic-basketball rows left by the immediately prior
-    # shadow configuration. EuroLeague rows are retained and relabelled.
+    # Clean up queued rows that no longer belong to the active shadow policy.
+    # Historical cards/results remain immutable for honest before/after analysis.
     try:
         web_module.db.execute(
             "UPDATE live_yankee_candidates SET source_lane='EUROLEAGUE_1_50_TO_3_99' "
@@ -95,13 +97,17 @@ def install() -> Dict[str, Any]:
             "UPDATE live_yankee_candidates SET status='EXPIRED',expired_at=CURRENT_TIMESTAMP "
             "WHERE status='QUEUED' AND source_lane='BASKETBALL_1_50_TO_3_99'"
         )
+        web_module.db.execute(
+            "UPDATE live_yankee_candidates SET status='EXPIRED',expired_at=CURRENT_TIMESTAMP "
+            "WHERE status='QUEUED' AND source_lane='FOOTBALL_4_TO_4_99'"
+        )
         state = {
             "sources": list(SOURCES),
             "pred4": "all current PRED4 selections",
-            "football": "core football execution shadows at 4.00-4.99",
-            "nfl": "Multi-Sport NFL H2H at 2.00-4.99",
+            "football_4_to_4_99": "retired after failed frozen forward test; historical evidence retained",
+            "nfl": "Multi-Sport NFL H2H at 2.00-4.99 (existing frozen definition unchanged)",
             "ncaaf": "Multi-Sport NCAAF H2H at 3.00-4.99",
-            "euroleague": "Multi-Sport EuroLeague H2H at 1.50-3.99 (exploratory)",
+            "euroleague": "Multi-Sport EuroLeague H2H at 1.50-3.99 (existing frozen definition unchanged)",
             "baseball": "Multi-Sport MLB H2H at 1.50-1.99 (exploratory)",
             "seed_policy": "all still-open actionable selections, including selections created before Yankee-feed start; fresh prices required",
             "dedupe": "event+market+selection+point",
@@ -116,13 +122,14 @@ def install() -> Dict[str, Any]:
         pass
 
     walkforward_result = _backfill_walkforward()
-    web_module.VERSION = "0.19.45"
+    web_module.VERSION = "0.19.75"
     _INSTALLED = True
     return {
         "installed": True,
         "already_installed": False,
         "version": VERSION,
         "sources": list(SOURCES),
+        "retired_sources": ["FOOTBALL_4_TO_4_99"],
         "walkforward": walkforward_result,
         "dashboard_version": web_module.VERSION,
     }
