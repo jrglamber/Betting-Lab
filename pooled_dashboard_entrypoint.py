@@ -12,6 +12,7 @@ from dashboard_app import app
 import hit_rate_daily_boost_patch  # noqa: F401 -- one-day HR cap boost; auto-reverts by UTC date
 from first_half_goal_price_capture_patch import install as install_fhg_price_capture
 from frozen_shadow_portfolio_patch import install as install_frozen_shadow_portfolio
+from frozen_shadow_dashboard_patch import install as install_frozen_shadow_dashboard
 from hit_rate_price_tolerance_patch import install as install_hr_price_tolerance
 
 # Freeze a production-style singles portfolio with a common forward boundary.
@@ -27,6 +28,17 @@ try:
 except Exception as exc:
     print(
         f"FROZEN_SHADOW_PORTFOLIO_INSTALL {{'ok': False, 'error': '{type(exc).__name__}: {exc}'}}",
+        flush=True,
+    )
+
+# Surface the frozen portfolio on the curated homepage. Presentation only: the
+# accounting/freeze state above remains authoritative and no selection changes.
+try:
+    _frozen_dashboard = install_frozen_shadow_dashboard(_dashboard_app.base_app.db)
+    print(f"FROZEN_SHADOW_DASHBOARD_INSTALL {_frozen_dashboard}", flush=True)
+except Exception as exc:
+    print(
+        f"FROZEN_SHADOW_DASHBOARD_INSTALL {{'ok': False, 'error': '{type(exc).__name__}: {exc}'}}",
         flush=True,
     )
 
