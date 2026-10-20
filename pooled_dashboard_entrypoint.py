@@ -1,15 +1,46 @@
 from __future__ import annotations
 
-"""Production entrypoint that installs DB and tennis efficiency patches first."""
+"""Production entrypoint that installs DB and research-safety patches first."""
 
 import os
 
 import db_pool_patch  # noqa: F401  -- must run before dashboard_app imports web/db instances
+import bookmaker_exclusion_patch  # noqa: F401 -- exclude inaccessible prices before any Odds API consumer is built
 import tennis_rich_throughput_patch  # noqa: F401 -- patch before runtime captures maintenance function
 import dashboard_app as _dashboard_app
 from dashboard_app import app
 import hit_rate_daily_boost_patch  # noqa: F401 -- one-day HR cap boost; auto-reverts by UTC date
+from first_half_goal_price_capture_patch import install as install_fhg_price_capture
+from frozen_shadow_portfolio_patch import install as install_frozen_shadow_portfolio
 from hit_rate_price_tolerance_patch import install as install_hr_price_tolerance
+
+# Freeze a production-style singles portfolio with a common forward boundary.
+# Existing component cohort freeze dates are preserved; this adds fixed reference
+# stakes and deduplicated whole-portfolio accounting only. No real bets are sent.
+try:
+    _frozen_portfolio = install_frozen_shadow_portfolio(
+        _dashboard_app.base_app.app,
+        _dashboard_app.base_app.db,
+        _dashboard_app.base_app.web_module,
+    )
+    print(f"FROZEN_SHADOW_PORTFOLIO_INSTALL {_frozen_portfolio}", flush=True)
+except Exception as exc:
+    print(
+        f"FROZEN_SHADOW_PORTFOLIO_INSTALL {{'ok': False, 'error': '{type(exc).__name__}: {exc}'}}",
+        flush=True,
+    )
+
+# FHG1 already freezes forecasts prospectively. Capture the missing executable
+# Over 0.5 first-half-goal price once, from accessible venues only, so hit-rate
+# evidence can now be converted into real forward ROI/EV evidence.
+try:
+    _fhg_prices = install_fhg_price_capture(_dashboard_app.base_app)
+    print(f"FHG1_PRICE_CAPTURE_INSTALL {_fhg_prices}", flush=True)
+except Exception as exc:
+    print(
+        f"FHG1_PRICE_CAPTURE_INSTALL {{'ok': False, 'error': '{type(exc).__name__}: {exc}'}}",
+        flush=True,
+    )
 
 # Read-only startup evidence for the paid tennis subscription. RapidAPI's
 # x-ratelimit-requests-remaining response header is already persisted in the
