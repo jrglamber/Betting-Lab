@@ -4,6 +4,8 @@ This layers on top of dashboard_app so every existing curated dashboard/runtime
 patch remains authoritative. The new research module is shadow-only.
 """
 
+import re
+
 import dashboard_app as curated
 import adaptive_winner_research as adaptive_core
 from adaptive_winner_research import install as install_adaptive_winner_research
@@ -15,6 +17,9 @@ from adaptive_tpred4_identity_patch import install as install_tpred4_identity
 # installation so startup diagnostics and every visible build surface agree.
 BUILD_VERSION = "0.19.78"
 adaptive_core.DASHBOARD_VERSION = BUILD_VERSION
+curated.dashboard_layout_v2.VERSION = BUILD_VERSION
+curated.base_app.web_module.VERSION = BUILD_VERSION
+curated.base_app.app.version = BUILD_VERSION
 
 # Install model-freeze and stable historical-identity guards before the runtime
 # wrapper is attached. Both are research-only and create no provider traffic.
@@ -40,9 +45,34 @@ curated.base_app.app.router.routes[:] = [
     if getattr(route, "path", None) != "/admin/adaptive-research/run"
 ]
 
-# Keep the visible build identifier unambiguous for manual Railway verification.
+# Final display guard. The curated homepage has accumulated wrapper layers and
+# older bootstrap modules may assign their own VERSION values while importing.
+# Wrap the actual page renderer at the end of startup so the rendered title and
+# visible badge always match this production release, regardless of import order.
+_original_page = curated.dashboard_layout_v2._page
+
+
+def _page_with_release_version(db, base_style: str) -> str:
+    html = _original_page(db, base_style)
+    html = re.sub(
+        r"(<title>Betting Lab v)[^<]+(</title>)",
+        rf"\g<1>{BUILD_VERSION}\g<2>",
+        html,
+        count=1,
+    )
+    html = re.sub(
+        r"(Betting Lab <span class='pill'>v)[^<]+(</span>)",
+        rf"\g<1>{BUILD_VERSION}\g<2>",
+        html,
+        count=1,
+    )
+    return html
+
+
+curated.dashboard_layout_v2._page = _page_with_release_version
 curated.dashboard_layout_v2.VERSION = BUILD_VERSION
 curated.base_app.web_module.VERSION = BUILD_VERSION
 curated.base_app.app.version = BUILD_VERSION
+print(f"BETTING_LAB_RELEASE_VERSION {BUILD_VERSION}", flush=True)
 
 app = curated.base_app.app
