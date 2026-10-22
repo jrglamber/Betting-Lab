@@ -7,9 +7,14 @@ patch remains authoritative. The new research module is shadow-only.
 import dashboard_app as curated
 from adaptive_winner_research import DASHBOARD_VERSION, install as install_adaptive_winner_research
 from adaptive_winner_research_safety_patch import install as install_adaptive_safety
+from adaptive_tpred4_identity_patch import install as install_tpred4_identity
 
+# Install model-freeze and stable historical-identity guards before the runtime
+# wrapper is attached. Both are research-only and create no provider traffic.
 safety = install_adaptive_safety(curated.base_app.db)
 print(f"ADAPTIVE_WINNER_RESEARCH_SAFETY {safety}", flush=True)
+tpred4_identity = install_tpred4_identity(curated.base_app.db)
+print(f"ADAPTIVE_TPRED4_IDENTITY {tpred4_identity}", flush=True)
 
 adaptive = install_adaptive_winner_research(
     curated.base_app.app,
