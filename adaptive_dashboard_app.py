@@ -5,9 +5,16 @@ patch remains authoritative. The new research module is shadow-only.
 """
 
 import dashboard_app as curated
-from adaptive_winner_research import DASHBOARD_VERSION, install as install_adaptive_winner_research
+import adaptive_winner_research as adaptive_core
+from adaptive_winner_research import install as install_adaptive_winner_research
 from adaptive_winner_research_safety_patch import install as install_adaptive_safety
 from adaptive_tpred4_identity_patch import install as install_tpred4_identity
+
+# The live baseline was already v0.19.77 before this research expansion.
+# This deployment is therefore v0.19.78. Set the shared research constant before
+# installation so startup diagnostics and every visible build surface agree.
+BUILD_VERSION = "0.19.78"
+adaptive_core.DASHBOARD_VERSION = BUILD_VERSION
 
 # Install model-freeze and stable historical-identity guards before the runtime
 # wrapper is attached. Both are research-only and create no provider traffic.
@@ -34,8 +41,8 @@ curated.base_app.app.router.routes[:] = [
 ]
 
 # Keep the visible build identifier unambiguous for manual Railway verification.
-curated.dashboard_layout_v2.VERSION = DASHBOARD_VERSION
-curated.base_app.web_module.VERSION = DASHBOARD_VERSION
-curated.base_app.app.version = DASHBOARD_VERSION
+curated.dashboard_layout_v2.VERSION = BUILD_VERSION
+curated.base_app.web_module.VERSION = BUILD_VERSION
+curated.base_app.app.version = BUILD_VERSION
 
 app = curated.base_app.app
