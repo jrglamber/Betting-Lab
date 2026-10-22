@@ -8,18 +8,24 @@ stall unrelated HTTP requests while a cold snapshot is rebuilt. This patch also
 owns the adaptive research bridge so the research layer is installed even when
 Railway uses a service-level start-command override that launches dashboard_app.
 
+The final HTML response is normalized here as well. Several older presentation
+patches still assign historical dashboard VERSION values later in startup; those
+assignments must not downgrade the release badge/title or hide the adaptive nav
+entry that was installed successfully earlier in the bootstrap.
+
 No live betting authority is added.
 """
 
 import asyncio
 import inspect
+import re
 import threading
 import time
 from typing import Any, Dict, Optional
 
 from fastapi.responses import HTMLResponse
 
-VERSION = "DASHBOARD_RESPONSIVENESS_V2"
+VERSION = "DASHBOARD_RESPONSIVENESS_V3"
 BUILD_VERSION = "0.19.78"
 FRESH_SECONDS = 20.0
 
@@ -33,6 +39,63 @@ def _clone(entry: Dict[str, Any]) -> HTMLResponse:
         content=str(entry.get("html") or ""),
         status_code=int(entry.get("status_code") or 200),
         headers=dict(entry.get("headers") or {}),
+    )
+
+
+def _finalize_html_response(response: Any) -> Any:
+    """Normalize the user-visible release surface after every legacy wrapper.
+
+    This deliberately happens at render time rather than import time. Older
+    pooled-entrypoint presentation patches can therefore keep their historical
+    constants without being able to downgrade what the browser actually sees.
+    """
+    if not isinstance(response, HTMLResponse):
+        return response
+
+    html = response.body.decode("utf-8", errors="replace")
+    html = re.sub(
+        r"(<title>Betting Lab v)[^<]+(</title>)",
+        rf"\g<1>{BUILD_VERSION}\g<2>",
+        html,
+        count=1,
+    )
+    html = re.sub(
+        r"(Betting Lab <span class='pill'>v)[^<]+(</span>)",
+        rf"\g<1>{BUILD_VERSION}\g<2>",
+        html,
+        count=1,
+    )
+
+    # Put the adaptive research entry in the actual top navigation. The adaptive
+    # module also surfaces a link defensively, but older homepage layouts do not
+    # contain its preferred marker and can leave that link lower down the page.
+    adaptive_link = "<a href='/adaptive-research'>Adaptive Winner Research</a>"
+    predictive_marker = "<a href='#predictive'>Predictive Models</a>"
+    topnav_start = html.find("<div class='topnav'>")
+    topnav_end = html.find("</div>", topnav_start) if topnav_start >= 0 else -1
+    topnav_html = html[topnav_start:topnav_end] if topnav_start >= 0 and topnav_end > topnav_start else ""
+    if adaptive_link not in topnav_html:
+        if predictive_marker in html:
+            html = html.replace(
+                predictive_marker,
+                predictive_marker + adaptive_link,
+                1,
+            )
+        elif topnav_start >= 0:
+            html = html.replace(
+                "<div class='topnav'>",
+                "<div class='topnav'>" + adaptive_link,
+                1,
+            )
+
+    headers = {
+        k: v for k, v in response.headers.items()
+        if k.lower() != "content-length"
+    }
+    return HTMLResponse(
+        content=html,
+        status_code=response.status_code,
+        headers=headers,
     )
 
 
@@ -146,7 +209,7 @@ def install(app) -> Dict[str, Any]:
             # This function is reached through a synchronous FastAPI endpoint,
             # therefore it runs in the threadpool and has no active event loop.
             response = asyncio.run(response)
-        return response
+        return _finalize_html_response(response)
 
     def store(response: Any) -> None:
         global _CACHE
@@ -223,5 +286,9 @@ def install(app) -> Dict[str, Any]:
         "policy": "serve_last_good_while_refreshing",
         "execution": "fastapi_threadpool",
         "adaptive": adaptive,
+        "final_html_guard": {
+            "release_version": BUILD_VERSION,
+            "adaptive_topnav": True,
+        },
         "presentation_only": True,
     }
