@@ -3,15 +3,12 @@ from __future__ import annotations
 """Keep the curated homepage responsive while its database snapshot refreshes.
 
 The curated dashboard is assembled by synchronous database-heavy code behind an
-async route wrapper.  Running that wrapper directly on the ASGI event loop can
-stall unrelated HTTP requests while a cold snapshot is rebuilt.  This patch
-re-registers only the final homepage route as a normal synchronous FastAPI
-endpoint, so FastAPI executes the render in its threadpool.  It also serves the
-last successful HTML immediately while a stale copy is refreshed in a daemon
-thread.
+async route wrapper. Running that wrapper directly on the ASGI event loop can
+stall unrelated HTTP requests while a cold snapshot is rebuilt. This patch also
+owns the adaptive research bridge so the research layer is installed even when
+Railway uses a service-level start-command override that launches dashboard_app.
 
-Presentation only: no collector, selection, settlement, staking, Telegram or
-betting authority is changed.
+No live betting authority is added.
 """
 
 import asyncio
@@ -22,7 +19,8 @@ from typing import Any, Dict, Optional
 
 from fastapi.responses import HTMLResponse
 
-VERSION = "DASHBOARD_RESPONSIVENESS_V1"
+VERSION = "DASHBOARD_RESPONSIVENESS_V2"
+BUILD_VERSION = "0.19.78"
 FRESH_SECONDS = 20.0
 
 _LOCK = threading.Lock()
@@ -38,8 +36,80 @@ def _clone(entry: Dict[str, Any]) -> HTMLResponse:
     )
 
 
+def _install_adaptive_layer(app) -> Dict[str, Any]:
+    """Install the research-only adaptive layer through the entrypoint we know is live.
+
+    Imports are deliberately deferred until dashboard_app has completed its
+    existing imports. This avoids circular bootstrap dependencies while making
+    the deployment independent of Railway's configured start command.
+    """
+    try:
+        import web as web_module
+        import dashboard_layout_v2 as layout
+        import adaptive_winner_research as adaptive_core
+        from adaptive_winner_research_safety_patch import install as install_adaptive_safety
+        from adaptive_tpred4_identity_patch import install as install_tpred4_identity
+
+        adaptive_core.DASHBOARD_VERSION = BUILD_VERSION
+        layout.VERSION = BUILD_VERSION
+        web_module.VERSION = BUILD_VERSION
+        app.version = BUILD_VERSION
+
+        safety = install_adaptive_safety(web_module.db)
+        identity = install_tpred4_identity(web_module.db)
+        adaptive = adaptive_core.install(
+            app,
+            web_module.db,
+            web_module.BASE_STYLE,
+            tennis_engine=getattr(web_module, "tennis_engine", None),
+        )
+
+        # Never expose the heavyweight maintenance endpoint publicly. Normal
+        # maintenance runs from the wrapped tennis research cycle.
+        app.router.routes[:] = [
+            route for route in app.router.routes
+            if getattr(route, "path", None) != "/admin/adaptive-research/run"
+        ]
+
+        # Reassert release identity after all adaptive route work.
+        layout.VERSION = BUILD_VERSION
+        web_module.VERSION = BUILD_VERSION
+        app.version = BUILD_VERSION
+        print(
+            "ADAPTIVE_DASHBOARD_BRIDGE "
+            + str({
+                "ok": True,
+                "version": BUILD_VERSION,
+                "safety": safety,
+                "identity": identity,
+                "adaptive": adaptive,
+            }),
+            flush=True,
+        )
+        return {
+            "ok": True,
+            "version": BUILD_VERSION,
+            "safety": safety,
+            "identity": identity,
+            "adaptive": adaptive,
+        }
+    except Exception as exc:
+        result = {
+            "ok": False,
+            "version": BUILD_VERSION,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+        print(f"ADAPTIVE_DASHBOARD_BRIDGE_ERROR {result}", flush=True)
+        return result
+
+
 def install(app) -> Dict[str, Any]:
     global _CACHE, _REFRESHING
+
+    # Install adaptive research BEFORE capturing the final root endpoint. Its
+    # homepage-link wrapper is then itself wrapped synchronously below, preserving
+    # the responsiveness guarantee.
+    adaptive = _install_adaptive_layer(app)
 
     root = next(
         (
@@ -50,9 +120,20 @@ def install(app) -> Dict[str, Any]:
         None,
     )
     if root is None:
-        return {"installed": False, "version": VERSION, "reason": "root_not_found"}
+        return {
+            "installed": False,
+            "version": VERSION,
+            "reason": "root_not_found",
+            "adaptive": adaptive,
+        }
     if getattr(root.endpoint, "_dashboard_responsive", False):
-        return {"installed": True, "already_installed": True, "version": VERSION}
+        return {
+            "installed": True,
+            "already_installed": True,
+            "version": VERSION,
+            "build_version": BUILD_VERSION,
+            "adaptive": adaptive,
+        }
 
     original = root.endpoint
     name = root.name
@@ -90,7 +171,7 @@ def install(app) -> Dict[str, Any]:
             response = render()
             store(response)
         except Exception:
-            # Keep serving the last known-good page.  A later request will retry.
+            # Keep serving the last known-good page. A later request will retry.
             pass
         finally:
             with _LOCK:
@@ -118,7 +199,7 @@ def install(app) -> Dict[str, Any]:
                 ).start()
             return _clone(cached)
 
-        # First render after a deployment has no stale copy to serve.  It still
+        # First render after a deployment has no stale copy to serve. It still
         # runs in FastAPI's threadpool, so other routes remain responsive.
         response = render()
         store(response)
@@ -137,8 +218,10 @@ def install(app) -> Dict[str, Any]:
         "installed": True,
         "already_installed": False,
         "version": VERSION,
+        "build_version": BUILD_VERSION,
         "fresh_seconds": FRESH_SECONDS,
         "policy": "serve_last_good_while_refreshing",
         "execution": "fastapi_threadpool",
+        "adaptive": adaptive,
         "presentation_only": True,
     }
