@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-"""Balance the two paid multiples quote lanes after expired temporary boosts.
+"""Set current paid multiples quote budgets after expired temporary boosts.
 
-By 23 Oct the observed spend rates are similar, but legacy one-day headroom code
-still leaves Live Yankee advertising a much larger provider ceiling than HR.
-This final runtime patch gives Live Yankee and Hit-Rate multiples the same daily
-hard cap and therefore the same time-of-day soft allowance. Existing per-event
-backoff, urgency, same-book, price, selection and card-construction rules remain
-authoritative.
+Live Yankee remains at 500 credits/day. Hit-Rate multiples receives 700/day so
+its larger same-book HR1/HR2 Yankee/Heinz queue has more room to refresh stale or
+missing prices. Existing per-event pacing/backoff, urgency, same-book, price,
+selection and card-construction rules remain authoritative.
 
-No betting authority is added and no selection rule changes.
+This patch also neutralises the historical Oct-20 reporting shim that otherwise
+resets HR's cap to 400 on every refresh. No betting authority is added.
 """
 
 from datetime import datetime, timezone
@@ -22,8 +21,9 @@ import live_yankee_feed
 import multiples_credit_efficiency_patch as efficiency
 import multiples_today_headroom_patch as legacy_headroom
 
-VERSION = "MULTIPLES_BUDGET_BALANCE_2026_10_23_V1"
-BALANCED_DAILY_CREDITS = 500
+VERSION = "MULTIPLES_BUDGET_BALANCE_2026_10_23_V2_HR700"
+LIVE_YANKEE_DAILY_CREDITS = 500
+HIT_RATE_DAILY_CREDITS = 700
 _INSTALLED = False
 
 
@@ -34,11 +34,16 @@ def _spent_today(db, run_type: str) -> int:
             """SELECT COALESCE(SUM(actual_cost),0) AS n
                FROM collector_runs
                WHERE run_type=? AND started_at>=?""",
-            (run_type, now.date().isoformat() + "T00:00:00+00:00"),
+            (run_type, now.date().isoformat() + "T00:00:00+00:00",),
         ) or {}
         return int(row.get("n") or 0)
     except Exception:
         return 0
+
+
+def _hr_cap(_now=None) -> int:
+    """Authoritative current HR cap, including through legacy refresh wrappers."""
+    return HIT_RATE_DAILY_CREDITS
 
 
 def install(db) -> Dict[str, Any]:
@@ -48,33 +53,42 @@ def install(db) -> Dict[str, Any]:
             "installed": True,
             "already_installed": True,
             "version": VERSION,
-            "daily_cap_each": BALANCED_DAILY_CREDITS,
+            "live_yankee_daily_cap": LIVE_YANKEE_DAILY_CREDITS,
+            "hit_rate_daily_cap": HIT_RATE_DAILY_CREDITS,
         }
 
-    cap = BALANCED_DAILY_CREDITS
+    live_cap = LIVE_YANKEE_DAILY_CREDITS
+    hr_cap = HIT_RATE_DAILY_CREDITS
 
     # Collector-visible hard caps.
-    live_yankee_feed.DAILY_REFRESH_CREDIT_BUDGET = cap
-    hit_rate_multiples_lab.DAILY_REFRESH_CREDIT_BUDGET = cap
+    live_yankee_feed.DAILY_REFRESH_CREDIT_BUDGET = live_cap
+    hit_rate_multiples_lab.DAILY_REFRESH_CREDIT_BUDGET = hr_cap
 
     # Base/efficiency policy globals used dynamically by the existing wrappers.
-    base_policy.LIVE_YANKEE_DAILY_CREDITS = cap
-    base_policy.HIT_RATE_DAILY_CREDITS = cap
-    efficiency.LIVE_YANKEE_DAILY_CREDITS = cap
-    efficiency.HIT_RATE_DAILY_CREDITS = cap
+    base_policy.LIVE_YANKEE_DAILY_CREDITS = live_cap
+    base_policy.HIT_RATE_DAILY_CREDITS = hr_cap
+    efficiency.LIVE_YANKEE_DAILY_CREDITS = live_cap
+    efficiency.HIT_RATE_DAILY_CREDITS = hr_cap
 
-    # Neutralise the expired 19/20-Oct temporary ceilings. Their installed
-    # wrappers resolve these globals at runtime, so updating them here makes the
-    # already-wrapped collectors enforce the balanced cap without wrapper stacks.
-    hr_daily_boost.NORMAL_DAILY_CAP = cap
-    hr_daily_boost.BOOST_DAILY_CAP = cap
-    legacy_headroom.NORMAL_LIVE_YANKEE_CAP = cap
-    legacy_headroom.NORMAL_HIT_RATE_CAP = cap
-    legacy_headroom.BOOST_LIVE_YANKEE_CAP = cap
-    legacy_headroom.BOOST_HIT_RATE_CAP = cap
+    # The retired 19-Oct wrapper still surrounds HR._refresh. Oct-20 reporting
+    # replaced its _effective_cap function with a fixed post-20-Oct 400 result,
+    # which means merely changing constants is insufficient: every refresh would
+    # put the collector back to 400. Replace the function itself with the current
+    # authority so 700 survives every polling cycle.
+    hr_daily_boost.NORMAL_DAILY_CAP = hr_cap
+    hr_daily_boost.BOOST_DAILY_CAP = hr_cap
+    hr_daily_boost._effective_cap = _hr_cap
+
+    # Neutralise the expired 20-Oct temporary ceilings while preserving its
+    # wrapper shape. The live and HR paths now resolve to today's intended caps.
+    legacy_headroom.NORMAL_LIVE_YANKEE_CAP = live_cap
+    legacy_headroom.NORMAL_HIT_RATE_CAP = hr_cap
+    legacy_headroom.BOOST_LIVE_YANKEE_CAP = live_cap
+    legacy_headroom.BOOST_HIT_RATE_CAP = hr_cap
 
     now = datetime.now(timezone.utc)
-    soft_each = efficiency._soft_allowance(cap, now)
+    live_soft = efficiency._soft_allowance(live_cap, now)
+    hr_soft = efficiency._soft_allowance(hr_cap, now)
     live_spent = _spent_today(db, "LIVE_YANKEE_QUOTES")
     hr_spent = _spent_today(db, "HIT_RATE_MULTIPLES_QUOTES")
 
@@ -83,17 +97,24 @@ def install(db) -> Dict[str, Any]:
         "installed": True,
         "already_installed": False,
         "version": VERSION,
-        "daily_cap_each": cap,
-        "soft_allowance_each_now": soft_each,
+        "daily_caps": {
+            "live_yankee": live_cap,
+            "hit_rate": hr_cap,
+        },
+        "soft_allowance_now": {
+            "live_yankee": live_soft,
+            "hit_rate": hr_soft,
+        },
         "spent_today": {
             "live_yankee": live_spent,
             "hit_rate": hr_spent,
         },
         "remaining_headroom": {
-            "live_yankee": max(0, cap - live_spent),
-            "hit_rate": max(0, cap - hr_spent),
+            "live_yankee": max(0, live_cap - live_spent),
+            "hit_rate": max(0, hr_cap - hr_spent),
         },
         "legacy_oct19_hr_boost_neutralized": True,
+        "legacy_oct20_hr_400_reset_neutralized": True,
         "legacy_oct20_headroom_neutralized": True,
         "same_book_rules_changed": False,
         "selection_rules_changed": False,
