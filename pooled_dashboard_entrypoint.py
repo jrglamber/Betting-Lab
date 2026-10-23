@@ -219,7 +219,7 @@ except Exception as exc:
     )
 
 # Final quote-budget authority for the current research period: 500 credits/day
-# for Live Yankee and 700/day for Hit-Rate multiples. Existing urgency/backoff,
+# for Live Yankee and 1000/day for Hit-Rate multiples. Existing urgency/backoff,
 # same-book, candidate and pricing rules remain unchanged.
 try:
     _multiples_budget_balance = install_multiples_budget_balance(
@@ -232,10 +232,10 @@ except Exception as exc:
         flush=True,
     )
 
-# Release v0.19.81: the responsive homepage finalizer resolves this global at
+# Release v0.19.82: the responsive homepage finalizer resolves this global at
 # render time, so this final assignment remains authoritative even though older
 # presentation patches retain their historical VERSION constants internally.
-RELEASE_VERSION = "0.19.81"
+RELEASE_VERSION = "0.19.82"
 dashboard_responsiveness.BUILD_VERSION = RELEASE_VERSION
 adaptive_winner_research.DASHBOARD_VERSION = RELEASE_VERSION
 _dashboard_app.dashboard_layout_v2.VERSION = RELEASE_VERSION
