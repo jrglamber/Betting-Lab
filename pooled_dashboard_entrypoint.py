@@ -9,13 +9,17 @@ import bookmaker_exclusion_patch  # noqa: F401 -- exclude inaccessible prices be
 import tennis_rich_throughput_patch  # noqa: F401 -- patch before runtime captures maintenance function
 import dashboard_app as _dashboard_app
 from dashboard_app import app
+import dashboard_responsiveness_patch as dashboard_responsiveness
+import adaptive_winner_research as adaptive_winner_research
 import hit_rate_daily_boost_patch  # noqa: F401 -- historical wrapper; Oct20 reporting patch prevents stale cap conflict
+from adaptive_winner_price_adjust_patch import install as install_winner_price_adjust
 from first_half_goal_free_settlement_patch import install as install_fhg_free_settlement
 from first_half_goal_price_capture_patch import install as install_fhg_price_capture
 from frozen_shadow_bet_detail_patch import install as install_frozen_shadow_bet_detail
 from frozen_shadow_portfolio_patch import install as install_frozen_shadow_portfolio
 from frozen_shadow_dashboard_patch import install as install_frozen_shadow_dashboard
 from hit_rate_price_tolerance_patch import install as install_hr_price_tolerance
+from multiples_budget_balance_patch import install as install_multiples_budget_balance
 from multiples_credit_efficiency_patch import install as install_multiples_credit_efficiency
 from multiples_today_headroom_patch import install as install_multiples_today_headroom
 from oct20_runtime_reporting_fixes_patch import install as install_oct20_runtime_reporting_fixes
@@ -37,8 +41,8 @@ except Exception as exc:
         flush=True,
     )
 
-# Today-only bounded headroom for the evening football slate. This sits on top of
-# the efficiency cadence and automatically returns to the normal caps by UTC date.
+# Historical 20-Oct headroom wrapper remains installed for compatibility, but a
+# final balanced-budget patch below neutralises its expired asymmetric ceilings.
 try:
     _multiples_today_headroom = install_multiples_today_headroom(
         _dashboard_app.base_app.db
@@ -174,5 +178,42 @@ except Exception as exc:
         f"HR_PRICE_TOLERANCE_INSTALL {{'ok': False, 'error': '{type(exc).__name__}: {exc}'}}",
         flush=True,
     )
+
+# W1 still predicts winners without using price.  Only the descriptive historical
+# fingerprint leaderboard is price-adjusted so short-priced favourites no longer
+# look novel simply because they win more often than the global population.
+try:
+    _winner_price_adjust = install_winner_price_adjust(_dashboard_app.base_app.db)
+    print(f"ADAPTIVE_WINNER_PRICE_ADJUST_INSTALL {_winner_price_adjust}", flush=True)
+except Exception as exc:
+    print(
+        f"ADAPTIVE_WINNER_PRICE_ADJUST_INSTALL {{'ok': False, 'error': '{type(exc).__name__}: {exc}'}}",
+        flush=True,
+    )
+
+# Final quote-budget authority for the current research period.  The two paid
+# multiples lanes now receive equal 500-credit daily ceilings and equal paced
+# allowances. Existing urgency/backoff and same-book logic remains unchanged.
+try:
+    _multiples_budget_balance = install_multiples_budget_balance(
+        _dashboard_app.base_app.db
+    )
+    print(f"MULTIPLES_BUDGET_BALANCE_INSTALL {_multiples_budget_balance}", flush=True)
+except Exception as exc:
+    print(
+        f"MULTIPLES_BUDGET_BALANCE_INSTALL {{'ok': False, 'error': '{type(exc).__name__}: {exc}'}}",
+        flush=True,
+    )
+
+# Release v0.19.79: the responsive homepage finalizer resolves this global at
+# render time, so this final assignment remains authoritative even though older
+# presentation patches retain their historical VERSION constants internally.
+RELEASE_VERSION = "0.19.79"
+dashboard_responsiveness.BUILD_VERSION = RELEASE_VERSION
+adaptive_winner_research.DASHBOARD_VERSION = RELEASE_VERSION
+_dashboard_app.dashboard_layout_v2.VERSION = RELEASE_VERSION
+_dashboard_app.base_app.web_module.VERSION = RELEASE_VERSION
+_dashboard_app.base_app.app.version = RELEASE_VERSION
+print(f"BETTING_LAB_RELEASE_VERSION {RELEASE_VERSION}", flush=True)
 
 __all__ = ["app"]
