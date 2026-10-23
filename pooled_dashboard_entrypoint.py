@@ -15,10 +15,12 @@ import hit_rate_daily_boost_patch  # noqa: F401 -- historical wrapper; Oct20 rep
 from adaptive_winner_price_adjust_patch import install as install_winner_price_adjust
 from first_half_goal_free_settlement_patch import install as install_fhg_free_settlement
 from first_half_goal_price_capture_patch import install as install_fhg_price_capture
+from first_half_goal_price_evidence_patch import install as install_fhg_price_evidence
 from frozen_shadow_bet_detail_patch import install as install_frozen_shadow_bet_detail
 from frozen_shadow_portfolio_patch import install as install_frozen_shadow_portfolio
 from frozen_shadow_dashboard_patch import install as install_frozen_shadow_dashboard
 from hit_rate_price_tolerance_patch import install as install_hr_price_tolerance
+from live_yankee_price_tolerance_patch import install as install_live_yankee_price_tolerance
 from multiples_budget_balance_patch import install as install_multiples_budget_balance
 from multiples_credit_efficiency_patch import install as install_multiples_credit_efficiency
 from multiples_today_headroom_patch import install as install_multiples_today_headroom
@@ -137,6 +139,18 @@ except Exception as exc:
         flush=True,
     )
 
+# Expose the frozen FHG prices on the FHG dashboard and in exports. This adds
+# observed flat-stake single-selection ROI and card price coverage only; the
+# underlying FHG model/threshold/card selection remains unchanged.
+try:
+    _fhg_price_evidence = install_fhg_price_evidence(_dashboard_app.base_app.db)
+    print(f"FHG1_PRICE_EVIDENCE_INSTALL {_fhg_price_evidence}", flush=True)
+except Exception as exc:
+    print(
+        f"FHG1_PRICE_EVIDENCE_INSTALL {{'ok': False, 'error': '{type(exc).__name__}: {exc}'}}",
+        flush=True,
+    )
+
 # Read-only startup evidence for the paid tennis subscription. RapidAPI's
 # x-ratelimit-requests-remaining response header is already persisted in the
 # request ledger; logging the latest value lets operations verify the real plan
@@ -179,6 +193,19 @@ except Exception as exc:
         flush=True,
     )
 
+# Extend that same question to Live Yankee using the existing quote cache.
+# P100 is the strict control; P98/P96/P94/P90/P85 track incremental eligible
+# selections and reconstruct genuinely same-book four-leg Yankees. Zero extra
+# provider calls and no change to the production/manual Yankee feed.
+try:
+    _live_yankee_price_tolerance = install_live_yankee_price_tolerance(_dashboard_app.base_app.db)
+    print(f"LIVE_YANKEE_PRICE_TOLERANCE_INSTALL {_live_yankee_price_tolerance}", flush=True)
+except Exception as exc:
+    print(
+        f"LIVE_YANKEE_PRICE_TOLERANCE_INSTALL {{'ok': False, 'error': '{type(exc).__name__}: {exc}'}}",
+        flush=True,
+    )
+
 # W1 still predicts winners without using price. Only the descriptive historical
 # fingerprint leaderboard is price-adjusted so short-priced favourites no longer
 # look novel simply because they win more often than the global population.
@@ -205,10 +232,10 @@ except Exception as exc:
         flush=True,
     )
 
-# Release v0.19.80: the responsive homepage finalizer resolves this global at
+# Release v0.19.81: the responsive homepage finalizer resolves this global at
 # render time, so this final assignment remains authoritative even though older
 # presentation patches retain their historical VERSION constants internally.
-RELEASE_VERSION = "0.19.80"
+RELEASE_VERSION = "0.19.81"
 dashboard_responsiveness.BUILD_VERSION = RELEASE_VERSION
 adaptive_winner_research.DASHBOARD_VERSION = RELEASE_VERSION
 _dashboard_app.dashboard_layout_v2.VERSION = RELEASE_VERSION
