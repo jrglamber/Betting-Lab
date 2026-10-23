@@ -15,11 +15,12 @@ from typing import Any, Dict, Mapping, Sequence
 
 import first_half_goal_lab as fhg
 
-VERSION = "FHG1_PRICE_EVIDENCE_V1"
+VERSION = "FHG1_PRICE_EVIDENCE_V2"
 PRICE_TABLE = "first_half_goal_entry_prices"
 _INSTALLED = False
 _ORIGINAL_SCOREBOARD = None
 _ORIGINAL_DASHBOARD = None
+_ORIGINAL_CURATED_SECTION = None
 
 
 def _rows(db):
@@ -140,9 +141,7 @@ def dashboard_with_prices(db, style):
         xgs = [r.get(f"pred{i}_total_xg") for i in range(1, 5)]
         xgt = " · ".join(f"P{i+1} {float(v):.2f}" for i, v in enumerate(xgs) if v is not None) or "—"
         if r.get("entry_odds") is None:
-            price = "—"
-            book = "—"
-            edge = "—"
+            price = "—"; book = "—"; edge = "—"
         else:
             price = f"{float(r['entry_odds']):.2f}"
             book = escape(str(r.get("bookmaker_title") or r.get("bookmaker_key") or "—"))
@@ -186,16 +185,42 @@ def dashboard_with_prices(db, style):
     </main></body></html>"""
 
 
+def curated_section_with_prices(db):
+    import first_half_goal_curated_patch as curated
+    html = _ORIGINAL_CURATED_SECTION(db)
+    try:
+        pe = scoreboard_with_prices(db)["price_evidence"]
+        priced = f"{int(pe.get('priced_candidates') or 0)}/{int(pe.get('qualified_candidates') or 0)}"
+        roi = _fmt_pct(pe.get("flat_roi_pct"))
+        pnl = f"{float(pe.get('flat_pnl_units') or 0):+.2f}u · n={int(pe.get('settled_priced') or 0)}"
+        extra = (
+            curated._metric("Priced qualified", priced, f"{_fmt_pct(pe.get('price_coverage_pct'))} price coverage")
+            + curated._metric("Observed singles ROI", roi, pnl)
+        )
+        html = html.replace("<div class='grid compact'>", "<div class='grid compact'>" + extra, 1)
+        html = html.replace(
+            "Research only; no betting authority and no EV claim until price capture exists.",
+            "Frozen executable prices are now captured prospectively; observed ROI remains research-only and is not a future EV claim.",
+        )
+    except Exception:
+        pass
+    return html
+
+
 def install(db=None) -> Dict[str, Any]:
-    global _INSTALLED, _ORIGINAL_SCOREBOARD, _ORIGINAL_DASHBOARD
+    global _INSTALLED, _ORIGINAL_SCOREBOARD, _ORIGINAL_DASHBOARD, _ORIGINAL_CURATED_SECTION
     if _INSTALLED:
         return {"installed": True, "already_installed": True, "version": VERSION}
     import web as web_module
+    import first_half_goal_curated_patch as curated
     db = db or web_module.db
     _ORIGINAL_SCOREBOARD = fhg.scoreboard
     _ORIGINAL_DASHBOARD = fhg._dashboard
+    _ORIGINAL_CURATED_SECTION = curated._section
     fhg.scoreboard = scoreboard_with_prices
     fhg._dashboard = dashboard_with_prices
+    curated.scoreboard = scoreboard_with_prices
+    curated._section = curated_section_with_prices
     fhg.TABLES = tuple(dict.fromkeys(tuple(fhg.TABLES) + (PRICE_TABLE,)))
     try:
         import exporter
@@ -214,6 +239,7 @@ def install(db=None) -> Dict[str, Any]:
         "version": VERSION,
         "price_table": PRICE_TABLE,
         "price_capture_visible": True,
+        "homepage_price_evidence_visible": True,
         "observed_roi_visible": True,
         "selection_rules_changed": False,
         "betting_authority_changed": False,
