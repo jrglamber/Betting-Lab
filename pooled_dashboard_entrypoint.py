@@ -42,7 +42,7 @@ except Exception as exc:
     )
 
 # Historical 20-Oct headroom wrapper remains installed for compatibility, but a
-# final balanced-budget patch below neutralises its expired asymmetric ceilings.
+# final current-budget patch below neutralises its expired asymmetric ceilings.
 try:
     _multiples_today_headroom = install_multiples_today_headroom(
         _dashboard_app.base_app.db
@@ -84,7 +84,7 @@ except Exception as exc:
         flush=True,
     )
 
-# Correct the stale HR 500-credit override, add open/today counts to Frozen
+# Correct the stale legacy HR-cap override, add open/today counts to Frozen
 # Shadow, and make TPRED market-Brier reporting explicitly paired/provisional.
 # Research/reporting only: no model, staking or betting authority changes.
 try:
@@ -179,7 +179,7 @@ except Exception as exc:
         flush=True,
     )
 
-# W1 still predicts winners without using price.  Only the descriptive historical
+# W1 still predicts winners without using price. Only the descriptive historical
 # fingerprint leaderboard is price-adjusted so short-priced favourites no longer
 # look novel simply because they win more often than the global population.
 try:
@@ -191,9 +191,9 @@ except Exception as exc:
         flush=True,
     )
 
-# Final quote-budget authority for the current research period.  The two paid
-# multiples lanes now receive equal 500-credit daily ceilings and equal paced
-# allowances. Existing urgency/backoff and same-book logic remains unchanged.
+# Final quote-budget authority for the current research period: 500 credits/day
+# for Live Yankee and 700/day for Hit-Rate multiples. Existing urgency/backoff,
+# same-book, candidate and pricing rules remain unchanged.
 try:
     _multiples_budget_balance = install_multiples_budget_balance(
         _dashboard_app.base_app.db
@@ -205,10 +205,10 @@ except Exception as exc:
         flush=True,
     )
 
-# Release v0.19.79: the responsive homepage finalizer resolves this global at
+# Release v0.19.80: the responsive homepage finalizer resolves this global at
 # render time, so this final assignment remains authoritative even though older
 # presentation patches retain their historical VERSION constants internally.
-RELEASE_VERSION = "0.19.79"
+RELEASE_VERSION = "0.19.80"
 dashboard_responsiveness.BUILD_VERSION = RELEASE_VERSION
 adaptive_winner_research.DASHBOARD_VERSION = RELEASE_VERSION
 _dashboard_app.dashboard_layout_v2.VERSION = RELEASE_VERSION
