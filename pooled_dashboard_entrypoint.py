@@ -193,10 +193,10 @@ except Exception as exc:
         flush=True,
     )
 
-# Extend that same question to Live Yankee using the existing quote cache.
-# P100 is the strict control; P98/P96/P94/P90/P85 track incremental eligible
-# selections and reconstruct genuinely same-book four-leg Yankees. Zero extra
-# provider calls and no change to the production/manual Yankee feed.
+# Clean V2 Live Yankee tolerance research. The compatibility installer now
+# bootstraps the complete Yankee runtime in deterministic order first. P100 is
+# the strict control; P98/P96/P94/P90/P85 remain same-book shadow challengers,
+# add zero provider calls and do not alter the manual/production Yankee feed.
 try:
     _live_yankee_price_tolerance = install_live_yankee_price_tolerance(_dashboard_app.base_app.db)
     print(f"LIVE_YANKEE_PRICE_TOLERANCE_INSTALL {_live_yankee_price_tolerance}", flush=True)
@@ -232,10 +232,10 @@ except Exception as exc:
         flush=True,
     )
 
-# Release v0.19.82: the responsive homepage finalizer resolves this global at
+# Release v0.19.83: the responsive homepage finalizer resolves this global at
 # render time, so this final assignment remains authoritative even though older
 # presentation patches retain their historical VERSION constants internally.
-RELEASE_VERSION = "0.19.82"
+RELEASE_VERSION = "0.19.83"
 dashboard_responsiveness.BUILD_VERSION = RELEASE_VERSION
 adaptive_winner_research.DASHBOARD_VERSION = RELEASE_VERSION
 _dashboard_app.dashboard_layout_v2.VERSION = RELEASE_VERSION
