@@ -11,15 +11,27 @@ import adaptive_winner_research as adaptive_core
 from adaptive_winner_research import install as install_adaptive_winner_research
 from adaptive_winner_research_safety_patch import install as install_adaptive_safety
 from adaptive_tpred4_identity_patch import install as install_tpred4_identity
+from live_yankee_runtime_patch import install as install_live_yankee_runtime
 
-# The live baseline was already v0.19.77 before this research expansion.
-# This deployment is therefore v0.19.78. Set the shared research constant before
-# installation so startup diagnostics and every visible build surface agree.
-BUILD_VERSION = "0.19.78"
+# v0.19.83 adds the deterministic Live Yankee runtime bootstrap and clean V2
+# price-tolerance experiment. Keep every visible build surface aligned.
+BUILD_VERSION = "0.19.83"
 adaptive_core.DASHBOARD_VERSION = BUILD_VERSION
 curated.dashboard_layout_v2.VERSION = BUILD_VERSION
 curated.base_app.web_module.VERSION = BUILD_VERSION
 curated.base_app.app.version = BUILD_VERSION
+
+# Install the complete Yankee chain explicitly under the repo-declared Railway
+# entrypoint. This removes any dependency on an undocumented service-level start
+# command or import side effect. The chain remains manual/shadow only.
+try:
+    live_yankee_runtime = install_live_yankee_runtime(curated.base_app.db)
+except Exception as exc:
+    live_yankee_runtime = {
+        "installed": False,
+        "error": f"{type(exc).__name__}: {exc}",
+    }
+print(f"LIVE_YANKEE_RUNTIME_INSTALL {live_yankee_runtime}", flush=True)
 
 # Install model-freeze and stable historical-identity guards before the runtime
 # wrapper is attached. Both are research-only and create no provider traffic.
