@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-"""Tiny startup guard for the one-day TPRED rich-cache completion boost.
+"""Small process-startup guards for research-only runtime patches.
 
-Research-only: 55k requests on 2026-10-21 UTC, automatically 30k thereafter.
-Existing per-cycle and requests/second throttles remain unchanged.
+No betting authority is changed here. The TPRED rich-cache cap remains date
+bounded, and the Challenge Export FHG health fix only corrects reporting.
 """
 
 from datetime import datetime, timezone
@@ -35,3 +35,11 @@ try:
     )
 except Exception as _exc:
     print(f"TPRED_RICH_DATE_CAP_ERROR {type(_exc).__name__}: {_exc}", flush=True)
+
+try:
+    import challenge_fhg_health_integrity_patch as _challenge_fhg_health
+
+    _challenge_fhg_state = _challenge_fhg_health.install()
+    print(f"CHALLENGE_FHG_HEALTH_INTEGRITY_INSTALL {_challenge_fhg_state}", flush=True)
+except Exception as _exc:
+    print(f"CHALLENGE_FHG_HEALTH_INTEGRITY_ERROR {type(_exc).__name__}: {_exc}", flush=True)
