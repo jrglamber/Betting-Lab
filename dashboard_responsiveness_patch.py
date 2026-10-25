@@ -25,7 +25,7 @@ from typing import Any, Dict, Optional
 
 from fastapi.responses import HTMLResponse
 
-VERSION = "DASHBOARD_RESPONSIVENESS_V3"
+VERSION = "DASHBOARD_RESPONSIVENESS_V4_CHALLENGE_EXPORT"
 BUILD_VERSION = "0.19.78"
 FRESH_SECONDS = 20.0
 
@@ -88,6 +88,24 @@ def _finalize_html_response(response: Any) -> Any:
                 1,
             )
 
+    # The challenge export is intentionally separate from the normal weekly/full
+    # exports. Surface it directly in the top navigation so it is one tap on a
+    # phone and cannot be hidden by older presentation wrappers.
+    challenge_link = "<a href='/export/challenge.zip'>Challenge Export</a>"
+    export_marker = "<a href='/export/research-weekly.zip'>Exports</a>"
+    topnav_start = html.find("<div class='topnav'>")
+    topnav_end = html.find("</div>", topnav_start) if topnav_start >= 0 else -1
+    topnav_html = html[topnav_start:topnav_end] if topnav_start >= 0 and topnav_end > topnav_start else ""
+    if challenge_link not in topnav_html:
+        if export_marker in html:
+            html = html.replace(export_marker, export_marker + challenge_link, 1)
+        elif topnav_start >= 0:
+            html = html.replace(
+                "<div class='topnav'>",
+                "<div class='topnav'>" + challenge_link,
+                1,
+            )
+
     headers = {
         k: v for k, v in response.headers.items()
         if k.lower() != "content-length"
@@ -100,7 +118,7 @@ def _finalize_html_response(response: Any) -> Any:
 
 
 def _install_adaptive_layer(app) -> Dict[str, Any]:
-    """Install the research-only adaptive layer through the entrypoint we know is live.
+    """Install research-only bridges through the entrypoint we know is live.
 
     Imports are deliberately deferred until dashboard_app has completed its
     existing imports. This avoids circular bootstrap dependencies while making
@@ -112,6 +130,7 @@ def _install_adaptive_layer(app) -> Dict[str, Any]:
         import adaptive_winner_research as adaptive_core
         from adaptive_winner_research_safety_patch import install as install_adaptive_safety
         from adaptive_tpred4_identity_patch import install as install_tpred4_identity
+        from challenge_export_patch import install as install_challenge_export
 
         adaptive_core.DASHBOARD_VERSION = BUILD_VERSION
         layout.VERSION = BUILD_VERSION
@@ -125,6 +144,12 @@ def _install_adaptive_layer(app) -> Dict[str, Any]:
             web_module.db,
             web_module.BASE_STYLE,
             tennis_engine=getattr(web_module, "tennis_engine", None),
+        )
+        challenge_export = install_challenge_export(
+            app,
+            web_module.db,
+            web_module.settings,
+            BUILD_VERSION,
         )
 
         # Never expose the heavyweight maintenance endpoint publicly. Normal
@@ -146,6 +171,7 @@ def _install_adaptive_layer(app) -> Dict[str, Any]:
                 "safety": safety,
                 "identity": identity,
                 "adaptive": adaptive,
+                "challenge_export": challenge_export,
             }),
             flush=True,
         )
@@ -155,6 +181,7 @@ def _install_adaptive_layer(app) -> Dict[str, Any]:
             "safety": safety,
             "identity": identity,
             "adaptive": adaptive,
+            "challenge_export": challenge_export,
         }
     except Exception as exc:
         result = {
@@ -169,9 +196,9 @@ def _install_adaptive_layer(app) -> Dict[str, Any]:
 def install(app) -> Dict[str, Any]:
     global _CACHE, _REFRESHING
 
-    # Install adaptive research BEFORE capturing the final root endpoint. Its
-    # homepage-link wrapper is then itself wrapped synchronously below, preserving
-    # the responsiveness guarantee.
+    # Install adaptive research + the challenge export BEFORE capturing the final
+    # root endpoint. Homepage-link wrappers are then wrapped synchronously below,
+    # preserving the responsiveness guarantee.
     adaptive = _install_adaptive_layer(app)
 
     root = next(
@@ -289,6 +316,7 @@ def install(app) -> Dict[str, Any]:
         "final_html_guard": {
             "release_version": BUILD_VERSION,
             "adaptive_topnav": True,
+            "challenge_export_topnav": True,
         },
         "presentation_only": True,
     }
