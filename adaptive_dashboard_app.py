@@ -11,14 +11,17 @@ import adaptive_winner_research as adaptive_core
 from adaptive_winner_research import install as install_adaptive_winner_research
 from adaptive_winner_research_safety_patch import install as install_adaptive_safety
 from adaptive_tpred4_identity_patch import install as install_tpred4_identity
+from first_half_goal_free_settlement_patch import install as install_fhg_free_settlement
+from first_half_goal_espn_settlement_patch import install as install_fhg_espn_settlement
 from first_half_goal_price_capture_patch import install as install_fhg_price_capture
 from first_half_goal_price_evidence_patch import install as install_fhg_price_evidence
 from live_yankee_runtime_patch import install as install_live_yankee_runtime
 from oct25_research_priorities_patch import install as install_research_priorities
 
-# v0.19.84 explicitly wires robust FHG price capture/evidence and installs the
-# 25-Oct research-priority refresh. All additions remain shadow/research-only.
-BUILD_VERSION = "0.19.84"
+# v0.19.85 adds a conservative ESPN half-time settlement fallback and makes the
+# complete FHG free-settlement chain explicit under this entrypoint. Everything
+# remains shadow/research-only.
+BUILD_VERSION = "0.19.85"
 adaptive_core.DASHBOARD_VERSION = BUILD_VERSION
 curated.dashboard_layout_v2.VERSION = BUILD_VERSION
 curated.base_app.web_module.VERSION = BUILD_VERSION
@@ -36,10 +39,30 @@ except Exception as exc:
     }
 print(f"LIVE_YANKEE_RUNTIME_INSTALL {live_yankee_runtime}", flush=True)
 
-# The V2 FHG collector existed in the repository but was not guaranteed to be
-# installed by this production entrypoint. Wire it explicitly so qualified FHG1
-# candidates freeze prospective executable prices and the price evidence is
-# visible/exported. Both installers are idempotent and carry no betting authority.
+# Keep football-data.co.uk as canonical settlement, retain the existing free CSV
+# + SofaScore attempts, and add ESPN only as a tertiary fallback for already-
+# frozen candidates still open several hours after kickoff.
+try:
+    fhg_free_settlement = install_fhg_free_settlement(curated.base_app.db)
+except Exception as exc:
+    fhg_free_settlement = {
+        "installed": False,
+        "error": f"{type(exc).__name__}: {exc}",
+    }
+print(f"FHG_FREE_SETTLEMENT_INSTALL {fhg_free_settlement}", flush=True)
+
+try:
+    fhg_espn_settlement = install_fhg_espn_settlement(curated.base_app.db)
+except Exception as exc:
+    fhg_espn_settlement = {
+        "installed": False,
+        "error": f"{type(exc).__name__}: {exc}",
+    }
+print(f"FHG_ESPN_SETTLEMENT_INSTALL {fhg_espn_settlement}", flush=True)
+
+# V2 pricing freezes the first prospective executable Over 0.5 first-half price
+# from accessible venues and exports observed price evidence. No price is ever
+# backfilled after kickoff.
 try:
     fhg_price_capture = install_fhg_price_capture(curated.base_app)
 except Exception as exc:
