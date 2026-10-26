@@ -18,10 +18,9 @@ from first_half_goal_price_evidence_patch import install as install_fhg_price_ev
 from live_yankee_runtime_patch import install as install_live_yankee_runtime
 from oct25_research_priorities_patch import install as install_research_priorities
 
-# v0.19.85 adds a conservative ESPN half-time settlement fallback and makes the
-# complete FHG free-settlement chain explicit under this entrypoint. Everything
-# remains shadow/research-only.
-BUILD_VERSION = "0.19.85"
+# v0.19.86 includes the NCAAF-PRED1 kickoff-drift linker repair alongside the
+# v0.19.85 FHG settlement repair. Everything remains shadow/research-only.
+BUILD_VERSION = "0.19.86"
 adaptive_core.DASHBOARD_VERSION = BUILD_VERSION
 curated.dashboard_layout_v2.VERSION = BUILD_VERSION
 curated.base_app.web_module.VERSION = BUILD_VERSION
