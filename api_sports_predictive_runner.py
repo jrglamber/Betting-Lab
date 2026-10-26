@@ -13,8 +13,11 @@ from api_sports_settlement_side_patch import install as install_settlement_side
 
 
 PAID_ACCESS = install_paid_access()
-PRICE_LINK = install_price_link()
+# Install near-term forecasting first, then wrap it with the price-link backfill.
+# The old order installed PRICE_LINK first and NEARTERM second; NEARTERM replaced
+# core.make_forecasts and silently disabled the revisit/backfill layer.
 NEARTERM = install_nearterm()
+PRICE_LINK = install_price_link()
 SETTLEMENT_SIDE = install_settlement_side()
 _original_extract_game = core._extract_game
 
@@ -82,8 +85,8 @@ if __name__ == "__main__":
     result = core.run()
     wf = walkforward.run()
     print(f"API_SPORTS_PAID_ACCESS {PAID_ACCESS}", flush=True)
-    print(f"API_SPORTS_PRICE_LINK {PRICE_LINK}", flush=True)
     print(f"API_SPORTS_NEARTERM {NEARTERM}", flush=True)
+    print(f"API_SPORTS_PRICE_LINK {PRICE_LINK}", flush=True)
     print(f"API_SPORTS_SETTLEMENT_SIDE {SETTLEMENT_SIDE}", flush=True)
     ok = all(v.get("ok") for v in result["lanes"].values()) and all(v.get("ok") for v in wf["lanes"].values())
     raise SystemExit(0 if ok else 1)
