@@ -24,15 +24,16 @@ from homepage_sync_bridge_patch import install as install_homepage_sync_bridge
 from live_yankee_runtime_patch import install as install_live_yankee_runtime
 from oct25_research_priorities_patch import install as install_research_priorities
 from provider_cost_control_patch import install as install_provider_cost_control
+from winner_fingerprint_forward_patch import install as install_winner_fingerprint_forward
 
-# v0.19.91 hardens the First-Half Goal research lane without changing FHG1's
-# frozen selection model: reschedule/void lifecycle handling, transparent price
-# diagnostics, all-book frozen quotes, accumulator-capable same-book 8/9/10-card
-# snapshots, an ESPN settlement expansion to Scotland tiers 2-4, a circuit-breaker
-# for the persistently blocked SofaScore fallback, and a prospective-only FHG2
-# challenger. It retains the v0.19.90 provider-credit rebalance and all earlier
-# deployment/runtime repairs.
-BUILD_VERSION = "0.19.91"
+# v0.19.92 freezes the most useful cross-sport winner fingerprints identified
+# on 27-Oct and turns them into prospective, price-aware forward cohorts. The
+# Adaptive Winner dashboard now leads with plain-English cards showing forward
+# settlements, hit rate, odds/break-even, ROI and A/B CLV, while the raw discovery
+# table is collapsed underneath. Passing the evidence gate only makes a cohort
+# eligible for manual review; it does not change betting or pricing priority.
+# All v0.19.91 FHG hardening and v0.19.90 provider-credit controls remain intact.
+BUILD_VERSION = "0.19.92"
 adaptive_core.DASHBOARD_VERSION = BUILD_VERSION
 dashboard_responsiveness.BUILD_VERSION = BUILD_VERSION
 curated.dashboard_layout_v2.VERSION = BUILD_VERSION
@@ -144,6 +145,22 @@ adaptive = install_adaptive_winner_research(
     tennis_engine=getattr(curated.base_app.web_module, "tennis_engine", None),
 )
 print(f"ADAPTIVE_WINNER_RESEARCH_INSTALL {adaptive}", flush=True)
+
+# Freeze selected discovery fingerprints from the moment the user requested the
+# forward test. Membership is prospective and immutable; ROI/CLV determine the
+# status. The dashboard presents plain-English scorecards and keeps raw discovery
+# details collapsed. No priority or betting rule is changed automatically.
+try:
+    winner_fingerprint_forward = install_winner_fingerprint_forward(
+        curated.base_app.app,
+        curated.base_app.db,
+    )
+except Exception as exc:
+    winner_fingerprint_forward = {
+        "installed": False,
+        "error": f"{type(exc).__name__}: {exc}",
+    }
+print(f"WINNER_FINGERPRINT_FORWARD_INSTALL {winner_fingerprint_forward}", flush=True)
 
 # Freeze the newly identified NFL/TS1/broad-PRED4 forward cohorts, expose the
 # audit-derived priority/downgrade/conflict states, and export that registry.
