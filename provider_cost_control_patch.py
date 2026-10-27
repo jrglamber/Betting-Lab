@@ -134,11 +134,13 @@ def install(db) -> Dict[str, Any]:
 
     def controlled_additional_poll(engine, now):
         spent = _today_cost(engine.db, ("MULTISPORT_LINES_ADDITIONAL",), now)
-        if spent >= ADDITIONAL_LINES_DAILY_CREDIT_CEILING:
+        estimated = max(1, len(getattr(engine, "additional_markets", ()) or ())) * 2
+        if spent + estimated > ADDITIONAL_LINES_DAILY_CREDIT_CEILING:
             return {
                 "polled": 0,
                 "reason": "cost_control_additional_daily_budget",
                 "spent": spent,
+                "estimated_next_cost": estimated,
                 "daily_budget": ADDITIONAL_LINES_DAILY_CREDIT_CEILING,
             }
         return _ORIGINAL_ADDITIONAL_POLL(engine, now)
