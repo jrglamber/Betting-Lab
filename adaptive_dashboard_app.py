@@ -20,12 +20,13 @@ from first_half_goal_price_evidence_patch import install as install_fhg_price_ev
 from homepage_sync_bridge_patch import install as install_homepage_sync_bridge
 from live_yankee_runtime_patch import install as install_live_yankee_runtime
 from oct25_research_priorities_patch import install as install_research_priorities
+from provider_cost_control_patch import install as install_provider_cost_control
 
-# v0.19.88 refreshes the lightweight £10→£500 challenge export after the
-# 27-Oct audit. It changes export annotations/portfolio status only and preserves
-# the v0.19.87 homepage bridge, v0.19.86 NCAAF-PRED1 repair and v0.19.85 FHG
-# settlement repair. Everything remains shadow/research-only.
-BUILD_VERSION = "0.19.88"
+# v0.19.89 adds provider-credit cost controls to lower-priority research while
+# explicitly preserving Live Yankee and Hit-Rate Yankee/Heinz production. It
+# retains the v0.19.88 challenge export refresh, v0.19.87 homepage bridge,
+# v0.19.86 NCAAF-PRED1 repair and v0.19.85 FHG settlement repair.
+BUILD_VERSION = "0.19.89"
 adaptive_core.DASHBOARD_VERSION = BUILD_VERSION
 dashboard_responsiveness.BUILD_VERSION = BUILD_VERSION
 curated.dashboard_layout_v2.VERSION = BUILD_VERSION
@@ -149,6 +150,19 @@ except Exception as exc:
         "error": f"{type(exc).__name__}: {exc}",
     }
 print(f"CHALLENGE_PORTFOLIO_REFRESH_INSTALL {challenge_portfolio_refresh}", flush=True)
+
+# Cost controls are installed after the complete runtime stack is imported so
+# their wrappers are the final authority on research spend. Live Yankee and
+# Hit-Rate Yankee/Heinz caps/cadence are read for diagnostics only and never
+# mutated by this patch.
+try:
+    provider_cost_control = install_provider_cost_control(curated.base_app.db)
+except Exception as exc:
+    provider_cost_control = {
+        "installed": False,
+        "error": f"{type(exc).__name__}: {exc}",
+    }
+print(f"PROVIDER_COST_CONTROL_INSTALL {provider_cost_control}", flush=True)
 
 # The maintenance route is useful during development but deliberately removed
 # from the public production surface. Research refreshes run from the wrapped
