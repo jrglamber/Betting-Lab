@@ -7,6 +7,7 @@ patch remains authoritative. The new research module is shadow-only.
 import re
 
 import dashboard_app as curated
+import dashboard_responsiveness_patch as dashboard_responsiveness
 import adaptive_winner_research as adaptive_core
 from adaptive_winner_research import install as install_adaptive_winner_research
 from adaptive_winner_research_safety_patch import install as install_adaptive_safety
@@ -15,13 +16,17 @@ from first_half_goal_free_settlement_patch import install as install_fhg_free_se
 from first_half_goal_espn_settlement_patch import install as install_fhg_espn_settlement
 from first_half_goal_price_capture_patch import install as install_fhg_price_capture
 from first_half_goal_price_evidence_patch import install as install_fhg_price_evidence
+from homepage_sync_bridge_patch import install as install_homepage_sync_bridge
 from live_yankee_runtime_patch import install as install_live_yankee_runtime
 from oct25_research_priorities_patch import install as install_research_priorities
 
-# v0.19.86 includes the NCAAF-PRED1 kickoff-drift linker repair alongside the
-# v0.19.85 FHG settlement repair. Everything remains shadow/research-only.
-BUILD_VERSION = "0.19.86"
+# v0.19.87 repairs the adaptive-entrypoint homepage event-loop bridge and keeps
+# the release badge synchronized through the responsiveness layer. It preserves
+# the v0.19.86 NCAAF-PRED1 price-link repair and v0.19.85 FHG settlement repair.
+# Everything remains shadow/research-only.
+BUILD_VERSION = "0.19.87"
 adaptive_core.DASHBOARD_VERSION = BUILD_VERSION
+dashboard_responsiveness.BUILD_VERSION = BUILD_VERSION
 curated.dashboard_layout_v2.VERSION = BUILD_VERSION
 curated.base_app.web_module.VERSION = BUILD_VERSION
 curated.base_app.app.version = BUILD_VERSION
@@ -112,6 +117,22 @@ except Exception as exc:
     }
 print(f"RESEARCH_PRIORITIES_INSTALL {research_priorities}", flush=True)
 
+# The priority-home wrapper is async for historical compatibility, while the
+# responsiveness renderer is intentionally synchronous so it runs in FastAPI's
+# threadpool. Re-surface the priorities with an equivalent synchronous wrapper
+# to prevent asyncio.run() from being invoked inside the ASGI event loop.
+try:
+    homepage_sync_bridge = install_homepage_sync_bridge(
+        curated.base_app.app,
+        curated.base_app.db,
+    )
+except Exception as exc:
+    homepage_sync_bridge = {
+        "installed": False,
+        "error": f"{type(exc).__name__}: {exc}",
+    }
+print(f"HOMEPAGE_SYNC_BRIDGE_INSTALL {homepage_sync_bridge}", flush=True)
+
 # The maintenance route is useful during development but deliberately removed
 # from the public production surface. Research refreshes run from the wrapped
 # tennis cycle instead, so no unauthenticated request can trigger the heavy
@@ -146,6 +167,8 @@ def _page_with_release_version(db, base_style: str) -> str:
 
 
 curated.dashboard_layout_v2._page = _page_with_release_version
+adaptive_core.DASHBOARD_VERSION = BUILD_VERSION
+dashboard_responsiveness.BUILD_VERSION = BUILD_VERSION
 curated.dashboard_layout_v2.VERSION = BUILD_VERSION
 curated.base_app.web_module.VERSION = BUILD_VERSION
 curated.base_app.app.version = BUILD_VERSION
