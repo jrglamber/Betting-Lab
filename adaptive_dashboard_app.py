@@ -12,22 +12,27 @@ import adaptive_winner_research as adaptive_core
 from adaptive_winner_research import install as install_adaptive_winner_research
 from adaptive_winner_research_safety_patch import install as install_adaptive_safety
 from adaptive_tpred4_identity_patch import install as install_tpred4_identity
+from challenge_fhg_health_integrity_patch import install as install_challenge_fhg_health
 from challenge_portfolio_refresh_patch import install as install_challenge_portfolio_refresh
 from first_half_goal_free_settlement_patch import install as install_fhg_free_settlement
 from first_half_goal_espn_settlement_patch import install as install_fhg_espn_settlement
 from first_half_goal_price_capture_patch import install as install_fhg_price_capture
 from first_half_goal_price_evidence_patch import install as install_fhg_price_evidence
+from first_half_goal_hardening_patch import install as install_fhg_hardening
+from first_half_goal_sportsbook_guard_patch import install as install_fhg_sportsbook_guard
 from homepage_sync_bridge_patch import install as install_homepage_sync_bridge
 from live_yankee_runtime_patch import install as install_live_yankee_runtime
 from oct25_research_priorities_patch import install as install_research_priorities
 from provider_cost_control_patch import install as install_provider_cost_control
 
-# v0.19.90 reallocates 500 provider credits/day from lower-priority research to
-# Hit-Rate Yankee/Heinz, raising HR from 500 to 1,000/day while keeping Live
-# Yankee at 1,500/day. It retains the v0.19.89 provider throttles, v0.19.88
-# challenge export refresh, v0.19.87 homepage bridge, v0.19.86 NCAAF-PRED1
-# repair and v0.19.85 FHG settlement repair.
-BUILD_VERSION = "0.19.90"
+# v0.19.91 hardens the First-Half Goal research lane without changing FHG1's
+# frozen selection model: reschedule/void lifecycle handling, transparent price
+# diagnostics, all-book frozen quotes, accumulator-capable same-book 8/9/10-card
+# snapshots, an ESPN settlement expansion to Scotland tiers 2-4, a circuit-breaker
+# for the persistently blocked SofaScore fallback, and a prospective-only FHG2
+# challenger. It retains the v0.19.90 provider-credit rebalance and all earlier
+# deployment/runtime repairs.
+BUILD_VERSION = "0.19.91"
 adaptive_core.DASHBOARD_VERSION = BUILD_VERSION
 dashboard_responsiveness.BUILD_VERSION = BUILD_VERSION
 curated.dashboard_layout_v2.VERSION = BUILD_VERSION
@@ -46,9 +51,10 @@ except Exception as exc:
     }
 print(f"LIVE_YANKEE_RUNTIME_INSTALL {live_yankee_runtime}", flush=True)
 
-# Keep football-data.co.uk as canonical settlement, retain the existing free CSV
-# + SofaScore attempts, and add ESPN only as a tertiary fallback for already-
-# frozen candidates still open several hours after kickoff.
+# Keep football-data.co.uk as canonical settlement. The compatibility installer
+# retains the free-settlement chain and ESPN fallback; the later FHG hardening
+# layer disables the persistently 403ing SofaScore attempt and expands ESPN to
+# the lower Scottish divisions.
 try:
     fhg_free_settlement = install_fhg_free_settlement(curated.base_app.db)
 except Exception as exc:
@@ -87,6 +93,42 @@ except Exception as exc:
         "error": f"{type(exc).__name__}: {exc}",
     }
 print(f"FHG_PRICE_EVIDENCE_INSTALL {fhg_price_evidence}", flush=True)
+
+# Same-book multiple feasibility must mean an accumulator-capable sportsbook,
+# not an exchange. Install the guard before the hardening startup pass so even
+# its first same-book snapshot excludes Betfair Exchange/Matchbook/Smarkets.
+try:
+    fhg_sportsbook_guard = install_fhg_sportsbook_guard()
+except Exception as exc:
+    fhg_sportsbook_guard = {
+        "installed": False,
+        "error": f"{type(exc).__name__}: {exc}",
+    }
+print(f"FHG_SPORTSBOOK_GUARD_INSTALL {fhg_sportsbook_guard}", flush=True)
+
+# Harden the complete FHG research product while leaving FHG1's probability and
+# threshold untouched. This also creates FHG2 as a separate prospective-only
+# challenger with no selection/betting authority.
+try:
+    fhg_hardening = install_fhg_hardening(curated.base_app)
+except Exception as exc:
+    fhg_hardening = {
+        "installed": False,
+        "error": f"{type(exc).__name__}: {exc}",
+    }
+print(f"FHG_HARDENING_INSTALL {fhg_hardening}", flush=True)
+
+# Wire the already-written integrity correction into the live challenge export:
+# numeric fhg_hit=0 is a real miss, not a blank. Also exposes settlement coverage,
+# calibration and tier splits without changing challenge staking authority.
+try:
+    challenge_fhg_health = install_challenge_fhg_health()
+except Exception as exc:
+    challenge_fhg_health = {
+        "installed": False,
+        "error": f"{type(exc).__name__}: {exc}",
+    }
+print(f"CHALLENGE_FHG_HEALTH_INSTALL {challenge_fhg_health}", flush=True)
 
 # Install model-freeze and stable historical-identity guards before the runtime
 # wrapper is attached. Both are research-only and create no provider traffic.
@@ -153,7 +195,7 @@ except Exception as exc:
 print(f"CHALLENGE_PORTFOLIO_REFRESH_INSTALL {challenge_portfolio_refresh}", flush=True)
 
 # Install the provider-credit rebalance after the complete runtime stack so its
-# ceilings are final. HR Yankee/Heinz is raised to 1,000/day; Live Yankee is
+# ceilings are final. HR Yankee/Heinz remains at 1,000/day; Live Yankee remains
 # explicitly preserved at 1,500/day. Lower-priority research funds the increase.
 try:
     provider_cost_control = install_provider_cost_control(curated.base_app.db)
