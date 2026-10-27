@@ -12,6 +12,7 @@ import adaptive_winner_research as adaptive_core
 from adaptive_winner_research import install as install_adaptive_winner_research
 from adaptive_winner_research_safety_patch import install as install_adaptive_safety
 from adaptive_tpred4_identity_patch import install as install_tpred4_identity
+from challenge_portfolio_refresh_patch import install as install_challenge_portfolio_refresh
 from first_half_goal_free_settlement_patch import install as install_fhg_free_settlement
 from first_half_goal_espn_settlement_patch import install as install_fhg_espn_settlement
 from first_half_goal_price_capture_patch import install as install_fhg_price_capture
@@ -20,11 +21,11 @@ from homepage_sync_bridge_patch import install as install_homepage_sync_bridge
 from live_yankee_runtime_patch import install as install_live_yankee_runtime
 from oct25_research_priorities_patch import install as install_research_priorities
 
-# v0.19.87 repairs the adaptive-entrypoint homepage event-loop bridge and keeps
-# the release badge synchronized through the responsiveness layer. It preserves
-# the v0.19.86 NCAAF-PRED1 price-link repair and v0.19.85 FHG settlement repair.
-# Everything remains shadow/research-only.
-BUILD_VERSION = "0.19.87"
+# v0.19.88 refreshes the lightweight £10→£500 challenge export after the
+# 27-Oct audit. It changes export annotations/portfolio status only and preserves
+# the v0.19.87 homepage bridge, v0.19.86 NCAAF-PRED1 repair and v0.19.85 FHG
+# settlement repair. Everything remains shadow/research-only.
+BUILD_VERSION = "0.19.88"
 adaptive_core.DASHBOARD_VERSION = BUILD_VERSION
 dashboard_responsiveness.BUILD_VERSION = BUILD_VERSION
 curated.dashboard_layout_v2.VERSION = BUILD_VERSION
@@ -132,6 +133,22 @@ except Exception as exc:
         "error": f"{type(exc).__name__}: {exc}",
     }
 print(f"HOMEPAGE_SYNC_BRIDGE_INSTALL {homepage_sync_bridge}", flush=True)
+
+# Refresh only the lightweight challenge export policy/annotations after the
+# 27-Oct audit. The existing /export/challenge.zip route remains in place and
+# continues to make zero provider calls. This patch does not change selection,
+# staking authority, alerts or execution logic.
+try:
+    challenge_portfolio_refresh = install_challenge_portfolio_refresh(
+        curated.base_app.db,
+        BUILD_VERSION,
+    )
+except Exception as exc:
+    challenge_portfolio_refresh = {
+        "installed": False,
+        "error": f"{type(exc).__name__}: {exc}",
+    }
+print(f"CHALLENGE_PORTFOLIO_REFRESH_INSTALL {challenge_portfolio_refresh}", flush=True)
 
 # The maintenance route is useful during development but deliberately removed
 # from the public production surface. Research refreshes run from the wrapped
