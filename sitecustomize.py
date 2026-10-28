@@ -10,6 +10,11 @@ coverage remains forward/research-only until its own evidence earns promotion.
 from datetime import datetime, timezone
 import os
 
+# Revision marker: this forces a clean Railway rebuild after the previous
+# deployment was lost to a Railway BuildKit daemon/network failure. Keeping the
+# installer in sitecustomize makes it independent of the configured ASGI entrypoint.
+FOOTBALL_COVERAGE_BOOTSTRAP_REVISION = "V2"
+
 try:
     import tennis_rich_source as _rich
 
@@ -49,6 +54,10 @@ try:
     import football_coverage_expansion_patch as _football_coverage
 
     _football_coverage_state = _football_coverage.install()
-    print(f"FOOTBALL_COVERAGE_EXPANSION_BOOTSTRAP {_football_coverage_state}", flush=True)
+    print(
+        f"FOOTBALL_COVERAGE_EXPANSION_BOOTSTRAP revision={FOOTBALL_COVERAGE_BOOTSTRAP_REVISION} "
+        f"state={_football_coverage_state}",
+        flush=True,
+    )
 except Exception as _exc:
     print(f"FOOTBALL_COVERAGE_EXPANSION_ERROR {type(_exc).__name__}: {_exc}", flush=True)
