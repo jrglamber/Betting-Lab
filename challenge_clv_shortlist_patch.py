@@ -204,6 +204,13 @@ def _candidate_from_sample(db, sample: Mapping[str, Any]) -> dict[str, Any]:
             "clv_first_manual_price_check_required": True,
             "clv_first_entry_odds_at_sample": sample.get("entry_odds"),
             "clv_first_sample_created_at": sample.get("created_at"),
+            "challenge_lane": "CLV_FIRST_GT0",
+            "challenge_status": STATUS,
+            "challenge_stake_gbp": 0.0,
+            "challenge_note": (
+                "Forward predicted-CLV >0 shortlist. Manual price/edge review required; "
+                "no automatic challenge staking authority."
+            ),
         }
     )
     return row
@@ -290,6 +297,51 @@ def _lane_snapshot(db) -> dict[str, Any]:
     }
 
 
+def _upgrade_portfolio_files(files: dict[str, bytes]) -> None:
+    rows = _read_csv(files.get("challenge_portfolio.csv", b""))
+    changed = False
+    for row in rows:
+        if str(row.get("lane_key") or "") != "CLV_FIRST_GT0":
+            continue
+        row["status"] = STATUS
+        row["stake_gbp"] = 0.0
+        row["rule"] = (
+            "Surface every open future CLV-First FORWARD sample with predicted_clv_pct > 0 "
+            "for manual challenge review."
+        )
+        row["rationale"] = (
+            "Forward >0% lane has matured enough to inform challenge selection, but it is "
+            "not yet promoted to automatic staking authority. Check the current bookmaker "
+            "price and the underlying source edge before any bet."
+        )
+        changed = True
+    if changed:
+        files["challenge_portfolio.csv"] = _write_csv(rows)
+
+    try:
+        summary = json.loads(
+            files.get("challenge_portfolio_summary.json", b"{}").decode("utf-8")
+        )
+    except Exception:
+        summary = {}
+    if summary:
+        research_only = list(summary.get("research_only") or [])
+        if "CLV_FIRST_GT0" not in research_only:
+            research_only.append("CLV_FIRST_GT0")
+        summary["research_only"] = research_only
+        rules = dict(summary.get("rules") or {})
+        rules["clv_first"] = (
+            "predicted CLV >0 is surfaced as RESEARCH_BACKED_SHORTLIST; manual current-price "
+            "review is required and automatic challenge stake remains £0"
+        )
+        summary["rules"] = rules
+        summary["clv_first_shortlist_status"] = STATUS
+        summary["clv_first_automatic_stake_gbp"] = 0.0
+        files["challenge_portfolio_summary.json"] = json.dumps(
+            summary, indent=2, ensure_ascii=False
+        ).encode("utf-8")
+
+
 def _rebuild_zip(files: dict[str, bytes]) -> bytes:
     payload = io.BytesIO()
     with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as z:
@@ -342,6 +394,7 @@ def build_challenge_export_v4(db, settings, app_version: str):
     )
 
     snapshot = _lane_snapshot(db)
+    _upgrade_portfolio_files(files)
     files["challenge_candidates.csv"] = _write_csv(candidates)
     files["challenge_clv_first_shortlist.csv"] = _write_csv(shortlist)
     files["challenge_clv_first_summary.json"] = json.dumps(
