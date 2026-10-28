@@ -20,20 +20,17 @@ from first_half_goal_price_capture_patch import install as install_fhg_price_cap
 from first_half_goal_price_evidence_patch import install as install_fhg_price_evidence
 from first_half_goal_hardening_patch import install as install_fhg_hardening
 from first_half_goal_sportsbook_guard_patch import install as install_fhg_sportsbook_guard
+from football_coverage_expansion_patch import install as install_football_coverage_expansion
 from homepage_sync_bridge_patch import install as install_homepage_sync_bridge
 from live_yankee_runtime_patch import install as install_live_yankee_runtime
 from oct25_research_priorities_patch import install as install_research_priorities
 from provider_cost_control_patch import install as install_provider_cost_control
 from winner_fingerprint_forward_patch import install as install_winner_fingerprint_forward
 
-# v0.19.92 freezes the most useful cross-sport winner fingerprints identified
-# on 27-Oct and turns them into prospective, price-aware forward cohorts. The
-# Adaptive Winner dashboard now leads with plain-English cards showing forward
-# settlements, hit rate, odds/break-even, ROI and A/B CLV, while the raw discovery
-# table is collapsed underneath. Passing the evidence gate only makes a cohort
-# eligible for manual review; it does not change betting or pricing priority.
-# All v0.19.91 FHG hardening and v0.19.90 provider-credit controls remain intact.
-BUILD_VERSION = "0.19.92"
+# v0.19.93 wires the broad football research coverage directly into the actual
+# Railway ASGI entrypoint. The expansion remains forward/research-only: it adds
+# no real-bet authority and XCOMP1 makes zero provider calls itself.
+BUILD_VERSION = "0.19.93"
 adaptive_core.DASHBOARD_VERSION = BUILD_VERSION
 dashboard_responsiveness.BUILD_VERSION = BUILD_VERSION
 curated.dashboard_layout_v2.VERSION = BUILD_VERSION
@@ -130,6 +127,22 @@ except Exception as exc:
         "error": f"{type(exc).__name__}: {exc}",
     }
 print(f"CHALLENGE_FHG_HEALTH_INSTALL {challenge_fhg_health}", flush=True)
+
+# Broad football coverage must be installed through this exact module because
+# Railway launches adaptive_dashboard_app:app. This makes cups/continental and
+# additional supported leagues available to the research stack without relying
+# on sitecustomize import behaviour. XCOMP1 stays calibration-only/research-only.
+try:
+    football_coverage_expansion = install_football_coverage_expansion()
+except Exception as exc:
+    football_coverage_expansion = {
+        "installed": False,
+        "error": f"{type(exc).__name__}: {exc}",
+    }
+print(
+    f"FOOTBALL_COVERAGE_EXPANSION_ENTRYPOINT {football_coverage_expansion}",
+    flush=True,
+)
 
 # Install model-freeze and stable historical-identity guards before the runtime
 # wrapper is attached. Both are research-only and create no provider traffic.
