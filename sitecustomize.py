@@ -3,7 +3,8 @@ from __future__ import annotations
 """Small process-startup guards for research-only runtime patches.
 
 No betting authority is changed here. The TPRED rich-cache cap remains date
-bounded, and the Challenge Export FHG health fix only corrects reporting.
+bounded, Challenge Export FHG health is reporting-only, and broad football
+coverage remains forward/research-only until its own evidence earns promotion.
 """
 
 from datetime import datetime, timezone
@@ -43,3 +44,11 @@ try:
     print(f"CHALLENGE_FHG_HEALTH_INTEGRITY_INSTALL {_challenge_fhg_state}", flush=True)
 except Exception as _exc:
     print(f"CHALLENGE_FHG_HEALTH_INTEGRITY_ERROR {type(_exc).__name__}: {_exc}", flush=True)
+
+try:
+    import football_coverage_expansion_patch as _football_coverage
+
+    _football_coverage_state = _football_coverage.install()
+    print(f"FOOTBALL_COVERAGE_EXPANSION_BOOTSTRAP {_football_coverage_state}", flush=True)
+except Exception as _exc:
+    print(f"FOOTBALL_COVERAGE_EXPANSION_ERROR {type(_exc).__name__}: {_exc}", flush=True)
