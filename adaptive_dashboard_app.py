@@ -12,6 +12,7 @@ import adaptive_winner_research as adaptive_core
 from adaptive_winner_research import install as install_adaptive_winner_research
 from adaptive_winner_research_safety_patch import install as install_adaptive_safety
 from adaptive_tpred4_identity_patch import install as install_tpred4_identity
+from challenge_clv_shortlist_patch import install as install_challenge_clv_shortlist
 from challenge_fhg_health_integrity_patch import install as install_challenge_fhg_health
 from challenge_portfolio_refresh_patch import install as install_challenge_portfolio_refresh
 from first_half_goal_free_settlement_patch import install as install_fhg_free_settlement
@@ -27,10 +28,9 @@ from oct25_research_priorities_patch import install as install_research_prioriti
 from provider_cost_control_patch import install as install_provider_cost_control
 from winner_fingerprint_forward_patch import install as install_winner_fingerprint_forward
 
-# v0.19.93 wires the broad football research coverage directly into the actual
-# Railway ASGI entrypoint. The expansion remains forward/research-only: it adds
-# no real-bet authority and XCOMP1 makes zero provider calls itself.
-BUILD_VERSION = "0.19.93"
+# v0.19.94 surfaces CLV-First >0 forward selections in the Challenge Export as
+# manual/research-backed shortlist rows. It adds no betting or staking authority.
+BUILD_VERSION = "0.19.94"
 adaptive_core.DASHBOARD_VERSION = BUILD_VERSION
 dashboard_responsiveness.BUILD_VERSION = BUILD_VERSION
 curated.dashboard_layout_v2.VERSION = BUILD_VERSION
@@ -223,6 +223,22 @@ except Exception as exc:
         "error": f"{type(exc).__name__}: {exc}",
     }
 print(f"CHALLENGE_PORTFOLIO_REFRESH_INSTALL {challenge_portfolio_refresh}", flush=True)
+
+# Surface every still-open forward CLV-First >0 sample inside the challenge
+# horizon after the portfolio wrapper is installed. These are manual decision
+# candidates only: current bookmaker price must still be checked and the export
+# assigns £0 automatic stake/betting authority.
+try:
+    challenge_clv_shortlist = install_challenge_clv_shortlist(
+        curated.base_app.db,
+        BUILD_VERSION,
+    )
+except Exception as exc:
+    challenge_clv_shortlist = {
+        "installed": False,
+        "error": f"{type(exc).__name__}: {exc}",
+    }
+print(f"CHALLENGE_CLV_SHORTLIST_INSTALL {challenge_clv_shortlist}", flush=True)
 
 # Install the provider-credit rebalance after the complete runtime stack so its
 # ceilings are final. HR Yankee/Heinz remains at 1,000/day; Live Yankee remains
