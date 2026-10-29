@@ -28,9 +28,9 @@ from oct25_research_priorities_patch import install as install_research_prioriti
 from provider_cost_control_patch import install as install_provider_cost_control
 from winner_fingerprint_forward_patch import install as install_winner_fingerprint_forward
 
-# v0.19.94 surfaces CLV-First >0 forward selections in the Challenge Export as
-# manual/research-backed shortlist rows. It adds no betting or staking authority.
-BUILD_VERSION = "0.19.94"
+# v0.19.95 surfaces the new forward-only HR2 Trixie + Double challengers in the
+# Hit Rate Lab while preserving all existing Yankee/Heinz evidence and authority.
+BUILD_VERSION = "0.19.95"
 adaptive_core.DASHBOARD_VERSION = BUILD_VERSION
 dashboard_responsiveness.BUILD_VERSION = BUILD_VERSION
 curated.dashboard_layout_v2.VERSION = BUILD_VERSION
