@@ -1,19 +1,20 @@
 from __future__ import annotations
 
-"""Forward-only HR2 Trixie challenger.
+"""Forward-only HR2 Trixie + Double challengers.
 
-This patch adds an independent three-leg Trixie stream to the existing HR2
+This patch adds independent smaller-system streams to the existing HR2
 hit-rate multiples lab without changing the frozen Yankee or Heinz evidence.
 
 Rules:
 - HR2 only. HR1 remains Yankee + Heinz.
-- Three different events; Trixie lines are 3 doubles + 1 treble.
-- £10 total reference stake, split equally across the four system lines by the
-  existing generic settlement engine.
+- Trixie: 3 different events; 3 doubles + 1 treble.
+- Double: 2 different events; one double.
+- £10 total reference stake per card; the existing generic settlement engine
+  splits that total equally across each system's lines.
 - Uses the existing fresh-price and same-book-only formation policy.
 - Forward only from deployment: no historical cards are reconstructed/backfilled.
 - Research only. Existing Telegram wiring intentionally remains limited to
-  Yankee/Heinz, so Trixies are never sent as bet-ready alerts.
+  Yankee/Heinz, so neither challenger is sent as a bet-ready alert.
 """
 
 from typing import Any, Dict
@@ -21,10 +22,13 @@ from typing import Any, Dict
 import hit_rate_multiples_lab as hr
 from db import utc_now_iso
 
-VERSION = "HIT_RATE_HR2_TRIXIE_FORWARD_V1"
-SYSTEM = "TRIXIE"
+VERSION = "HIT_RATE_HR2_SMALL_SYSTEMS_FORWARD_V2"
 EXPERIMENT = "HR2"
-SPEC = {"legs": 3, "sizes": (2, 3)}
+SYSTEM_SPECS = {
+    "TRIXIE": {"legs": 3, "sizes": (2, 3)},
+    "DOUBLE": {"legs": 2, "sizes": (2,)},
+}
+SMALL_SYSTEMS = tuple(SYSTEM_SPECS)
 
 _INSTALLED = False
 _ORIGINAL_INGEST = None
@@ -32,14 +36,14 @@ _ORIGINAL_SCOREBOARD = None
 _ORIGINAL_PAGE = None
 
 
-def _ingest_hr2_trixie_only(db, now) -> Dict[str, int]:
-    """Mirror HR ingestion but create Trixie candidates only for HR2."""
+def _ingest_hr2_small_systems_only(db, now) -> Dict[str, int]:
+    """Mirror HR ingestion while restricting Trixie/Double candidates to HR2."""
     seen = inserted = 0
     for row in hr._source_rows(db, now):
         exp = str(row.get("experiment_key") or "")
         systems = tuple(hr.SYSTEMS)
         if exp != EXPERIMENT:
-            systems = tuple(system for system in systems if system != SYSTEM)
+            systems = tuple(system for system in systems if system not in SMALL_SYSTEMS)
 
         for system in systems:
             seen += 1
@@ -88,71 +92,81 @@ def _ingest_hr2_trixie_only(db, now) -> Dict[str, int]:
 
 
 def _scoreboard(db) -> Dict[str, Any]:
-    """Keep HR1 visually unchanged while surfacing the HR2 Trixie stream."""
+    """Keep HR1 visually unchanged while surfacing the HR2 challengers."""
     out = _ORIGINAL_SCOREBOARD(db)
     streams = out.get("streams") or {}
     hr1 = streams.get("HR1") or {}
-    hr1.pop(SYSTEM, None)
-    out["trixie_forward"] = {
+    for system in SMALL_SYSTEMS:
+        hr1.pop(system, None)
+    out["small_systems_forward"] = {
         "experiment": EXPERIMENT,
-        "system": SYSTEM,
         "research_only": True,
         "forward_only": True,
         "historical_backfill": False,
         "telegram_bet_ready": False,
-        "legs": 3,
-        "lines": 4,
+        "systems": {
+            "TRIXIE": {"legs": 3, "lines": 4},
+            "DOUBLE": {"legs": 2, "lines": 1},
+        },
         "reference_stake_gbp": float(hr.REFERENCE_STAKE_GBP),
     }
     return out
 
 
+def _stream_row(metrics: Dict[str, Any], system: str) -> str:
+    roi = "—" if metrics["roi_pct"] is None else f"{float(metrics['roi_pct']):+.1f}%"
+    return (
+        f"<tr><td>{EXPERIMENT}</td><td>{system.title()}</td>"
+        f"<td>{metrics['queued']}</td><td>{metrics['queued_events']}</td>"
+        f"<td>{metrics['cards']}</td><td>{metrics['settled']}</td>"
+        f"<td>{metrics['profitable']}</td><td>{metrics['at_least_3']}</td>"
+        f"<td>{metrics['full_house']}</td><td>{roi}</td></tr>"
+    )
+
+
 def _page(web_module) -> str:
-    """Add the HR2 Trixie challenger to the existing HR dashboard."""
+    """Add the HR2 Trixie and Double challengers to the HR dashboard."""
     html = _ORIGINAL_PAGE(web_module)
     try:
         score = hr.scoreboard(web_module.db)
-        metrics = score["streams"][EXPERIMENT][SYSTEM]
-        roi = "—" if metrics["roi_pct"] is None else f"{float(metrics['roi_pct']):+.1f}%"
-        row = (
-            f"<tr><td>{EXPERIMENT}</td><td>Trixie</td>"
-            f"<td>{metrics['queued']}</td><td>{metrics['queued_events']}</td>"
-            f"<td>{metrics['cards']}</td><td>{metrics['settled']}</td>"
-            f"<td>{metrics['profitable']}</td><td>{metrics['at_least_3']}</td>"
-            f"<td>{metrics['full_house']}</td><td>{roi}</td></tr>"
-        )
+        rows = []
+        for system in ("TRIXIE", "DOUBLE"):
+            metrics = score["streams"][EXPERIMENT][system]
+            rows.append(_stream_row(metrics, system))
 
         marker = "</tbody></table></div></div>\n<div class='panel'><h2>Assembly</h2>"
         if marker in html and "<td>HR2</td><td>Trixie</td>" not in html:
             html = html.replace(
                 marker,
-                row + "</tbody></table></div></div>\n<div class='panel'><h2>Assembly</h2>",
+                "".join(rows) + "</tbody></table></div></div>\n<div class='panel'><h2>Assembly</h2>",
                 1,
             )
 
         panel_marker = "<div class='panel'><h2>Frozen design backtest</h2>"
-        if panel_marker in html and "HR2 Trixie — forward test" not in html:
+        if panel_marker in html and "HR2 small-system challengers" not in html:
             panel = (
-                "<div class='panel'><h2>HR2 Trixie — forward test "
+                "<div class='panel'><h2>HR2 small-system challengers "
                 "<span class='pill'>RESEARCH ONLY</span></h2>"
-                "<div class='summary'><strong>3 legs · 4 lines · £10 total reference stake.</strong> "
-                "Uses the same HR2 candidate pool, fresh-price thresholds and same-book-only assembly as the "
-                "existing HR2 multiples. It forms independently as soon as three qualifying selections are "
-                "simultaneously placeable at one bookmaker.</div>"
-                "<div class='muted'>Forward evidence starts from deployment. No historical Trixie cards are "
-                "backfilled, existing Yankee/Heinz cards are untouched, and Trixies are not sent as Telegram "
-                "bet-ready alerts.</div></div>"
+                "<div class='summary'><strong>Trixie: 3 legs / 4 lines. Double: 2 legs / 1 line. "
+                "£10 total reference stake per card.</strong> Both use the same HR2 candidate pool, "
+                "fresh-price thresholds and same-book-only assembly as the existing HR2 multiples. "
+                "Each forms independently as soon as enough qualifying selections are simultaneously "
+                "placeable at one bookmaker.</div>"
+                "<div class='muted'>Forward evidence starts from deployment. No historical Trixie or "
+                "Double cards are backfilled, existing Yankee/Heinz cards are untouched, and neither "
+                "challenger is sent as a Telegram bet-ready alert. In the main stream table, the legacy "
+                "'3+ wins' column is not meaningful for Double; use 'All legs' and ROI for that lane.</div></div>"
             )
             html = html.replace(panel_marker, panel + panel_marker, 1)
 
         html = html.replace(
             "High-hit-rate/value pockets, assembled chronologically. Yankees are primary; Heinz runs independently as a benchmark.",
-            "High-hit-rate/value pockets, assembled chronologically. Yankees remain primary; HR2 Trixie is a forward-only three-leg challenger and Heinz remains an independent benchmark.",
+            "High-hit-rate/value pockets, assembled chronologically. Yankees remain primary; HR2 Trixie and Double are forward-only smaller-system challengers and Heinz remains an independent benchmark.",
             1,
         )
         html = html.replace(
             "Yankee and Heinz are independent forward experiments.",
-            "Yankee, HR2 Trixie and Heinz are independent forward experiments.",
+            "Yankee, HR2 Trixie, HR2 Double and Heinz are independent forward experiments.",
             1,
         )
     except Exception:
@@ -170,19 +184,20 @@ def install() -> Dict[str, Any]:
             "already_installed": True,
             "version": VERSION,
             "experiment": EXPERIMENT,
-            "system": SYSTEM,
+            "systems": list(SMALL_SYSTEMS),
         }
 
-    # Add the system before the later same-book-only patch installs. Its generic
-    # formation logic reads hr.SYSTEMS dynamically, so Trixie inherits the same
-    # placeability policy without any parallel odds collector or provider calls.
-    hr.SYSTEMS[SYSTEM] = dict(SPEC)
+    # Add both systems before the later same-book-only runtime patch installs.
+    # Its generic formation logic reads hr.SYSTEMS dynamically, so both streams
+    # inherit the same placeability policy without a parallel odds collector.
+    for system, spec in SYSTEM_SPECS.items():
+        hr.SYSTEMS[system] = dict(spec)
 
     _ORIGINAL_INGEST = hr._ingest
     _ORIGINAL_SCOREBOARD = hr.scoreboard
     _ORIGINAL_PAGE = hr._page
 
-    hr._ingest = _ingest_hr2_trixie_only
+    hr._ingest = _ingest_hr2_small_systems_only
     hr.scoreboard = _scoreboard
     hr._page = _page
 
@@ -192,10 +207,14 @@ def install() -> Dict[str, Any]:
         "already_installed": False,
         "version": VERSION,
         "experiment": EXPERIMENT,
-        "system": SYSTEM,
-        "legs": 3,
-        "line_sizes": list(SPEC["sizes"]),
-        "line_count": 4,
+        "systems": {
+            system: {
+                "legs": int(spec["legs"]),
+                "line_sizes": list(spec["sizes"]),
+                "line_count": 4 if system == "TRIXIE" else 1,
+            }
+            for system, spec in SYSTEM_SPECS.items()
+        },
         "reference_stake_gbp": float(hr.REFERENCE_STAKE_GBP),
         "forward_only": True,
         "historical_backfill": False,
