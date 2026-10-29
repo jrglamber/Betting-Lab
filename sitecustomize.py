@@ -61,3 +61,11 @@ try:
     )
 except Exception as _exc:
     print(f"FOOTBALL_COVERAGE_EXPANSION_ERROR {type(_exc).__name__}: {_exc}", flush=True)
+
+try:
+    import hit_rate_trixie_patch as _hit_rate_trixie
+
+    _hit_rate_trixie_state = _hit_rate_trixie.install()
+    print(f"HIT_RATE_HR2_TRIXIE_INSTALL {_hit_rate_trixie_state}", flush=True)
+except Exception as _exc:
+    print(f"HIT_RATE_HR2_TRIXIE_ERROR {type(_exc).__name__}: {_exc}", flush=True)
