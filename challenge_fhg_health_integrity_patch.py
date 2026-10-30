@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-"""Integrity fix for FHG1 challenge-export lane health.
+"""Integrity fixes for FHG1 challenge-export health and fixture lifecycle.
 
-The first Challenge Export lane-health implementation used ``value or ''`` when
-reading ``fhg_hit``. A genuine FHG loss is stored as numeric 0, so those rows
-were treated as blank and excluded. This patch replaces only the FHG health
-builder, preserves the research/betting logic, and adds settlement-coverage and
-calibration context so a partially settled sample cannot look stronger than it
-is.
+The original lane-health implementation used ``value or ''`` when reading
+``fhg_hit``. A genuine loss is numeric 0, so those rows were excluded. This
+module also installs the postponed-fixture guard so stale future FHG candidates
+cannot leak into Challenge Export.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -15,8 +13,9 @@ from typing import Any, Mapping
 
 import challenge_export_patch as challenge
 import first_half_goal_lab as fhg
+from fhg_postponed_guard_patch import install as install_fhg_postponed_guard
 
-VERSION = "CHALLENGE_FHG_HEALTH_INTEGRITY_V1"
+VERSION = "CHALLENGE_FHG_HEALTH_INTEGRITY_V2_POSTPONED_GUARD"
 _INSTALLED = False
 
 
@@ -41,7 +40,10 @@ def _probability(row: Mapping[str, Any]):
 
 def _fhg_health_integrity(db) -> list[dict[str, Any]]:
     rows = challenge._safe_rows(db, "first_half_goal_candidates")
-    settled = [r for r in rows if str(r.get("status") or "").upper() == "SETTLED" and _hit_value(r) is not None]
+    settled = [
+        r for r in rows
+        if str(r.get("status") or "").upper() == "SETTLED" and _hit_value(r) is not None
+    ]
 
     now = datetime.now(timezone.utc)
     overdue_cutoff = now - timedelta(hours=2)
@@ -54,8 +56,14 @@ def _fhg_health_integrity(db) -> list[dict[str, Any]]:
             overdue_open.append(row)
 
     threshold = float(getattr(fhg, "THRESHOLD", 0.70))
-    qualifying = [r for r in settled if (_probability(r) is not None and _probability(r) >= threshold)]
-    qualifying_overdue = [r for r in overdue_open if (_probability(r) is not None and _probability(r) >= threshold)]
+    qualifying = [
+        r for r in settled
+        if (_probability(r) is not None and _probability(r) >= threshold)
+    ]
+    qualifying_overdue = [
+        r for r in overdue_open
+        if (_probability(r) is not None and _probability(r) >= threshold)
+    ]
 
     out: list[dict[str, Any]] = []
 
@@ -76,7 +84,10 @@ def _fhg_health_integrity(db) -> list[dict[str, Any]]:
         hits = sum(_hit_value(r) == 1 for r in group)
         losses = n - hits
         grade, maturity = challenge._evidence_grade(n)
-        dates = [dt for dt in (challenge._parse(r.get("settled_at")) for r in group) if dt is not None]
+        dates = [
+            dt for dt in (challenge._parse(r.get("settled_at")) for r in group)
+            if dt is not None
+        ]
         probs = [p for p in (_probability(r) for r in group) if p is not None]
         avg_prob = sum(probs) / len(probs) if probs else None
         actual = hits / n if n else None
@@ -100,7 +111,10 @@ def _fhg_health_integrity(db) -> list[dict[str, Any]]:
             "voids": 0,
             "hit_rate_pct": (100.0 * actual) if actual is not None else None,
             "avg_model_probability_pct": (100.0 * avg_prob) if avg_prob is not None else None,
-            "calibration_gap_pct_points": (100.0 * (actual - avg_prob)) if actual is not None and avg_prob is not None else None,
+            "calibration_gap_pct_points": (
+                100.0 * (actual - avg_prob)
+                if actual is not None and avg_prob is not None else None
+            ),
             "overdue_open_n": len(pending_group),
             "settlement_coverage_pct": coverage,
             "net_pnl_units": None,
@@ -117,7 +131,6 @@ def _fhg_health_integrity(db) -> list[dict[str, Any]]:
             "last_settled_at": max(dates).isoformat() if dates else None,
         })
 
-    # Primary row reflects the actual FHG1 selection threshold used by the lab.
     record(
         "QUALIFYING",
         f"P>={threshold:.2f}",
@@ -126,8 +139,6 @@ def _fhg_health_integrity(db) -> list[dict[str, Any]]:
         evidence_kind="FORWARD_HIT_RATE_AT_SELECTION_THRESHOLD",
     )
 
-    # Keep an all-settled diagnostic row as context, but do not confuse it with
-    # the threshold-qualified selection lane.
     record(
         "ALL_SETTLED",
         "ALL_MODEL_CANDIDATES",
@@ -136,36 +147,76 @@ def _fhg_health_integrity(db) -> list[dict[str, Any]]:
         evidence_kind="DIAGNOSTIC_ALL_CANDIDATES",
     )
 
-    # Model tiers are useful for deciding whether a high-probability FHG price
-    # deserves more confidence than a marginal 70% candidate.
     tier_defs = (
         ("A", 0.80, 1.01),
         ("B", 0.75, 0.80),
         ("C", threshold, 0.75),
     )
     for tier, low, high in tier_defs:
-        group = [r for r in settled if (_probability(r) is not None and low <= _probability(r) < high)]
-        pending = [r for r in overdue_open if (_probability(r) is not None and low <= _probability(r) < high)]
+        group = [
+            r for r in settled
+            if (_probability(r) is not None and low <= _probability(r) < high)
+        ]
+        pending = [
+            r for r in overdue_open
+            if (_probability(r) is not None and low <= _probability(r) < high)
+        ]
         if group:
-            record("TIER", tier, group, pending, tier=tier, evidence_kind="FORWARD_HIT_RATE_BY_TIER")
+            record(
+                "TIER",
+                tier,
+                group,
+                pending,
+                tier=tier,
+                evidence_kind="FORWARD_HIT_RATE_BY_TIER",
+            )
 
-    # League splits only for threshold-qualified rows and only once there is at
-    # least a minimally useful settled sample.
-    leagues = sorted({str(r.get("league") or "").strip() for r in qualifying if str(r.get("league") or "").strip()})
+    leagues = sorted({
+        str(r.get("league") or "").strip()
+        for r in qualifying
+        if str(r.get("league") or "").strip()
+    })
     for league in leagues:
         group = [r for r in qualifying if str(r.get("league") or "").strip() == league]
         if len(group) < 5:
             continue
-        pending = [r for r in qualifying_overdue if str(r.get("league") or "").strip() == league]
-        record("LEAGUE", league, group, pending, league=league, evidence_kind="FORWARD_HIT_RATE_AT_SELECTION_THRESHOLD")
+        pending = [
+            r for r in qualifying_overdue
+            if str(r.get("league") or "").strip() == league
+        ]
+        record(
+            "LEAGUE",
+            league,
+            group,
+            pending,
+            league=league,
+            evidence_kind="FORWARD_HIT_RATE_AT_SELECTION_THRESHOLD",
+        )
 
     return out
 
 
 def install() -> dict[str, Any]:
     global _INSTALLED
+
+    # Install this on every call, including idempotent/reload paths, so the
+    # export/lifecycle guard cannot be skipped merely because health was already
+    # patched in the process.
+    try:
+        postponed_guard = install_fhg_postponed_guard()
+    except Exception as exc:
+        postponed_guard = {
+            "installed": False,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
     if _INSTALLED or getattr(challenge, "_fhg_health_integrity_patch", False):
-        return {"installed": True, "already_installed": True, "version": VERSION}
+        return {
+            "installed": True,
+            "already_installed": True,
+            "version": VERSION,
+            "postponed_guard": postponed_guard,
+        }
 
     challenge._fhg_health = _fhg_health_integrity
     challenge._fhg_health_integrity_patch = True
@@ -175,7 +226,14 @@ def install() -> dict[str, Any]:
         "already_installed": False,
         "version": VERSION,
         "bug_fixed": "numeric_zero_fhg_losses_were_excluded",
-        "adds": ["threshold-qualified hit rate", "calibration", "settlement coverage", "tier splits"],
+        "adds": [
+            "threshold-qualified hit rate",
+            "calibration",
+            "settlement coverage",
+            "tier splits",
+            "future postponed/rescheduled fixture guard",
+        ],
+        "postponed_guard": postponed_guard,
         "provider_calls_added": 0,
         "betting_authority_changed": False,
     }
