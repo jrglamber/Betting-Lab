@@ -5,8 +5,9 @@ from __future__ import annotations
 The existing quote collectors remain authoritative. This patch only changes when
 queued Live Yankee and HR events are refreshed and how much daily paid quota the
 two high-frequency quote lanes may consume. Five-minute reaction is reserved for
-fixtures close to kickoff; distant research is paced so a morning slate cannot
-consume most of the day's allowance before the main UK/US windows arrive.
+genuinely near-card fixtures close to kickoff; distant research is paced so a
+morning slate cannot consume most of the day's allowance before the main UK/US
+windows arrive.
 
 No candidate, model, minimum-price, same-book, card-construction, staking,
 settlement, Telegram or betting-authority rule is changed.
@@ -19,7 +20,7 @@ import credit_policy_unlimited_patch as base_policy
 import hit_rate_multiples_lab
 import live_yankee_feed
 
-VERSION = "MULTIPLES_CREDIT_EFFICIENCY_V1"
+VERSION = "MULTIPLES_CREDIT_EFFICIENCY_V2"
 LIVE_YANKEE_DAILY_CREDITS = 1_200
 HIT_RATE_DAILY_CREDITS = 400
 
@@ -27,18 +28,22 @@ URGENT_KICKOFF_MINUTES = 90.0
 FAR_FROM_KICKOFF_MINUTES = 240.0
 SOFT_DAY_FLOOR_FRACTION = 0.15
 
-# Live Yankee: having any usable quote is not sufficient reason to refresh every
-# five minutes when the event is still hours away.
-LIVE_USABLE_MID_MINUTES = 20.0
-LIVE_USABLE_FAR_MINUTES = 45.0
+# Normal Yankee polling: 60-120m when >4h away, 30-45m from 90m-4h,
+# and 15m inside 90m. Only a genuinely near-card stream gets 5m treatment.
+LIVE_USABLE_MID_MINUTES = 30.0
+LIVE_USABLE_FAR_MINUTES = 60.0
 LIVE_MISS_MID_MINUTES = 45.0
 LIVE_MISS_FAR_MINUTES = 120.0
+LIVE_URGENT_MINUTES = 15.0
+LIVE_NEAR_CARD_URGENT_MINUTES = 5.0
 
-# HR: a stream one leg short may refresh more often than a normal stream, but it
-# only gets five-minute treatment close to kickoff.
+# HR follows the same principle. A stream one leg short can refresh at 5m inside
+# 90m, but normal urgent events are held to 15m.
 HR_NEAR_CARD_MID_MINUTES = 15.0
 HR_NORMAL_MID_MINUTES = 45.0
 HR_NORMAL_FAR_MINUTES = 120.0
+HR_URGENT_MINUTES = 15.0
+HR_NEAR_CARD_URGENT_MINUTES = 5.0
 HR_NEAR_CARD_SOFT_BYPASS_MINUTES = 180.0
 
 _INSTALLED = False
@@ -92,6 +97,17 @@ def _live_has_usable(db, event_id: str, now: datetime) -> bool:
         return True
 
 
+def _live_near_card(db, event_id: str, now: datetime) -> bool:
+    """Use existing stream-readiness diagnostics; never infer a new selection rule."""
+    try:
+        eligible_events, near_events, state = base_policy._hr_stream_readiness(db, now)
+        if state.get("failed_open"):
+            return False
+        return event_id in eligible_events and event_id in near_events
+    except Exception:
+        return False
+
+
 def _live_targets(db, now: datetime, targets: Sequence[Mapping[str, Any]]):
     spent = _spent_today(db, "LIVE_YANKEE_QUOTES", now)
     soft = _soft_allowance(LIVE_YANKEE_DAILY_CREDITS, now)
@@ -106,20 +122,19 @@ def _live_targets(db, now: datetime, targets: Sequence[Mapping[str, Any]]):
 
         minutes_to_kickoff = (kickoff - now).total_seconds() / 60.0
         urgent = minutes_to_kickoff <= URGENT_KICKOFF_MINUTES
+        near = urgent and _live_near_card(db, event_id, now)
         if not urgent and spent >= soft:
             continue
 
         if urgent:
-            # The underlying collector already enforces its five-minute minimum.
-            kept.append(raw)
-            continue
-
-        usable = _live_has_usable(db, event_id, now)
-        far = minutes_to_kickoff > FAR_FROM_KICKOFF_MINUTES
-        if usable:
-            wait = LIVE_USABLE_FAR_MINUTES if far else LIVE_USABLE_MID_MINUTES
+            wait = LIVE_NEAR_CARD_URGENT_MINUTES if near else LIVE_URGENT_MINUTES
         else:
-            wait = LIVE_MISS_FAR_MINUTES if far else LIVE_MISS_MID_MINUTES
+            usable = _live_has_usable(db, event_id, now)
+            far = minutes_to_kickoff > FAR_FROM_KICKOFF_MINUTES
+            if usable:
+                wait = LIVE_USABLE_FAR_MINUTES if far else LIVE_USABLE_MID_MINUTES
+            else:
+                wait = LIVE_MISS_FAR_MINUTES if far else LIVE_MISS_MID_MINUTES
 
         last = _last_success(db, "LIVE_YANKEE_QUOTES", event_id)
         if _due_after(last, now, wait):
@@ -167,10 +182,8 @@ def _hr_targets(db, now: datetime, targets: Sequence[Mapping[str, Any]]):
             continue
 
         if urgent:
-            kept.append(raw)
-            continue
-
-        if near:
+            wait = HR_NEAR_CARD_URGENT_MINUTES if near else HR_URGENT_MINUTES
+        elif near:
             wait = HR_NEAR_CARD_MID_MINUTES
         else:
             wait = (
@@ -249,14 +262,16 @@ def install(db) -> dict:
         },
         "today_paid_breakdown": today[:20],
         "live_refresh_minutes": {
-            "urgent": 5,
+            "near_card_urgent": LIVE_NEAR_CARD_URGENT_MINUTES,
+            "urgent": LIVE_URGENT_MINUTES,
             "usable_mid": LIVE_USABLE_MID_MINUTES,
             "usable_far": LIVE_USABLE_FAR_MINUTES,
             "miss_mid": LIVE_MISS_MID_MINUTES,
             "miss_far": LIVE_MISS_FAR_MINUTES,
         },
         "hr_refresh_minutes": {
-            "urgent": 5,
+            "near_card_urgent": HR_NEAR_CARD_URGENT_MINUTES,
+            "urgent": HR_URGENT_MINUTES,
             "near_card_mid": HR_NEAR_CARD_MID_MINUTES,
             "normal_mid": HR_NORMAL_MID_MINUTES,
             "normal_far": HR_NORMAL_FAR_MINUTES,
