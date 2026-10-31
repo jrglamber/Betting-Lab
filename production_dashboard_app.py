@@ -1,14 +1,16 @@
 """Final Railway production bootstrap for Betting Lab.
 
 This module imports the established adaptive dashboard stack, then installs the
-HR2 small-system research streams explicitly under the real Railway entrypoint.
-It intentionally does not rely on Python's optional sitecustomize startup hook.
+production-only forward research/runtime controls explicitly under Railway's
+real entrypoint. It intentionally does not rely on Python's optional
+sitecustomize startup hook.
 """
 
 import adaptive_dashboard_app as base
 from hit_rate_trixie_patch import install as install_hit_rate_small_systems
+from live_yankee_credit_pacing_patch import install as install_live_yankee_credit_pacing
 
-BUILD_VERSION = "0.19.96"
+BUILD_VERSION = "0.19.97"
 
 # The adaptive dashboard's final homepage renderer resolves BUILD_VERSION from
 # its module globals at request time, so update that release identity together
@@ -20,10 +22,8 @@ base.curated.dashboard_layout_v2.VERSION = BUILD_VERSION
 base.curated.base_app.web_module.VERSION = BUILD_VERSION
 base.curated.base_app.app.version = BUILD_VERSION
 
-# Explicit production install. v0.19.95 contained the module in the repository,
-# but Railway's uvicorn entrypoint did not execute the sitecustomize bootstrap,
-# so no Double/Trixie forward collection actually began. v0.19.96 is therefore
-# the true prospective start for these challengers.
+# Explicit HR2 small-system install. v0.19.96 is the true prospective start for
+# the Double/Trixie challengers.
 try:
     hit_rate_small_systems = install_hit_rate_small_systems()
 except Exception as exc:
@@ -32,6 +32,18 @@ except Exception as exc:
         "error": f"{type(exc).__name__}: {exc}",
     }
 print(f"HIT_RATE_HR2_SMALL_SYSTEMS_INSTALL {hit_rate_small_systems}", flush=True)
+
+# Live Yankee quote pacing is installed last so older startup patches cannot
+# silently restore the previous 1,500-credit unpaced ceiling. The hard ceiling
+# is 2,000/day, with cumulative UTC gates that preserve later-day headroom.
+try:
+    live_yankee_credit_pacing = install_live_yankee_credit_pacing()
+except Exception as exc:
+    live_yankee_credit_pacing = {
+        "installed": False,
+        "error": f"{type(exc).__name__}: {exc}",
+    }
+print(f"LIVE_YANKEE_CREDIT_PACING_INSTALL {live_yankee_credit_pacing}", flush=True)
 print(f"BETTING_LAB_PRODUCTION_RELEASE_VERSION {BUILD_VERSION}", flush=True)
 
 app = base.app
