@@ -18,10 +18,11 @@ import multiples_today_headroom_patch as legacy_headroom
 import provider_cost_control_patch as provider_cost
 from hit_rate_trixie_patch import install as install_hit_rate_small_systems
 from hit_rate_settlement_fallback_patch import install as install_hit_rate_settlement_fallback
+from hit_rate_theoretical_result_collection_patch import install as install_hit_rate_theoretical_result_collection
 from multiples_home_small_systems_patch import install as install_multiples_home_small_systems
 from live_yankee_credit_pacing_patch import install as install_live_yankee_credit_pacing
 
-BUILD_VERSION = "0.19.101"
+BUILD_VERSION = "0.19.102"
 
 # The adaptive dashboard's final homepage renderer resolves BUILD_VERSION from
 # its module globals at request time, so update that release identity together
@@ -115,7 +116,7 @@ print(f"HIT_RATE_HR2_SMALL_SYSTEMS_INSTALL {hit_rate_small_systems}", flush=True
 # HR settlement must not depend solely on the original source bet row being
 # settled first. Resolve exact event_id matches from the established local
 # football/tennis/multisport result tables as a fallback, then reconcile the
-# existing pending-card backlog immediately. No provider calls are added.
+# existing pending-card backlog immediately.
 try:
     hit_rate_settlement_fallback = install_hit_rate_settlement_fallback(
         base.curated.base_app.db
@@ -126,6 +127,20 @@ except Exception as exc:
         "error": f"{type(exc).__name__}: {exc}",
     }
 print(f"HR_SETTLEMENT_FALLBACK_BOOTSTRAP {hit_rate_settlement_fallback}", flush=True)
+
+# The pre-price HR queue can produce a valid placeable card without producing a
+# normal upstream execution bet. Extend the existing tennis/multisport result
+# cycles so unresolved HR-only theoretical event IDs are polled and written to
+# the same canonical result tables. This closes the no-result-route gap without
+# changing any research selection or card rules.
+try:
+    hit_rate_theoretical_result_collection = install_hit_rate_theoretical_result_collection()
+except Exception as exc:
+    hit_rate_theoretical_result_collection = {
+        "installed": False,
+        "error": f"{type(exc).__name__}: {exc}",
+    }
+print(f"HR_THEORETICAL_RESULT_COLLECTION_BOOTSTRAP {hit_rate_theoretical_result_collection}", flush=True)
 
 # The curated homepage predates Double/Trixie and hard-codes only Yankee/Heinz.
 # Surface the two active HR2 forward challengers in the Multiples Research table
