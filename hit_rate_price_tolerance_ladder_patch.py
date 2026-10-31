@@ -179,13 +179,11 @@ def install(db=None) -> Dict[str, Any]:
     _install_exports()
     result = dict(pt.install(db) or {})
 
-    # Seed/settle once at startup from already-collected fresh quotes. This adds
-    # no provider calls and makes the restored lane observable immediately.
-    try:
-        maintenance = pt.run_maintenance(db) if db is not None else None
-    except Exception as exc:
-        maintenance = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
-
+    # Do not run the six-variant card scan synchronously during application
+    # import. The underlying engine starts its own daemon heartbeat and performs
+    # the same idempotent maintenance after 12 seconds, then every 120 seconds.
+    # Keeping that work off the startup path prevents a large HR queue from
+    # delaying or blocking the web service.
     _INSTALLED = True
     return {
         "installed": True,
@@ -205,7 +203,8 @@ def install(db=None) -> Dict[str, Any]:
         "comparison_start_at": comparison_start_at,
         "prior_p98_p96_p94_evidence_preserved": True,
         "comparison_meta_exported": True,
-        "maintenance": maintenance,
+        "startup_blocking_pass": False,
+        "maintenance": "BACKGROUND_HEARTBEAT_12S_THEN_120S",
         "underlying_install": result,
         "dashboard": "/hit-rate-price-tolerance",
     }
