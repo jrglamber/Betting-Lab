@@ -1,9 +1,13 @@
 from __future__ import annotations
 
-"""Rotate active HR constituent lanes without rewriting historical evidence.
+"""Rotate HR constituent lanes while preserving the original experiment history.
 
-New candidates use a fresh policy version. Existing candidates/cards/results stay
-immutable. Changes agreed 31 Oct 2026:
+The 31 Oct lane review is a constituent change inside the existing HR1/HR2
+experiment, not a new forward experiment. Keep the original policy namespace so
+scoreboard counts, cards, P&L and queues remain continuous. Record the lane
+rotation separately for auditability.
+
+Changes agreed 31 Oct 2026:
 - remove PRED1/PRED2 BTTS No 2.50-2.99;
 - seasonally bench MLB 1.50-1.99;
 - tighten EuroLeague core from 1.50-2.99 to 1.50-1.99;
@@ -11,17 +15,20 @@ immutable. Changes agreed 31 Oct 2026:
 - leave football totals/BTTS, tennis and football H2H challenger lanes in place.
 """
 
-import hashlib
+import json
 from copy import deepcopy
 from typing import Any, Dict, Mapping
 
 import hit_rate_multiples_lab as hr
+from db import utc_now_iso
 
-VERSION = "HR_LANE_ROTATION_2026_10_31_V1"
-POLICY_VERSION = "HRM_2026-10-31_V4_ROTATED_LANES"
+VERSION = "HR_LANE_ROTATION_2026_10_31_V2_CONTINUITY"
+BASE_POLICY_VERSION = "HRM_2026-10-12_V1"
+ACCIDENTAL_POLICY_VERSION = "HRM_2026-10-31_V4_ROTATED_LANES"
+# Keep the public constant aligned with the live/continuous experiment namespace.
+POLICY_VERSION = BASE_POLICY_VERSION
 _INSTALLED = False
 _ORIGINAL_SOURCE_ROWS = None
-_ORIGINAL_KEY = None
 _ORIGINAL_SCOREBOARD = None
 
 REMOVE_LANES = {"PRED12_BTTS_NO_2_50_2_99", "MLB_H2H_1_50_1_99"}
@@ -100,27 +107,10 @@ def _rotated_source_rows(db, now):
     ))
 
 
-def _key(policy: str, exp: str, system: str, row: Mapping[str, Any]) -> str:
-    if policy != POLICY_VERSION:
-        return _ORIGINAL_KEY(policy, exp, system, row)
-    point = row.get("point")
-    try:
-        point_key = "" if point is None else f"{float(point):.8f}".rstrip("0").rstrip(".")
-    except Exception:
-        point_key = str(point or "")
-    raw = "|".join([
-        policy, exp, system, str(row.get("event_id") or "").lower(),
-        str(row.get("market_key") or "").lower(), str(row.get("selection") or "").lower(),
-        point_key, str(row.get("source_lane") or "").lower(),
-        f"{float(row.get('band_min') or 0):.4f}", f"{float(row.get('band_max') or 0):.4f}",
-    ])
-    return hashlib.sha256(raw.encode()).hexdigest()
-
-
 def _policy() -> Dict[str, Any]:
     policy = deepcopy(getattr(hr, "POLICY", {}) or {})
     policy["HR1"] = {
-        "label": "Strict high-hit pool — rotated 31 Oct 2026",
+        "label": "Strict high-hit pool — constituents rotated 31 Oct 2026",
         "pockets": [
             "Football BTTS 1.80-1.99", "Football totals 1.80-1.99",
             "Tennis H2H 1.80-1.99 (probation)", "EuroLeague H2H 1.50-1.99",
@@ -128,7 +118,7 @@ def _policy() -> Dict[str, Any]:
         ],
     }
     policy["HR2"] = {
-        "label": "Expanded hit+value challenger — rotated 31 Oct 2026",
+        "label": "Expanded hit+value challenger — constituents rotated 31 Oct 2026",
         "pockets": [
             "HR1 pockets", "Football totals 2.00-2.99",
             "Football H2H 2.50-2.99 (probation)", "Tennis H2H 2.00-2.99 (probation)",
@@ -138,28 +128,93 @@ def _policy() -> Dict[str, Any]:
     return policy
 
 
+def _ensure_rotation_audit(db) -> None:
+    db.execute("""CREATE TABLE IF NOT EXISTS hit_rate_lane_rotations (
+        rotation_version TEXT PRIMARY KEY,
+        applied_at TEXT NOT NULL,
+        base_policy_version TEXT NOT NULL,
+        details_json TEXT NOT NULL
+    )""")
+
+
+def _count(db, sql: str, params=()) -> int:
+    try:
+        row = db.fetchone(sql, params)
+        return int((row or {}).get("n") or 0)
+    except Exception:
+        return 0
+
+
+def _snapshot(db, policy_version: str) -> Dict[str, int]:
+    return {
+        "candidates": _count(db, "SELECT COUNT(*) AS n FROM hit_rate_candidates WHERE policy_version=?", (policy_version,)),
+        "queued": _count(db, "SELECT COUNT(*) AS n FROM hit_rate_candidates WHERE policy_version=? AND status='QUEUED'", (policy_version,)),
+        "consumed": _count(db, "SELECT COUNT(*) AS n FROM hit_rate_candidates WHERE policy_version=? AND status='CONSUMED'", (policy_version,)),
+        "expired": _count(db, "SELECT COUNT(*) AS n FROM hit_rate_candidates WHERE policy_version=? AND status='EXPIRED'", (policy_version,)),
+        "cards": _count(db, "SELECT COUNT(*) AS n FROM hit_rate_cards WHERE policy_version=?", (policy_version,)),
+        "settled_cards": _count(db, "SELECT COUNT(*) AS n FROM hit_rate_cards WHERE policy_version=? AND settled_at IS NOT NULL", (policy_version,)),
+    }
+
+
+def _retire_noneligible_queues(db) -> Dict[str, int]:
+    """Stop only future formation; never alter consumed candidates/cards/results."""
+    stamp = utc_now_iso()
+    retired: Dict[str, int] = {}
+
+    retired["accidental_v4_queued"] = int(db.execute(
+        "UPDATE hit_rate_candidates SET status='EXPIRED',expired_at=? "
+        "WHERE policy_version=? AND status='QUEUED'",
+        (stamp, ACCIDENTAL_POLICY_VERSION),
+    ) or 0)
+
+    placeholders = ",".join("?" for _ in REMOVE_LANES)
+    retired["removed_lane_queued"] = int(db.execute(
+        f"UPDATE hit_rate_candidates SET status='EXPIRED',expired_at=? "
+        f"WHERE policy_version=? AND status='QUEUED' AND source_lane IN ({placeholders})",
+        (stamp, BASE_POLICY_VERSION, *sorted(REMOVE_LANES)),
+    ) or 0)
+
+    # The old EuroLeague lane remains valid only for the retained 1.50-1.99 slice.
+    retired["euroleague_2plus_queued"] = int(db.execute(
+        "UPDATE hit_rate_candidates SET status='EXPIRED',expired_at=? "
+        "WHERE policy_version=? AND status='QUEUED' AND source_lane=? AND source_odds>=2.0",
+        (stamp, BASE_POLICY_VERSION, EURO_OLD),
+    ) or 0)
+    return retired
+
+
+def _record_rotation(db, details: Dict[str, Any]) -> None:
+    _ensure_rotation_audit(db)
+    db.execute("""INSERT INTO hit_rate_lane_rotations(
+        rotation_version,applied_at,base_policy_version,details_json
+    ) VALUES(?,?,?,?) ON CONFLICT(rotation_version) DO NOTHING""", (
+        VERSION, utc_now_iso(), BASE_POLICY_VERSION, json.dumps(details, sort_keys=True),
+    ))
+
+
 def install(db) -> Dict[str, Any]:
-    global _INSTALLED, _ORIGINAL_SOURCE_ROWS, _ORIGINAL_KEY, _ORIGINAL_SCOREBOARD
+    global _INSTALLED, _ORIGINAL_SOURCE_ROWS, _ORIGINAL_SCOREBOARD
     if _INSTALLED:
         return {"installed": True, "already_installed": True, "version": VERSION}
 
     _ORIGINAL_SOURCE_ROWS = hr._source_rows
-    _ORIGINAL_KEY = hr._key
     _ORIGINAL_SCOREBOARD = hr.scoreboard
 
-    hr.POLICY_VERSION = POLICY_VERSION
+    # Critical continuity rule: a lane rotation is NOT a new experiment namespace.
+    hr.POLICY_VERSION = BASE_POLICY_VERSION
     hr.POLICY = _policy()
     hr._source_rows = _rotated_source_rows
-    hr._key = _key
 
     def scoreboard_with_rotation(db_obj):
         out = dict(_ORIGINAL_SCOREBOARD(db_obj))
         out["lane_rotation"] = {
             "version": VERSION,
-            "policy_version": POLICY_VERSION,
+            "policy_version": BASE_POLICY_VERSION,
+            "continuous_experiment": True,
             "removed": sorted(REMOVE_LANES),
             "tightened": {EURO_OLD: EURO_NEW},
             "split": {NFL_OLD: [NFL_LOW, NFL_HIGH]},
+            "accidental_policy_retired": ACCIDENTAL_POLICY_VERSION,
             "historical_evidence_rewritten": False,
             "betting_authority": False,
         }
@@ -167,16 +222,57 @@ def install(db) -> Dict[str, Any]:
 
     hr.scoreboard = scoreboard_with_rotation
     activation = hr._activate_policy(db)
+    stamp = utc_now_iso()
+    try:
+        db.execute(
+            "UPDATE hit_rate_policy_versions SET is_active=0,deactivated_at=COALESCE(deactivated_at,?) "
+            "WHERE policy_version=?",
+            (stamp, ACCIDENTAL_POLICY_VERSION),
+        )
+    except Exception:
+        pass
+
+    before = {
+        "base": _snapshot(db, BASE_POLICY_VERSION),
+        "accidental": _snapshot(db, ACCIDENTAL_POLICY_VERSION),
+    }
+    retired = _retire_noneligible_queues(db)
+    after = {
+        "base": _snapshot(db, BASE_POLICY_VERSION),
+        "accidental": _snapshot(db, ACCIDENTAL_POLICY_VERSION),
+    }
+    audit = {
+        "removed": sorted(REMOVE_LANES),
+        "tightened": {EURO_OLD: EURO_NEW},
+        "split": {NFL_OLD: [NFL_LOW, NFL_HIGH]},
+        "before": before,
+        "retired_queued": retired,
+        "after": after,
+        "historical_evidence_rewritten": False,
+    }
+    _record_rotation(db, audit)
+
     _INSTALLED = True
     return {
-        "installed": True, "already_installed": False, "version": VERSION,
-        "policy_version": POLICY_VERSION, "removed": sorted(REMOVE_LANES),
+        "installed": True,
+        "already_installed": False,
+        "version": VERSION,
+        "policy_version": BASE_POLICY_VERSION,
+        "continuous_experiment": True,
+        "accidental_policy_version_retired": ACCIDENTAL_POLICY_VERSION,
+        "removed": sorted(REMOVE_LANES),
         "euroleague": "1.50-1.99 core; 3.00-3.99 remains HR2 challenger",
         "nfl": ["1.50-1.99", "2.00-2.99"],
-        "tennis_probation_retained": True, "football_h2h_probation_retained": True,
-        "historical_evidence_rewritten": False, "provider_calls_added": 0,
-        "betting_authority": False, "activation": dict(activation or {}),
+        "tennis_probation_retained": True,
+        "football_h2h_probation_retained": True,
+        "historical_evidence_rewritten": False,
+        "provider_calls_added": 0,
+        "betting_authority": False,
+        "retired_queued": retired,
+        "before": before,
+        "after": after,
+        "activation": dict(activation or {}),
     }
 
 
-__all__ = ["VERSION", "POLICY_VERSION", "install"]
+__all__ = ["VERSION", "POLICY_VERSION", "BASE_POLICY_VERSION", "install"]
