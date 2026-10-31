@@ -18,11 +18,11 @@ import multiples_today_headroom_patch as legacy_headroom
 import provider_cost_control_patch as provider_cost
 from hit_rate_trixie_patch import install as install_hit_rate_small_systems
 from hit_rate_settlement_fallback_patch import install as install_hit_rate_settlement_fallback
-from hit_rate_theoretical_result_collection_patch_v2 import install as install_hit_rate_theoretical_result_collection
+from hit_rate_theoretical_result_collection_patch_v3 import install as install_hit_rate_theoretical_result_collection
 from multiples_home_small_systems_patch import install as install_multiples_home_small_systems
 from live_yankee_credit_pacing_patch import install as install_live_yankee_credit_pacing
 
-BUILD_VERSION = "0.19.103"
+BUILD_VERSION = "0.19.104"
 
 # The adaptive dashboard's final homepage renderer resolves BUILD_VERSION from
 # its module globals at request time, so update that release identity together
