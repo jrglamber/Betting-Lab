@@ -90,44 +90,44 @@ def _book_map(db, candidate_id: int) -> dict[str, dict[str, Any]]:
     return out
 
 
-def _insert_variant(db, slate: str, variant: str, candidates: list[dict[str, Any]], now: datetime) -> bool:
-    if len(candidates) < MIN_LEGS:
-        return False
-    common: Optional[set[str]] = None
-    maps: dict[int, dict[str, dict[str, Any]]] = {}
+def _compatible_window(db, candidates: list[dict[str, Any]], *, max_legs: Optional[int] = None):
+    """Choose the strongest same-book near-simultaneous subset, never let one bad leg block the slate."""
+    by_book: dict[str, list[tuple[dict[str, Any], dict[str, Any], datetime]]] = {}
     for c in candidates:
-        bm = _book_map(db, int(c["id"]))
-        maps[int(c["id"])] = bm
-        keys = set(bm)
-        common = keys if common is None else common & keys
-    common = common or set()
-    if not common:
-        return False
+        for book, quote in _book_map(db, int(c["id"])).items():
+            dt = fhg._dt(quote.get("captured_at"))
+            if dt is not None:
+                by_book.setdefault(book, []).append((c, quote, dt))
 
-    ranked: list[tuple[float, float, str]] = []
-    for book in common:
-        times = []
-        odds = []
-        valid = True
-        for c in candidates:
-            q = maps[int(c["id"])][book]
-            dt = fhg._dt(q.get("captured_at"))
-            if dt is None:
-                valid = False
-                break
-            times.append(dt)
-            odds.append(float(q["entry_odds"]))
-        if not valid:
-            continue
-        spread = (max(times) - min(times)).total_seconds() / 60.0
-        if spread <= MAX_QUOTE_SPREAD_MINUTES:
-            ranked.append((prod(odds), spread, book))
-    if not ranked:
-        return False
+    ranked = []
+    for book, items in by_book.items():
+        items.sort(key=lambda x: x[2])
+        left = 0
+        for right in range(len(items)):
+            while left <= right and (items[right][2] - items[left][2]).total_seconds() / 60.0 > MAX_QUOTE_SPREAD_MINUTES:
+                left += 1
+            window = items[left:right + 1]
+            if max_legs is not None and len(window) > max_legs:
+                window = sorted(window, key=lambda x: (-float(x[0].get("estimated_probability") or 0.0), str(x[0].get("event_id") or "")))[:max_legs]
+            if len(window) < MIN_LEGS:
+                continue
+            selected = sorted((x[0] for x in window), key=lambda c: (-float(c.get("estimated_probability") or 0.0), str(c.get("event_id") or "")))
+            quotes = {int(x[0]["id"]): x[1] for x in window}
+            times = [x[2] for x in window]
+            combined = prod(float(quotes[int(c["id"])] ["entry_odds"]) for c in selected)
+            spread = (max(times) - min(times)).total_seconds() / 60.0
+            ranked.append((len(selected), combined, -spread, book, selected, quotes))
+    return max(ranked, key=lambda x: (x[0], x[1], x[2])) if ranked else None
 
-    combined, spread, best_book = max(ranked, key=lambda x: x[0])
-    sample = maps[int(candidates[0]["id"])][best_book]
-    joint = prod(float(c.get("estimated_probability") or 0.0) for c in candidates)
+
+def _insert_variant(db, slate: str, variant: str, candidates: list[dict[str, Any]], now: datetime, *, max_legs: Optional[int] = None) -> bool:
+    choice = _compatible_window(db, candidates, max_legs=max_legs)
+    if not choice:
+        return False
+    _, combined, neg_spread, best_book, selected, quotes = choice
+    spread = -neg_spread
+    sample = quotes[int(selected[0]["id"])]
+    joint = prod(float(c.get("estimated_probability") or 0.0) for c in selected)
     ev_pct = (joint * combined - 1.0) * 100.0
     changed = db.execute(
         """INSERT INTO first_half_goal_acca_cards(
@@ -137,11 +137,11 @@ def _insert_variant(db, slate: str, variant: str, candidates: list[dict[str, Any
            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
            ON CONFLICT(slate_key,variant,model_version) DO NOTHING""",
         (
-            slate, variant, MODEL_VERSION, now.isoformat(), str(candidates[0]["commence_time"]),
-            best_book, str(sample.get("bookmaker_title") or best_book), len(candidates),
+            slate, variant, MODEL_VERSION, now.isoformat(), str(selected[0]["commence_time"]),
+            best_book, str(sample.get("bookmaker_title") or best_book), len(selected),
             float(combined), float(joint), float(ev_pct),
-            min(float(c.get("estimated_probability") or 0.0) for c in candidates),
-            float(spread), json.dumps([str(c["event_id"]) for c in candidates]), "OPEN",
+            min(float(c.get("estimated_probability") or 0.0) for c in selected),
+            float(spread), json.dumps([str(c["event_id"]) for c in selected]), "OPEN",
         ),
     )
     return int(changed or 0) > 0
@@ -175,10 +175,11 @@ def create_accas(db, now: Optional[datetime] = None) -> Dict[str, int]:
             cs = []
         if len(cs) < MIN_LEGS:
             continue
-        if _insert_variant(db, slate, "FULL", cs, now):
+        full_choice = _compatible_window(db, cs)
+        if full_choice and _insert_variant(db, slate, "FULL", cs, now):
             full += 1
-        if len(cs) > CORE_LEGS and _insert_variant(db, slate, "CORE8", cs[:CORE_LEGS], now):
-            core += 1
+            if int(full_choice[0]) > CORE_LEGS and _insert_variant(db, slate, "CORE8", cs, now, max_legs=CORE_LEGS):
+                core += 1
     return {"full_created": full, "core8_created": core}
 
 
@@ -255,13 +256,13 @@ def _panel(db) -> str:
     roi = "—" if m["roi_pct"] is None else f"{float(m['roi_pct']):+.1f}%"
     return (
         "<div class='panel'><h2>FHG straight acca <span class='pill'>FHG1 ≥70%</span></h2>"
-        "<div class='summary'><strong>Straight accumulator only.</strong> FULL uses every priced qualifying "
-        "leg in the kickoff slate; CORE8 is created only when more than eight are available. Quotes must "
+        "<div class='summary'><strong>Straight accumulator only.</strong> FULL uses the largest same-book set of priced qualifying "
+        "legs in the kickoff slate; CORE8 is created only when more than eight compatible legs are available. Quotes must "
         f"share one sportsbook and be frozen within {int(MAX_QUOTE_SPREAD_MINUTES)} minutes. No doubles, "
         "Trixies, Yankees or Heinz are created here. FHG2 remains challenger-only.</div>"
         f"<div class='muted'>Cards {m['cards']} · open {m['open']} · settled {m['settled']} · wins {m['wins']} · "
         f"P/L {float(m['pnl_units']):+.2f}u · ROI {roi}</div>"
-        "<div class='tablewrap'><table><thead><tr><th>Version</th><th>Legs</th><th>Book</th><th>Acca odds</th>"
+        "<div class='tablewrap'><table><thead><tr><th>Acca</th><th>Legs</th><th>Book</th><th>Acca odds</th>"
         "<th>Model joint</th><th>Quote spread</th><th>Status</th><th>P/L</th></tr></thead><tbody>" +
         "".join(trs) + "</tbody></table></div></div>"
     )
@@ -291,12 +292,15 @@ def install(base_app_module) -> Dict[str, Any]:
     _ensure_schema(db)
 
     _ORIGINAL_LEGACY_CAPTURE = hard.capture_same_book_cards
+
     def _legacy_disabled(_web, _db, now=None):
         return {"ok": True, "attempted_slates": 0, "polled_events": 0, "placeable_cards": 0,
                 "disabled": True, "reason": "replaced_by_fhg_straight_acca", "betting_authority": False}
+
     hard.capture_same_book_cards = _legacy_disabled
 
     _ORIGINAL_MAINTENANCE = fhg.run_maintenance
+
     def maintenance_with_acca(db_obj, now=None):
         state = dict(_ORIGINAL_MAINTENANCE(db_obj, now))
         state["fhg_acca_created"] = create_accas(db_obj, now)
@@ -304,28 +308,35 @@ def install(base_app_module) -> Dict[str, Any]:
         state["fhg_acca_version"] = VERSION
         state["betting_authority"] = False
         return state
+
     fhg.run_maintenance = maintenance_with_acca
     fhg_runtime.run_maintenance = maintenance_with_acca
 
     _ORIGINAL_SCOREBOARD = fhg.scoreboard
+
     def scoreboard_with_acca(db_obj):
         out = dict(_ORIGINAL_SCOREBOARD(db_obj))
         m = _metrics(db_obj)
         out["straight_acca"] = {k: v for k, v in m.items() if k != "rows"}
         return out
+
     fhg.scoreboard = scoreboard_with_acca
     curated.scoreboard = scoreboard_with_acca
 
     _ORIGINAL_DASHBOARD = fhg._dashboard
+
     def dashboard_with_acca(db_obj, style):
         html = _ORIGINAL_DASHBOARD(db_obj, style)
         return html.replace("</body>", _panel(db_obj) + "</body>", 1) if "</body>" in html else html + _panel(db_obj)
+
     fhg._dashboard = dashboard_with_acca
 
     _ORIGINAL_CURATED_SECTION = curated._section
+
     def curated_with_acca(db_obj):
         html = _ORIGINAL_CURATED_SECTION(db_obj)
         return html.replace("</section>", _panel(db_obj) + "</section>", 1) if "</section>" in html else html + _panel(db_obj)
+
     curated._section = curated_with_acca
 
     _export_tables()
