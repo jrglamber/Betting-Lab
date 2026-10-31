@@ -18,7 +18,10 @@ import multiples_today_headroom_patch as legacy_headroom
 import provider_cost_control_patch as provider_cost
 from hit_rate_trixie_patch import install as install_hit_rate_small_systems
 from hit_rate_settlement_fallback_patch import install as install_hit_rate_settlement_fallback
-from hit_rate_theoretical_result_collection_patch_v3 import install as install_hit_rate_theoretical_result_collection
+from hit_rate_theoretical_result_collection_patch_v3 import (
+    install as install_hit_rate_theoretical_result_collection,
+    run_once as run_hit_rate_theoretical_result_collection_once,
+)
 from multiples_home_small_systems_patch import install as install_multiples_home_small_systems
 from live_yankee_credit_pacing_patch import install as install_live_yankee_credit_pacing
 
@@ -101,6 +104,18 @@ try:
 except Exception as exc:
     hit_rate_theoretical_result_collection = {"installed": False, "error": f"{type(exc).__name__}: {exc}"}
 print(f"HR_THEORETICAL_RESULT_COLLECTION_BOOTSTRAP {hit_rate_theoretical_result_collection}", flush=True)
+
+# Reconcile already-finished HR-only tennis/multisport events immediately. The
+# worker hooks remain installed for future cards, but startup no longer depends
+# on the next scheduled engine cycle before stale PENDING legs can clear.
+try:
+    hr_theoretical_startup_pass = run_hit_rate_theoretical_result_collection_once(
+        base.curated.base_app.web_module.tennis_engine,
+        base.curated.base_app.web_module.multisport_engine,
+    )
+except Exception as exc:
+    hr_theoretical_startup_pass = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+print(f"HR_THEORETICAL_RESULT_COLLECTION_STARTUP_BOOTSTRAP {hr_theoretical_startup_pass}", flush=True)
 
 try:
     multiples_home_small_systems = install_multiples_home_small_systems()
