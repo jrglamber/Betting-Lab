@@ -59,6 +59,21 @@ def _comparison_start(db) -> str:
     return str(row.get("installed_at") or utc_now_iso())
 
 
+def _install_exports() -> None:
+    table = "hit_rate_price_tolerance_ladder_meta"
+    try:
+        import exporter
+        exporter.EXPORT_TABLES = tuple(dict.fromkeys(tuple(exporter.EXPORT_TABLES) + (table,)))
+    except Exception:
+        pass
+    try:
+        import split_exporter
+        split_exporter.WEEKLY_TABLES = tuple(dict.fromkeys(tuple(split_exporter.WEEKLY_TABLES) + (table,)))
+        split_exporter.MANUAL_TABLES = tuple(dict.fromkeys(tuple(split_exporter.MANUAL_TABLES) + (table,)))
+    except Exception:
+        pass
+
+
 def _metrics_since(db, variant: str, exp: str, system: str, start_at: str) -> Dict[str, Any]:
     rows = [dict(x) for x in db.fetchall(
         """SELECT * FROM hit_rate_price_tolerance_cards
@@ -161,6 +176,7 @@ def install(db=None) -> Dict[str, Any]:
     pt.scoreboard = _scoreboard
     pt._page = _page
     comparison_start_at = _comparison_start(db)
+    _install_exports()
     result = dict(pt.install(db) or {})
 
     # Seed/settle once at startup from already-collected fresh quotes. This adds
@@ -188,6 +204,7 @@ def install(db=None) -> Dict[str, Any]:
         "forward_start_preserved": True,
         "comparison_start_at": comparison_start_at,
         "prior_p98_p96_p94_evidence_preserved": True,
+        "comparison_meta_exported": True,
         "maintenance": maintenance,
         "underlying_install": result,
         "dashboard": "/hit-rate-price-tolerance",
