@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-"""Rotate HR constituent lanes while preserving the original experiment history.
+"""Rotate HR constituent lanes without resetting the active HR experiment.
 
-The 31 Oct lane review is a constituent change inside the existing HR1/HR2
-experiment, not a new forward experiment. Keep the original policy namespace so
-scoreboard counts, cards, P&L and queues remain continuous. Record the lane
-rotation separately for auditability.
+The 31 Oct review changes constituents inside the existing V3 theoretical-queue
+experiment. Historical candidates/cards/results stay immutable. Only current
+queued candidates that no longer match the revised constituent definitions are
+retired; still-eligible opportunities are then re-observed through the existing
+V3 theoretical queue and keep the same settlement/price/placeability rules.
 
 Changes agreed 31 Oct 2026:
 - remove PRED1/PRED2 BTTS No 2.50-2.99;
@@ -22,10 +23,10 @@ from typing import Any, Dict, Mapping
 import hit_rate_multiples_lab as hr
 from db import utc_now_iso
 
-VERSION = "HR_LANE_ROTATION_2026_10_31_V2_CONTINUITY"
-BASE_POLICY_VERSION = "HRM_2026-10-12_V1"
+VERSION = "HR_LANE_ROTATION_2026_10_31_V3_CONTINUITY"
+BASE_POLICY_VERSION = "HRM_2026-10-18_V3_THEORETICAL_QUEUE"
 ACCIDENTAL_POLICY_VERSION = "HRM_2026-10-31_V4_ROTATED_LANES"
-# Keep the public constant aligned with the live/continuous experiment namespace.
+LEGACY_V1_POLICY_VERSION = "HRM_2026-10-12_V1"
 POLICY_VERSION = BASE_POLICY_VERSION
 _INSTALLED = False
 _ORIGINAL_SOURCE_ROWS = None
@@ -61,16 +62,16 @@ def _band(row: Mapping[str, Any], lane: str, lo: float, hi: float) -> dict[str, 
     out["source_lane"] = lane
     out["band_min"] = float(lo)
     out["band_max"] = float(hi)
-    try:
-        source = float(out.get("source_odds") or 0.0)
-    except Exception:
-        source = 0.0
+    source = _source_price(out)
     if source <= 1.0 or source < lo or source >= hi:
         out["source_odds"] = max(float(lo), minimum)
     return out
 
 
 def _rotated_source_rows(db, now):
+    # At install time this wraps the already-installed V3 theoretical queue.
+    # Therefore pre-price model/reference candidates remain available exactly as
+    # before; only constituent membership is changed here.
     rows = list(_ORIGINAL_SOURCE_ROWS(db, now))
     out: list[dict[str, Any]] = []
     for raw in rows:
@@ -156,15 +157,17 @@ def _snapshot(db, policy_version: str) -> Dict[str, int]:
     }
 
 
-def _retire_noneligible_queues(db) -> Dict[str, int]:
-    """Stop only future formation; never alter consumed candidates/cards/results."""
+def _retire_rotation_boundary_queues(db) -> Dict[str, int]:
+    """Refresh current queues only; never alter consumed candidates/cards/results."""
     stamp = utc_now_iso()
     retired: Dict[str, int] = {}
 
-    retired["accidental_v4_queued"] = int(db.execute(
+    # The card builder scans every policy_version with QUEUED rows, so no legacy
+    # namespace may remain formable after V3 is restored as the active stream.
+    retired["non_v3_queued"] = int(db.execute(
         "UPDATE hit_rate_candidates SET status='EXPIRED',expired_at=? "
-        "WHERE policy_version=? AND status='QUEUED'",
-        (stamp, ACCIDENTAL_POLICY_VERSION),
+        "WHERE policy_version<>? AND status='QUEUED'",
+        (stamp, BASE_POLICY_VERSION),
     ) or 0)
 
     placeholders = ",".join("?" for _ in REMOVE_LANES)
@@ -174,11 +177,18 @@ def _retire_noneligible_queues(db) -> Dict[str, int]:
         (stamp, BASE_POLICY_VERSION, *sorted(REMOVE_LANES)),
     ) or 0)
 
-    # The old EuroLeague lane remains valid only for the retained 1.50-1.99 slice.
-    retired["euroleague_2plus_queued"] = int(db.execute(
+    # Rebase the two changed broad bands completely. Any still-current eligible
+    # opportunity is re-observed on the next V3 ingest under the narrower/split
+    # source_lane key. This avoids old broad + new narrow duplicates.
+    retired["euroleague_broad_queued"] = int(db.execute(
         "UPDATE hit_rate_candidates SET status='EXPIRED',expired_at=? "
-        "WHERE policy_version=? AND status='QUEUED' AND source_lane=? AND source_odds>=2.0",
+        "WHERE policy_version=? AND status='QUEUED' AND source_lane=?",
         (stamp, BASE_POLICY_VERSION, EURO_OLD),
+    ) or 0)
+    retired["nfl_broad_queued"] = int(db.execute(
+        "UPDATE hit_rate_candidates SET status='EXPIRED',expired_at=? "
+        "WHERE policy_version=? AND status='QUEUED' AND source_lane=?",
+        (stamp, BASE_POLICY_VERSION, NFL_OLD),
     ) or 0)
     return retired
 
@@ -200,7 +210,8 @@ def install(db) -> Dict[str, Any]:
     _ORIGINAL_SOURCE_ROWS = hr._source_rows
     _ORIGINAL_SCOREBOARD = hr.scoreboard
 
-    # Critical continuity rule: a lane rotation is NOT a new experiment namespace.
+    # Critical continuity rule: the lane rotation is not a new experiment. Keep
+    # the V3 theoretical-queue namespace, keying, result resolver and price rules.
     hr.POLICY_VERSION = BASE_POLICY_VERSION
     hr.POLICY = _policy()
     hr._source_rows = _rotated_source_rows
@@ -211,6 +222,8 @@ def install(db) -> Dict[str, Any]:
             "version": VERSION,
             "policy_version": BASE_POLICY_VERSION,
             "continuous_experiment": True,
+            "theoretical_queue_preserved": True,
+            "queue_rebased_for_constituent_rotation": True,
             "removed": sorted(REMOVE_LANES),
             "tightened": {EURO_OLD: EURO_NEW},
             "split": {NFL_OLD: [NFL_LOW, NFL_HIGH]},
@@ -221,25 +234,20 @@ def install(db) -> Dict[str, Any]:
         return out
 
     hr.scoreboard = scoreboard_with_rotation
-    activation = hr._activate_policy(db)
-    stamp = utc_now_iso()
-    try:
-        db.execute(
-            "UPDATE hit_rate_policy_versions SET is_active=0,deactivated_at=COALESCE(deactivated_at,?) "
-            "WHERE policy_version=?",
-            (stamp, ACCIDENTAL_POLICY_VERSION),
-        )
-    except Exception:
-        pass
 
     before = {
-        "base": _snapshot(db, BASE_POLICY_VERSION),
-        "accidental": _snapshot(db, ACCIDENTAL_POLICY_VERSION),
+        "base_v3": _snapshot(db, BASE_POLICY_VERSION),
+        "accidental_v4": _snapshot(db, ACCIDENTAL_POLICY_VERSION),
+        "legacy_v1": _snapshot(db, LEGACY_V1_POLICY_VERSION),
     }
-    retired = _retire_noneligible_queues(db)
+
+    activation = hr._activate_policy(db)
+    retired = _retire_rotation_boundary_queues(db)
+
     after = {
-        "base": _snapshot(db, BASE_POLICY_VERSION),
-        "accidental": _snapshot(db, ACCIDENTAL_POLICY_VERSION),
+        "base_v3": _snapshot(db, BASE_POLICY_VERSION),
+        "accidental_v4": _snapshot(db, ACCIDENTAL_POLICY_VERSION),
+        "legacy_v1": _snapshot(db, LEGACY_V1_POLICY_VERSION),
     }
     audit = {
         "removed": sorted(REMOVE_LANES),
@@ -249,6 +257,7 @@ def install(db) -> Dict[str, Any]:
         "retired_queued": retired,
         "after": after,
         "historical_evidence_rewritten": False,
+        "continuity_namespace": BASE_POLICY_VERSION,
     }
     _record_rotation(db, audit)
 
@@ -259,6 +268,8 @@ def install(db) -> Dict[str, Any]:
         "version": VERSION,
         "policy_version": BASE_POLICY_VERSION,
         "continuous_experiment": True,
+        "theoretical_queue_preserved": True,
+        "queue_rebased_for_constituent_rotation": True,
         "accidental_policy_version_retired": ACCIDENTAL_POLICY_VERSION,
         "removed": sorted(REMOVE_LANES),
         "euroleague": "1.50-1.99 core; 3.00-3.99 remains HR2 challenger",
