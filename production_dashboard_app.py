@@ -8,9 +8,10 @@ sitecustomize startup hook.
 
 import adaptive_dashboard_app as base
 from hit_rate_trixie_patch import install as install_hit_rate_small_systems
+from multiples_home_small_systems_patch import install as install_multiples_home_small_systems
 from live_yankee_credit_pacing_patch import install as install_live_yankee_credit_pacing
 
-BUILD_VERSION = "0.19.97"
+BUILD_VERSION = "0.19.98"
 
 # The adaptive dashboard's final homepage renderer resolves BUILD_VERSION from
 # its module globals at request time, so update that release identity together
@@ -32,6 +33,18 @@ except Exception as exc:
         "error": f"{type(exc).__name__}: {exc}",
     }
 print(f"HIT_RATE_HR2_SMALL_SYSTEMS_INSTALL {hit_rate_small_systems}", flush=True)
+
+# The curated homepage predates Double/Trixie and hard-codes only Yankee/Heinz.
+# Surface the two active HR2 forward challengers in the Multiples Research table
+# without changing collection, pricing, selection or betting authority.
+try:
+    multiples_home_small_systems = install_multiples_home_small_systems()
+except Exception as exc:
+    multiples_home_small_systems = {
+        "installed": False,
+        "error": f"{type(exc).__name__}: {exc}",
+    }
+print(f"MULTIPLES_HOME_SMALL_SYSTEMS_INSTALL {multiples_home_small_systems}", flush=True)
 
 # Live Yankee quote pacing is installed last so older startup patches cannot
 # silently restore the previous 1,500-credit unpaced ceiling. The hard ceiling
