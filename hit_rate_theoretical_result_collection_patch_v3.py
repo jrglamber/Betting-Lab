@@ -5,13 +5,17 @@ from __future__ import annotations
 The V2 collector logic is valid, but its multisport installer referenced the
 wrong class capitalization. This wrapper installs the same bounded collectors
 against the actual runtime classes without duplicating the collection logic.
+It also exposes an explicit one-shot pass so production startup can reconcile
+already-finished HR-only events immediately instead of waiting for worker timing.
 """
+
+from datetime import datetime, timezone
 
 import hit_rate_theoretical_result_collection_patch_v2 as core
 import multisport_shadow
 import tennis_shadow
 
-VERSION = "HR_THEORETICAL_RESULT_COLLECTION_V3"
+VERSION = "HR_THEORETICAL_RESULT_COLLECTION_V3_1"
 _INSTALLED = False
 
 
@@ -47,3 +51,24 @@ def install():
     }
     print(f"HR_THEORETICAL_RESULT_COLLECTION_INSTALL {state}", flush=True)
     return state
+
+
+def run_once(tennis_engine, multisport_engine, now=None):
+    """Run one bounded HR-only result collection/reconciliation pass."""
+    now = now or datetime.now(timezone.utc)
+    out = {"version": VERSION, "ok": True}
+
+    try:
+        out["tennis"] = core._collect_hr_tennis(tennis_engine, now)
+    except Exception as exc:
+        out["ok"] = False
+        out["tennis"] = {"error": f"{type(exc).__name__}: {exc}"}
+
+    try:
+        out["multisport"] = core._collect_hr_multisport(multisport_engine, now)
+    except Exception as exc:
+        out["ok"] = False
+        out["multisport"] = {"error": f"{type(exc).__name__}: {exc}"}
+
+    print(f"HR_THEORETICAL_RESULT_COLLECTION_STARTUP_PASS {out}", flush=True)
+    return out
