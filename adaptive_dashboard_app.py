@@ -15,6 +15,7 @@ from adaptive_tpred4_identity_patch import install as install_tpred4_identity
 from challenge_clv_shortlist_patch import install as install_challenge_clv_shortlist
 from challenge_fhg_health_integrity_patch import install as install_challenge_fhg_health
 from challenge_portfolio_refresh_patch import install as install_challenge_portfolio_refresh
+from first_half_goal_acca_patch import install as install_fhg_acca
 from first_half_goal_free_settlement_patch import install as install_fhg_free_settlement
 from first_half_goal_espn_settlement_patch import install as install_fhg_espn_settlement
 from first_half_goal_price_capture_patch import install as install_fhg_price_capture
@@ -22,15 +23,16 @@ from first_half_goal_price_evidence_patch import install as install_fhg_price_ev
 from first_half_goal_hardening_patch import install as install_fhg_hardening
 from first_half_goal_sportsbook_guard_patch import install as install_fhg_sportsbook_guard
 from football_coverage_expansion_patch import install as install_football_coverage_expansion
+from hit_rate_lane_rotation_patch import install as install_hr_lane_rotation
 from homepage_sync_bridge_patch import install as install_homepage_sync_bridge
 from live_yankee_runtime_patch import install as install_live_yankee_runtime
 from oct25_research_priorities_patch import install as install_research_priorities
 from provider_cost_control_patch import install as install_provider_cost_control
 from winner_fingerprint_forward_patch import install as install_winner_fingerprint_forward
 
-# v0.19.95 surfaces the new forward-only HR2 Trixie + Double challengers in the
-# Hit Rate Lab while preserving all existing Yankee/Heinz evidence and authority.
-BUILD_VERSION = "0.19.95"
+# v0.19.96 adds the dedicated FHG straight-acca lane and rotates the active HR
+# constituent pool while preserving all historical HR evidence and authority.
+BUILD_VERSION = "0.19.96"
 adaptive_core.DASHBOARD_VERSION = BUILD_VERSION
 dashboard_responsiveness.BUILD_VERSION = BUILD_VERSION
 curated.dashboard_layout_v2.VERSION = BUILD_VERSION
@@ -115,6 +117,31 @@ except Exception as exc:
         "error": f"{type(exc).__name__}: {exc}",
     }
 print(f"FHG_HARDENING_INSTALL {fhg_hardening}", flush=True)
+
+# FHG is now a dedicated straight-acca product rather than another systems lane.
+# Reuse already-frozen all-book FHG1 quotes to form the largest same-book FULL
+# acca plus CORE8 only when >8 compatible legs exist. No extra provider polling;
+# the old dedicated 8/9/10 same-book poller is retired after this install.
+try:
+    fhg_acca = install_fhg_acca(curated.base_app)
+except Exception as exc:
+    fhg_acca = {
+        "installed": False,
+        "error": f"{type(exc).__name__}: {exc}",
+    }
+print(f"FHG_ACCA_INSTALL {fhg_acca}", flush=True)
+
+# Rotate only future HR constituents under a fresh policy version. Old cards and
+# results stay immutable: bench PRED1/2 BTTS No and MLB, tighten EuroLeague core,
+# and split NFL into the two evidence bands. Tennis/football-H2H remain probation.
+try:
+    hr_lane_rotation = install_hr_lane_rotation(curated.base_app.db)
+except Exception as exc:
+    hr_lane_rotation = {
+        "installed": False,
+        "error": f"{type(exc).__name__}: {exc}",
+    }
+print(f"HR_LANE_ROTATION_INSTALL {hr_lane_rotation}", flush=True)
 
 # Wire the already-written integrity correction into the live challenge export:
 # numeric fhg_hit=0 is a real miss, not a blank. Also exposes settlement coverage,
