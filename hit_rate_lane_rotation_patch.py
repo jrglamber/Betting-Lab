@@ -39,6 +39,13 @@ def _minimum(row: Mapping[str, Any]) -> float:
         return 0.0
 
 
+def _source_price(row: Mapping[str, Any]) -> float:
+    try:
+        return float(row.get("source_odds") or 0.0)
+    except Exception:
+        return 0.0
+
+
 def _band(row: Mapping[str, Any], lane: str, lo: float, hi: float) -> dict[str, Any] | None:
     minimum = _minimum(row)
     if minimum <= 1.0 or minimum >= hi:
@@ -47,9 +54,6 @@ def _band(row: Mapping[str, Any], lane: str, lo: float, hi: float) -> dict[str, 
     out["source_lane"] = lane
     out["band_min"] = float(lo)
     out["band_max"] = float(hi)
-    # For theoretical rows source_odds is a queue target rather than an actual
-    # accepted quote. Keep it inside the new band while the later same-book
-    # pricing layer remains authoritative for actual formation.
     try:
         source = float(out.get("source_odds") or 0.0)
     except Exception:
@@ -68,17 +72,26 @@ def _rotated_source_rows(db, now):
         if lane in REMOVE_LANES:
             continue
         if lane == EURO_OLD:
-            changed = _band(row, EURO_NEW, 1.5, 2.0)
-            if changed:
-                out.append(changed)
+            source = _source_price(row)
+            if 1.5 <= source < 2.0 or (source <= 1.0 and _minimum(row) < 2.0):
+                changed = _band(row, EURO_NEW, 1.5, 2.0)
+                if changed:
+                    out.append(changed)
             continue
         if lane == NFL_OLD:
-            low = _band(row, NFL_LOW, 1.5, 2.0)
-            high = _band(row, NFL_HIGH, 2.0, 3.0)
-            if low:
-                out.append(low)
-            if high:
-                out.append(high)
+            source = _source_price(row)
+            if 1.5 <= source < 2.0:
+                changed = _band(row, NFL_LOW, 1.5, 2.0)
+            elif 2.0 <= source < 3.0:
+                changed = _band(row, NFL_HIGH, 2.0, 3.0)
+            elif source <= 1.0 and _minimum(row) < 2.0:
+                changed = _band(row, NFL_LOW, 1.5, 2.0)
+            elif source <= 1.0 and _minimum(row) < 3.0:
+                changed = _band(row, NFL_HIGH, 2.0, 3.0)
+            else:
+                changed = None
+            if changed:
+                out.append(changed)
             continue
         out.append(row)
     return sorted(out, key=lambda r: (
@@ -151,10 +164,8 @@ def install(db) -> Dict[str, Any]:
             "betting_authority": False,
         }
         return out
-    hr.scoreboard = scoreboard_with_rotation
 
-    # Activates the new policy row and deactivates the previous one. Old rows are
-    # retained and remain queryable/exportable; only new ingestion uses V4.
+    hr.scoreboard = scoreboard_with_rotation
     activation = hr._activate_policy(db)
     _INSTALLED = True
     return {
