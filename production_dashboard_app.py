@@ -17,6 +17,7 @@ import multiples_credit_efficiency_patch as multiples_efficiency
 import multiples_today_headroom_patch as legacy_headroom
 import provider_cost_control_patch as provider_cost
 from hit_rate_trixie_patch import install as install_hit_rate_small_systems
+from hit_rate_price_tolerance_ladder_patch import install as install_hit_rate_price_tolerance_ladder
 from hit_rate_settlement_fallback_patch import install as install_hit_rate_settlement_fallback
 from hit_rate_theoretical_result_collection_patch_v3 import (
     install as install_hit_rate_theoretical_result_collection,
@@ -25,7 +26,7 @@ from hit_rate_theoretical_result_collection_patch_v3 import (
 from multiples_home_small_systems_patch import install as install_multiples_home_small_systems
 from live_yankee_credit_pacing_patch import install as install_live_yankee_credit_pacing
 
-BUILD_VERSION = "0.19.104"
+BUILD_VERSION = "0.19.105"
 
 # The adaptive dashboard's final homepage renderer resolves BUILD_VERSION from
 # its module globals at request time, so update that release identity together
@@ -92,6 +93,16 @@ try:
 except Exception as exc:
     hit_rate_small_systems = {"installed": False, "error": f"{type(exc).__name__}: {exc}"}
 print(f"HIT_RATE_HR2_SMALL_SYSTEMS_INSTALL {hit_rate_small_systems}", flush=True)
+
+# Restore the existing forward-only HR price-tolerance study after the small
+# systems patch has registered Trixie/Double. Preserve its original forward
+# clock and P98/P96/P94 evidence, while adding P100/P90/P85. The lane reuses HR
+# quotes only: zero extra provider calls and no canonical HR state changes.
+try:
+    hit_rate_price_tolerance_ladder = install_hit_rate_price_tolerance_ladder(base.curated.base_app.db)
+except Exception as exc:
+    hit_rate_price_tolerance_ladder = {"installed": False, "error": f"{type(exc).__name__}: {exc}"}
+print(f"HR_PRICE_TOLERANCE_LADDER_INSTALL {hit_rate_price_tolerance_ladder}", flush=True)
 
 try:
     hit_rate_settlement_fallback = install_hit_rate_settlement_fallback(base.curated.base_app.db)
