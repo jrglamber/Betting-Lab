@@ -18,11 +18,11 @@ import multiples_today_headroom_patch as legacy_headroom
 import provider_cost_control_patch as provider_cost
 from hit_rate_trixie_patch import install as install_hit_rate_small_systems
 from hit_rate_settlement_fallback_patch import install as install_hit_rate_settlement_fallback
-from hit_rate_theoretical_result_collection_patch import install as install_hit_rate_theoretical_result_collection
+from hit_rate_theoretical_result_collection_patch_v2 import install as install_hit_rate_theoretical_result_collection
 from multiples_home_small_systems_patch import install as install_multiples_home_small_systems
 from live_yankee_credit_pacing_patch import install as install_live_yankee_credit_pacing
 
-BUILD_VERSION = "0.19.102"
+BUILD_VERSION = "0.19.103"
 
 # The adaptive dashboard's final homepage renderer resolves BUILD_VERSION from
 # its module globals at request time, so update that release identity together
@@ -50,38 +50,23 @@ def _final_hr_cap(_now=None) -> int:
     return HIT_RATE_DAILY_CREDITS
 
 
-# Current collector/base-policy surfaces.
 credit_policy.HIT_RATE_DAILY_CREDITS = HIT_RATE_DAILY_CREDITS
 credit_policy.LIVE_YANKEE_DAILY_CREDITS = LIVE_YANKEE_DAILY_CREDITS
 hit_rate_lab.DAILY_REFRESH_CREDIT_BUDGET = HIT_RATE_DAILY_CREDITS
 live_yankee_feed.DAILY_REFRESH_CREDIT_BUDGET = LIVE_YANKEE_DAILY_CREDITS
-
-# Efficiency/readiness wrapper surfaces used dynamically during target selection.
 multiples_efficiency.HIT_RATE_DAILY_CREDITS = HIT_RATE_DAILY_CREDITS
 multiples_efficiency.LIVE_YANKEE_DAILY_CREDITS = LIVE_YANKEE_DAILY_CREDITS
-
-# Provider-cost rebalance is installed at the end of adaptive_dashboard_app and
-# previously rewired the old Oct-19 HR wrapper to a 1,000/day authority.
 provider_cost.HR_DAILY_CREDIT_CEILING = HIT_RATE_DAILY_CREDITS
-
-# Historical temporary boost/headroom wrappers still surround the HR refresh
-# function. Make them resolve to today's permanent limits instead of their old
-# post-boost 400/500/1,000 values.
 hr_daily_boost.NORMAL_DAILY_CAP = HIT_RATE_DAILY_CREDITS
 hr_daily_boost.BOOST_DAILY_CAP = HIT_RATE_DAILY_CREDITS
 hr_daily_boost._effective_cap = _final_hr_cap
-
 legacy_headroom.NORMAL_HIT_RATE_CAP = HIT_RATE_DAILY_CREDITS
 legacy_headroom.BOOST_HIT_RATE_CAP = HIT_RATE_DAILY_CREDITS
 legacy_headroom.NORMAL_LIVE_YANKEE_CAP = LIVE_YANKEE_DAILY_CREDITS
 legacy_headroom.BOOST_LIVE_YANKEE_CAP = LIVE_YANKEE_DAILY_CREDITS
-
-# Keep the later budget-balance module coherent too, in case its retained
-# _hr_cap function is referenced by an already-installed wrapper.
 budget_balance.HIT_RATE_DAILY_CREDITS = HIT_RATE_DAILY_CREDITS
 budget_balance.LIVE_YANKEE_DAILY_CREDITS = LIVE_YANKEE_DAILY_CREDITS
 
-# Slow the low-priority Live Yankee benchmark without changing selections.
 credit_policy.REPEATED_MISS_POLLS = 1
 credit_policy.MID_BACKOFF_MINUTES = 60.0
 credit_policy.FAR_BACKOFF_MINUTES = 120.0
@@ -90,9 +75,6 @@ credit_policy.CLOSE_TO_KICKOFF_MINUTES = 60.0
 live_yankee_feed.QUOTE_REFRESH_MINUTES = LIVE_YANKEE_QUOTE_REFRESH_MINUTES
 live_yankee_feed.MAX_REFRESH_EVENTS_PER_CYCLE = LIVE_YANKEE_MAX_EVENTS_PER_CYCLE
 
-# Replace the previous Live Yankee hard ceiling with a 500-credit benchmark
-# budget and spread it across the UTC day. If today's existing spend is already
-# above 500, no further Live Yankee quote calls are allowed until reset.
 live_yankee_pacing.HARD_DAILY_CAP = LIVE_YANKEE_DAILY_CREDITS
 live_yankee_pacing.PACING_STAGES = (
     (6, 100),
@@ -102,61 +84,30 @@ live_yankee_pacing.PACING_STAGES = (
     (24, 500),
 )
 
-# Explicit HR2 small-system install. v0.19.96 is the true prospective start for
-# the Double/Trixie challengers.
 try:
     hit_rate_small_systems = install_hit_rate_small_systems()
 except Exception as exc:
-    hit_rate_small_systems = {
-        "installed": False,
-        "error": f"{type(exc).__name__}: {exc}",
-    }
+    hit_rate_small_systems = {"installed": False, "error": f"{type(exc).__name__}: {exc}"}
 print(f"HIT_RATE_HR2_SMALL_SYSTEMS_INSTALL {hit_rate_small_systems}", flush=True)
 
-# HR settlement must not depend solely on the original source bet row being
-# settled first. Resolve exact event_id matches from the established local
-# football/tennis/multisport result tables as a fallback, then reconcile the
-# existing pending-card backlog immediately.
 try:
-    hit_rate_settlement_fallback = install_hit_rate_settlement_fallback(
-        base.curated.base_app.db
-    )
+    hit_rate_settlement_fallback = install_hit_rate_settlement_fallback(base.curated.base_app.db)
 except Exception as exc:
-    hit_rate_settlement_fallback = {
-        "installed": False,
-        "error": f"{type(exc).__name__}: {exc}",
-    }
+    hit_rate_settlement_fallback = {"installed": False, "error": f"{type(exc).__name__}: {exc}"}
 print(f"HR_SETTLEMENT_FALLBACK_BOOTSTRAP {hit_rate_settlement_fallback}", flush=True)
 
-# The pre-price HR queue can produce a valid placeable card without producing a
-# normal upstream execution bet. Extend the existing tennis/multisport result
-# cycles so unresolved HR-only theoretical event IDs are polled and written to
-# the same canonical result tables. This closes the no-result-route gap without
-# changing any research selection or card rules.
 try:
     hit_rate_theoretical_result_collection = install_hit_rate_theoretical_result_collection()
 except Exception as exc:
-    hit_rate_theoretical_result_collection = {
-        "installed": False,
-        "error": f"{type(exc).__name__}: {exc}",
-    }
+    hit_rate_theoretical_result_collection = {"installed": False, "error": f"{type(exc).__name__}: {exc}"}
 print(f"HR_THEORETICAL_RESULT_COLLECTION_BOOTSTRAP {hit_rate_theoretical_result_collection}", flush=True)
 
-# The curated homepage predates Double/Trixie and hard-codes only Yankee/Heinz.
-# Surface the two active HR2 forward challengers in the Multiples Research table
-# without changing collection, pricing, selection or betting authority.
 try:
     multiples_home_small_systems = install_multiples_home_small_systems()
 except Exception as exc:
-    multiples_home_small_systems = {
-        "installed": False,
-        "error": f"{type(exc).__name__}: {exc}",
-    }
+    multiples_home_small_systems = {"installed": False, "error": f"{type(exc).__name__}: {exc}"}
 print(f"MULTIPLES_HOME_SMALL_SYSTEMS_INSTALL {multiples_home_small_systems}", flush=True)
 
-# Install the Live Yankee pacing wrapper last so older startup patches cannot
-# silently restore their larger ceilings. Then correct the optional per-lane
-# reporting caps to sum to the new 500-credit hard ceiling.
 try:
     live_yankee_credit_pacing = install_live_yankee_credit_pacing()
     live_lane_caps = {"STANDARD": 375, "XS1": 62, "XS2": 63}
@@ -170,11 +121,9 @@ try:
         live_yankee_credit_pacing = dict(live_yankee_credit_pacing)
         live_yankee_credit_pacing["lane_caps"] = live_lane_caps
 except Exception as exc:
-    live_yankee_credit_pacing = {
-        "installed": False,
-        "error": f"{type(exc).__name__}: {exc}",
-    }
+    live_yankee_credit_pacing = {"installed": False, "error": f"{type(exc).__name__}: {exc}"}
 print(f"LIVE_YANKEE_CREDIT_PACING_INSTALL {live_yankee_credit_pacing}", flush=True)
+
 print(
     "MULTIPLES_BUDGET_REALLOCATION "
     + str({
