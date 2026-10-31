@@ -14,6 +14,7 @@ from typing import Any, Dict
 
 import hit_rate_multiples_lab as hr
 import hit_rate_price_tolerance_patch as pt
+from db import utc_now_iso
 
 VERSION = "HR_PRICE_TOLERANCE_LADDER_2026_10_31_V2"
 VARIANTS = {
@@ -26,6 +27,7 @@ VARIANTS = {
 }
 
 _INSTALLED = False
+_ORIGINAL_SCOREBOARD = pt.scoreboard
 
 
 def _systems_for(exp: str):
@@ -34,8 +36,83 @@ def _systems_for(exp: str):
     return tuple(x for x in ("YANKEE", "TRIXIE", "DOUBLE", "HEINZ") if x in hr.SYSTEMS)
 
 
+def _comparison_start(db) -> str:
+    db.execute("""CREATE TABLE IF NOT EXISTS hit_rate_price_tolerance_ladder_meta (
+        version TEXT PRIMARY KEY,
+        installed_at TEXT NOT NULL
+    )""")
+    row = db.fetchone(
+        "SELECT installed_at FROM hit_rate_price_tolerance_ladder_meta WHERE version=?",
+        (VERSION,),
+    )
+    if not row:
+        stamp = utc_now_iso()
+        db.execute(
+            """INSERT INTO hit_rate_price_tolerance_ladder_meta(version,installed_at)
+               VALUES(?,?) ON CONFLICT(version) DO NOTHING""",
+            (VERSION, stamp),
+        )
+        row = db.fetchone(
+            "SELECT installed_at FROM hit_rate_price_tolerance_ladder_meta WHERE version=?",
+            (VERSION,),
+        ) or {"installed_at": stamp}
+    return str(row.get("installed_at") or utc_now_iso())
+
+
+def _metrics_since(db, variant: str, exp: str, system: str, start_at: str) -> Dict[str, Any]:
+    rows = [dict(x) for x in db.fetchall(
+        """SELECT * FROM hit_rate_price_tolerance_cards
+           WHERE variant=? AND experiment_key=? AND system_type=? AND created_at>=?
+           ORDER BY id""",
+        (variant, exp, system, start_at),
+    )]
+    done = [x for x in rows if x.get("pnl_units") is not None]
+    pnl = sum(float(x.get("pnl_units") or 0) for x in done)
+    return {
+        "cards": len(rows),
+        "settled": len(done),
+        "profitable": sum(float(x.get("pnl_units") or 0) > 1e-12 for x in done),
+        "pnl_units": pnl,
+        "roi_pct": (pnl / len(done) * 100.0) if done else None,
+        "full_house": sum(
+            int(x.get("winning_legs") or 0) == int(hr.SYSTEMS[system]["legs"]) for x in done
+        ),
+    }
+
+
+def _scoreboard(db) -> Dict[str, Any]:
+    # Keep the old P98/P96/P94 evidence accessible, but compare all six variants
+    # only from the common ladder activation time so counts and ROI are fair.
+    all_time = _ORIGINAL_SCOREBOARD(db)
+    start_at = _comparison_start(db)
+    comparable = {
+        variant: {
+            "tolerance": tolerance,
+            "streams": {
+                exp: {
+                    system: _metrics_since(db, variant, exp, system, start_at)
+                    for system in hr.SYSTEMS
+                }
+                for exp in ("HR1", "HR2")
+            },
+        }
+        for variant, tolerance in VARIANTS.items()
+    }
+    return {
+        "version": VERSION,
+        "underlying_version": pt.VERSION,
+        "forward_start_at": all_time.get("forward_start_at"),
+        "comparison_start_at": start_at,
+        "provider_calls_added": 0,
+        "same_book_required": True,
+        "canonical_hr_state_changed": False,
+        "variants": comparable,
+        "all_time_prior_evidence": all_time.get("variants", {}),
+    }
+
+
 def _page(web_module) -> str:
-    score = pt.scoreboard(web_module.db)
+    score = _scoreboard(web_module.db)
     rows = []
     for variant, payload in score["variants"].items():
         tol = float(payload["tolerance"]) * 100.0
@@ -59,8 +136,9 @@ def _page(web_module) -> str:
     <div class='sub'>Same-book remains mandatory. {escape(variants)} reuse the existing HR quote cache and make
     <strong>zero additional provider calls</strong>. P100 is the frozen minimum-price baseline; lower variants
     accept progressively less of that price so we can measure extra card frequency against price sacrifice,
-    P&amp;L and ROI. Source pockets, canonical HR cards and canonical HR P&amp;L are untouched.
-    Forward experiment start: {escape(str(score['forward_start_at']))}.</div>
+    P&amp;L and ROI. Source pockets, canonical HR cards and canonical HR P&amp;L are untouched.<br>
+    Fair-comparison window starts: <strong>{escape(str(score['comparison_start_at']))}</strong>.
+    Older P98/P96/P94 evidence remains preserved in the database/export but is excluded from this head-to-head table.</div>
     <div class='panel'><table><thead><tr><th>Variant</th><th>Pool</th><th>System</th><th>Cards</th>
     <th>Settled</th><th>Profitable</th><th>All legs won</th><th>P&amp;L</th><th>ROI</th></tr></thead>
     <tbody>{body}</tbody></table></div></body></html>"""
@@ -80,7 +158,9 @@ def install(db=None) -> Dict[str, Any]:
     # P98/P96/P94 evidence remain continuous. Only the active variant ladder is
     # expanded prospectively from this deployment.
     pt.VARIANTS = dict(VARIANTS)
+    pt.scoreboard = _scoreboard
     pt._page = _page
+    comparison_start_at = _comparison_start(db)
     result = dict(pt.install(db) or {})
 
     # Seed/settle once at startup from already-collected fresh quotes. This adds
@@ -106,6 +186,8 @@ def install(db=None) -> Dict[str, Any]:
         "betting_authority": False,
         "canonical_hr_state_changed": False,
         "forward_start_preserved": True,
+        "comparison_start_at": comparison_start_at,
+        "prior_p98_p96_p94_evidence_preserved": True,
         "maintenance": maintenance,
         "underlying_install": result,
         "dashboard": "/hit-rate-price-tolerance",
