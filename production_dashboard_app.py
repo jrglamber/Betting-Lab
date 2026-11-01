@@ -28,7 +28,7 @@ from multiples_funnel_diagnostic_patch import install as install_multiples_funne
 from multiples_home_small_systems_patch import install as install_multiples_home_small_systems
 from live_yankee_credit_pacing_patch import install as install_live_yankee_credit_pacing
 
-BUILD_VERSION = "0.19.106"
+BUILD_VERSION = "0.19.107"
 
 # The adaptive dashboard's final homepage renderer resolves BUILD_VERSION from
 # its module globals at request time, so update that release identity together
@@ -44,9 +44,9 @@ base.curated.base_app.app.version = BUILD_VERSION
 # The adaptive bootstrap installs several historical budget wrappers. Some of
 # those wrappers resolve their caps dynamically on every refresh, so changing
 # only hit_rate_multiples_lab.DAILY_REFRESH_CREDIT_BUDGET is not sufficient.
-# Synchronise every still-live HR authority here so 2,000 survives subsequent
+# Synchronise every still-live HR authority here so 2,500 survives subsequent
 # refresh cycles instead of being reset to an old 400/500/1,000 ceiling.
-HIT_RATE_DAILY_CREDITS = 2_000
+HIT_RATE_DAILY_CREDITS = 2_500
 LIVE_YANKEE_DAILY_CREDITS = 500
 LIVE_YANKEE_QUOTE_REFRESH_MINUTES = 10.0
 LIVE_YANKEE_MAX_EVENTS_PER_CYCLE = 4
@@ -98,8 +98,8 @@ print(f"HIT_RATE_HR2_SMALL_SYSTEMS_INSTALL {hit_rate_small_systems}", flush=True
 
 # Keep the existing HR eligibility/pacing rules, but rank already-due quote
 # targets by card readiness and time-to-kickoff before the collector applies its
-# per-cycle event limit. This concentrates the existing 2,000-credit budget where
-# it can actually complete a same-book card rather than increasing spend.
+# per-cycle event limit. This concentrates the available HR quote budget where
+# it can actually complete a same-book card rather than spending it uniformly.
 try:
     hit_rate_jit_priority = install_hit_rate_jit_priority()
 except Exception as exc:
