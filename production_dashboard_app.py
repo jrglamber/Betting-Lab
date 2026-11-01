@@ -17,16 +17,18 @@ import multiples_credit_efficiency_patch as multiples_efficiency
 import multiples_today_headroom_patch as legacy_headroom
 import provider_cost_control_patch as provider_cost
 from hit_rate_trixie_patch import install as install_hit_rate_small_systems
+from hit_rate_jit_priority_patch import install as install_hit_rate_jit_priority
 from hit_rate_price_tolerance_ladder_patch import install as install_hit_rate_price_tolerance_ladder
 from hit_rate_settlement_fallback_patch import install as install_hit_rate_settlement_fallback
 from hit_rate_theoretical_result_collection_patch_v3 import (
     install as install_hit_rate_theoretical_result_collection,
     run_once as run_hit_rate_theoretical_result_collection_once,
 )
+from multiples_funnel_diagnostic_patch import install as install_multiples_funnel_diagnostic
 from multiples_home_small_systems_patch import install as install_multiples_home_small_systems
 from live_yankee_credit_pacing_patch import install as install_live_yankee_credit_pacing
 
-BUILD_VERSION = "0.19.105"
+BUILD_VERSION = "0.19.106"
 
 # The adaptive dashboard's final homepage renderer resolves BUILD_VERSION from
 # its module globals at request time, so update that release identity together
@@ -94,6 +96,16 @@ except Exception as exc:
     hit_rate_small_systems = {"installed": False, "error": f"{type(exc).__name__}: {exc}"}
 print(f"HIT_RATE_HR2_SMALL_SYSTEMS_INSTALL {hit_rate_small_systems}", flush=True)
 
+# Keep the existing HR eligibility/pacing rules, but rank already-due quote
+# targets by card readiness and time-to-kickoff before the collector applies its
+# per-cycle event limit. This concentrates the existing 2,000-credit budget where
+# it can actually complete a same-book card rather than increasing spend.
+try:
+    hit_rate_jit_priority = install_hit_rate_jit_priority()
+except Exception as exc:
+    hit_rate_jit_priority = {"installed": False, "error": f"{type(exc).__name__}: {exc}"}
+print(f"HIT_RATE_JIT_PRIORITY_INSTALL {hit_rate_jit_priority}", flush=True)
+
 # Restore the existing forward-only HR price-tolerance study after the small
 # systems patch has registered Trixie/Double. Preserve its original forward
 # clock and P98/P96/P94 evidence, while adding P100/P90/P85. The lane reuses HR
@@ -149,6 +161,18 @@ try:
 except Exception as exc:
     live_yankee_credit_pacing = {"installed": False, "error": f"{type(exc).__name__}: {exc}"}
 print(f"LIVE_YANKEE_CREDIT_PACING_INSTALL {live_yankee_credit_pacing}", flush=True)
+
+# Turn on the existing read-only funnel instrumentation in the real production
+# bootstrap. It exposes queue -> priced -> fresh strict -> max same-book -> ready
+# plus current quote-credit spend without adding provider calls.
+try:
+    multiples_funnel_diagnostic = install_multiples_funnel_diagnostic(
+        base.curated.base_app.app,
+        base.curated.base_app.db,
+    )
+except Exception as exc:
+    multiples_funnel_diagnostic = {"installed": False, "error": f"{type(exc).__name__}: {exc}"}
+print(f"MULTIPLES_FUNNEL_DIAGNOSTIC_INSTALL {multiples_funnel_diagnostic}", flush=True)
 
 print(
     "MULTIPLES_BUDGET_REALLOCATION "
