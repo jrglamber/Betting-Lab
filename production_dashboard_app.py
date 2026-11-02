@@ -27,11 +27,12 @@ from hit_rate_theoretical_result_collection_patch_v3 import (
 from multiples_funnel_diagnostic_patch import install as install_multiples_funnel_diagnostic
 from multiples_home_small_systems_patch import install as install_multiples_home_small_systems
 from live_yankee_credit_pacing_patch import install as install_live_yankee_credit_pacing
+from tennis_result_pipeline_fix import install as install_tennis_result_pipeline_fix
 from tennis_forward_readiness_patch import install as install_tennis_forward_readiness
 from tennis_forward_home_sync_fix import install as install_tennis_forward_home_sync_fix
 from tennis_predictive_readiness_embed_patch import install as install_tennis_predictive_readiness_embed
 
-BUILD_VERSION = "0.19.111"
+BUILD_VERSION = "0.19.112"
 
 # Keep all visible version surfaces aligned with the real production entrypoint.
 base.BUILD_VERSION = BUILD_VERSION
@@ -158,6 +159,19 @@ try:
 except Exception as exc:
     multiples_funnel_diagnostic = {"installed": False, "error": f"{type(exc).__name__}: {exc}"}
 print(f"MULTIPLES_FUNNEL_DIAGNOSTIC_INSTALL {multiples_funnel_diagnostic}", flush=True)
+
+# Repair and keep fresh the result source before readiness health is calculated.
+# This revisits today's/yesterday's rich tennis results every four hours and can
+# bridge a result into tennis_results only when the provider match is uniquely
+# identified by tour, exact normalised player pair, nearby date and winner id.
+try:
+    tennis_result_pipeline_fix = install_tennis_result_pipeline_fix(
+        base.curated.base_app.db,
+        tennis_engine=getattr(base.curated.base_app.web_module, "tennis_engine", None),
+    )
+except Exception as exc:
+    tennis_result_pipeline_fix = {"installed": False, "error": f"{type(exc).__name__}: {exc}"}
+print(f"TENNIS_RESULT_PIPELINE_FIX_INSTALL {tennis_result_pipeline_fix}", flush=True)
 
 # Freeze clean prospective tennis evidence from this release onward. Stored
 # results are re-applied at startup and after every normal tennis cycle; TPRED4
