@@ -13,11 +13,15 @@ result when tour + exact normalized player pair + near-date produce exactly one
 candidate, and the stored winner is one of those two players. Ambiguous matches,
 walkovers and cancellations are left unresolved rather than guessed.
 
+The provider catch-up runs in a daemon thread so external API latency can never
+block FastAPI/Railway startup. Cached results are reconciled synchronously first.
+
 Research/settlement only. No selections, staking, alerts or betting authority.
 """
 
 from datetime import datetime, timedelta, timezone
 import json
+import threading
 from typing import Any, Dict, Mapping, Optional
 
 import adaptive_winner_research as adaptive
@@ -26,11 +30,12 @@ import tennis_rich_source as rich
 from db import utc_now_iso
 from tennis_shadow import settle_tennis_event
 
-VERSION = "TENNIS_RESULT_PIPELINE_FIX_V2"
+VERSION = "TENNIS_RESULT_PIPELINE_FIX_V3_ASYNC"
 CURRENT_REFRESH_HOURS = 4.0
 STARTUP_REPAIR_DAYS = 21
 CURRENT_REFRESH_LOOKBACK_DAYS = 1
 _INSTALLED = False
+_BACKGROUND_STARTED = False
 
 
 def _dt(value: Any) -> Optional[datetime]:
@@ -123,7 +128,7 @@ def _refresh_recent_rich_results(
             break
         tours[tour] = rich.sync_results_range(db, client, tour, start, end)
 
-    # Mark the cadence only after a real provider attempt. If the key/cap is
+    # Mark cadence only after a real provider attempt. If the key/cap is
     # unavailable we leave it due so recovery happens automatically later.
     db.execute(
         "UPDATE tennis_rich_sync_state SET last_current_results_at=? WHERE singleton_id=1",
@@ -326,9 +331,16 @@ def bridge_cached_results(db, now: Optional[datetime] = None) -> Dict[str, Any]:
 def _startup_repair(db, now: Optional[datetime] = None) -> Dict[str, Any]:
     now = now or datetime.now(timezone.utc)
     _ensure_state(db)
-    done = _state_get(db, "startup_recent_result_repair_v2")
+    done = _state_get(db, "startup_recent_result_repair_v3")
     if done:
-        return {"ok": True, "skipped": True, "reason": "already_completed", "completed_at": done}
+        bridge = bridge_cached_results(db, now)
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": "already_completed",
+            "completed_at": done,
+            "bridge": bridge,
+        }
     refresh = _refresh_recent_rich_results(
         db,
         now=now,
@@ -336,15 +348,46 @@ def _startup_repair(db, now: Optional[datetime] = None) -> Dict[str, Any]:
         lookback_days=STARTUP_REPAIR_DAYS,
         max_requests=16,
     )
-    # Only mark the one-off repair complete after an actual provider attempt.
-    if not refresh.get("skipped"):
-        _state_set(db, "startup_recent_result_repair_v2", utc_now_iso())
     bridge = bridge_cached_results(db, now)
+    # Only mark the one-off repair complete after a real provider attempt.
+    if not refresh.get("skipped"):
+        _state_set(db, "startup_recent_result_repair_v3", utc_now_iso())
     return {
         "ok": bool(refresh.get("ok", True)) and bool(bridge.get("ok", True)),
         "refresh": refresh,
         "bridge": bridge,
     }
+
+
+def _background_startup_repair(db) -> None:
+    try:
+        result = _startup_repair(db)
+        print(
+            "TENNIS_RESULT_PIPELINE_BACKGROUND_REPAIR "
+            + json.dumps(result, sort_keys=True, default=str),
+            flush=True,
+        )
+    except Exception as exc:
+        print(
+            "TENNIS_RESULT_PIPELINE_BACKGROUND_REPAIR_ERROR "
+            + json.dumps({"error": f"{type(exc).__name__}: {exc}"}),
+            flush=True,
+        )
+
+
+def _start_background_repair(db) -> bool:
+    global _BACKGROUND_STARTED
+    if _BACKGROUND_STARTED:
+        return False
+    thread = threading.Thread(
+        target=_background_startup_repair,
+        args=(db,),
+        name="tennis-result-startup-repair",
+        daemon=True,
+    )
+    thread.start()
+    _BACKGROUND_STARTED = True
+    return True
 
 
 def install(db, tennis_engine=None) -> Dict[str, Any]:
@@ -357,7 +400,10 @@ def install(db, tennis_engine=None) -> Dict[str, Any]:
     tpred3.install_schema(db)
     _ensure_state(db)
 
-    startup = _startup_repair(db)
+    # Never wait on an external provider during web-service import. Apply any
+    # already-cached exact results immediately, then catch up provider history
+    # in a daemon worker after the app can serve requests.
+    initial_bridge = bridge_cached_results(db)
 
     original_rich_maintenance = rich.maintenance
     if not getattr(rich, "_tennis_result_pipeline_fix_installed", False):
@@ -391,12 +437,14 @@ def install(db, tennis_engine=None) -> Dict[str, Any]:
         tennis_engine._tennis_result_pipeline_fix_installed = True
         engine_wrapped = True
 
+    background_started = _start_background_repair(db)
     _INSTALLED = True
     return {
         "installed": True,
         "already_installed": False,
         "version": VERSION,
-        "startup": startup,
+        "initial_cache_bridge": initial_bridge,
+        "background_startup_repair_started": background_started,
         "current_refresh_hours": CURRENT_REFRESH_HOURS,
         "startup_repair_days": STARTUP_REPAIR_DAYS,
         "strict_match_policy": "tour + exact normalized player pair + unique +/-1 UTC date candidate + verified winner id",
