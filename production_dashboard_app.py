@@ -28,11 +28,12 @@ from multiples_funnel_diagnostic_patch import install as install_multiples_funne
 from multiples_home_small_systems_patch import install as install_multiples_home_small_systems
 from live_yankee_credit_pacing_patch import install as install_live_yankee_credit_pacing
 from tennis_result_pipeline_fix import install as install_tennis_result_pipeline_fix
+from tennis_result_retry_guard import install as install_tennis_result_retry_guard
 from tennis_forward_readiness_patch import install as install_tennis_forward_readiness
 from tennis_forward_home_sync_fix import install as install_tennis_forward_home_sync_fix
 from tennis_predictive_readiness_embed_patch import install as install_tennis_predictive_readiness_embed
 
-BUILD_VERSION = "0.19.112"
+BUILD_VERSION = "0.19.113"
 
 # Keep all visible version surfaces aligned with the real production entrypoint.
 base.BUILD_VERSION = BUILD_VERSION
@@ -172,6 +173,15 @@ try:
 except Exception as exc:
     tennis_result_pipeline_fix = {"installed": False, "error": f"{type(exc).__name__}: {exc}"}
 print(f"TENNIS_RESULT_PIPELINE_FIX_INSTALL {tennis_result_pipeline_fix}", flush=True)
+
+# A failed rich-result request must remain due. The guard patches the refresh
+# clock so transient provider errors retry on the next maintenance cycle, and
+# launches one bounded background retry immediately after startup.
+try:
+    tennis_result_retry_guard = install_tennis_result_retry_guard(base.curated.base_app.db)
+except Exception as exc:
+    tennis_result_retry_guard = {"installed": False, "error": f"{type(exc).__name__}: {exc}"}
+print(f"TENNIS_RESULT_RETRY_GUARD_INSTALL {tennis_result_retry_guard}", flush=True)
 
 # Freeze clean prospective tennis evidence from this release onward. Stored
 # results are re-applied at startup and after every normal tennis cycle; TPRED4
