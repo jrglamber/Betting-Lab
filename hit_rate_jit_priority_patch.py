@@ -1,18 +1,24 @@
 from __future__ import annotations
 
-"""Prioritise HR quote refreshes and permit a guarded busy-day burst.
+"""Prioritise HR quote refreshes and protect the late-day quote reserve.
 
-The normal HR quote allowance remains 2,500 credits/day. Once that base is fully
-used, the lane may consume up to 500 additional credits only when at least one
-full refresh cycle of already-due targets remains and the previous seven
-completed UTC days still project within the 100k monthly provider allowance.
+The normal HR quote allowance remains 2,500 credits/day. The hard ceiling remains
+3,000 credits/day, but the final 500 credits are now a protected reserve: they
+cannot be spent on ordinary backlog and are exposed only to events belonging to
+a stream that was recently within one same-book leg of a complete card.
 
-Beyond the base allowance, existing pacing continues to reserve calls for urgent
-or near-card work. Source selections, odds bands, minimum prices, same-book
-requirements, system construction, staking, settlement, alerts and betting
-authority are unchanged.
+The reserve uses quotes already stored in ``live_yankee_quotes``. That table is
+shared with Live Yankee, so overlapping quotes collected by either lane continue
+to be reused without an additional provider call. A 60-minute recent-quote
+window is used only to remember near-card state after the normal 15-minute quote
+freshness window expires; actual card construction still uses the unchanged
+strict freshness and price rules in ``hit_rate_multiples_lab``.
+
+Source selections, odds bands, minimum prices, same-book requirements, system
+construction, staking, settlement, alerts and betting authority are unchanged.
 """
 
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Mapping
 
@@ -24,14 +30,16 @@ import multiples_budget_balance_patch as budget_balance
 import multiples_today_headroom_patch as legacy_headroom
 import provider_cost_control_patch as provider_cost
 
-VERSION = "HR_JIT_QUOTE_PRIORITY_2026_11_02_V2_BUSY_BURST"
+VERSION = "HR_JIT_QUOTE_PRIORITY_2026_11_02_V3_PROTECTED_RESERVE"
 NEAR_CARD_PRIORITY_MINUTES = 180.0
 URGENT_KICKOFF_MINUTES = 90.0
 MID_KICKOFF_MINUTES = 240.0
 
 BASE_DAILY_CREDITS = 2_500
 BURST_DAILY_CREDITS = 3_000
-BURST_MIN_DUE_EVENTS = 8
+PROTECTED_RESERVE_CREDITS = BURST_DAILY_CREDITS - BASE_DAILY_CREDITS
+RESERVE_RECENT_QUOTE_MINUTES = 60.0
+RESERVE_DISCOVERY_EVENTS_PER_STREAM = 2
 PROVIDER_MONTHLY_ALLOWANCE = 100_000
 PROVIDER_LOOKBACK_DAYS = 7
 PROVIDER_PROJECTION_DAYS = 30
@@ -115,20 +123,217 @@ def _provider_projection_30d(db, now: datetime) -> float | None:
         return None
 
 
-def _burst_allowed(db, now: datetime, due_count: int) -> tuple[bool, float | None]:
-    """Fail closed for the optional burst if spend diagnostics are unavailable."""
-    if due_count < BURST_MIN_DUE_EVENTS:
+def _burst_allowed(db, now: datetime, reserve_target_count: int) -> tuple[bool, float | None]:
+    """Fail closed unless there is protected work and provider headroom."""
+    if reserve_target_count <= 0:
         return False, _provider_projection_30d(db, now)
     projection = _provider_projection_30d(db, now)
     if projection is None:
         return False, None
-    extra = BURST_DAILY_CREDITS - BASE_DAILY_CREDITS
-    return projection + extra <= PROVIDER_MONTHLY_ALLOWANCE, projection
+    return projection + PROTECTED_RESERVE_CREDITS <= PROVIDER_MONTHLY_ALLOWANCE, projection
 
 
 def _burst_hard_cap(_now=None) -> int:
-    """Ceiling only; target gating below decides whether the extra 500 is usable."""
+    """Ceiling only; protected target gating decides whether the final 500 is usable."""
     return BURST_DAILY_CREDITS
+
+
+def _valid_quotes_for_window(db, candidate: Mapping[str, Any], now: datetime, window_minutes: float):
+    """Return strict valid quotes, allowing a wider window only for reserve memory.
+
+    This deliberately mirrors the strict parts of hr._quotes. It does not relax
+    price bands, minimum odds, bookmaker eligibility, point matching or the
+    candidate's first-seen boundary.
+    """
+    try:
+        rows = db.fetchall(
+            """SELECT * FROM live_yankee_quotes
+               WHERE event_id=? AND market_key=? AND selection=?
+               ORDER BY captured_at DESC,id DESC LIMIT 500""",
+            (candidate["event_id"], candidate["market_key"], candidate["selection"]),
+        )
+    except Exception:
+        return {}
+
+    cutoff = now - timedelta(minutes=float(window_minutes))
+    first_seen = _dt(candidate.get("first_seen_at"))
+    out: Dict[str, Dict[str, Any]] = {}
+    for raw in rows:
+        q = dict(raw)
+        book = str(q.get("bookmaker_key") or "")
+        if book in out or book not in hr.DEFAULT_PLACEABLE_BOOKS:
+            continue
+        if not ly._same_point(q.get("point"), candidate.get("point")):
+            continue
+        ts = _dt(q.get("captured_at"))
+        if ts is None or ts < cutoff or ts > now or (first_seen and ts < first_seen):
+            continue
+        try:
+            price = float(q.get("price") or 0)
+            band_min = float(candidate.get("band_min") or 0)
+            band_max = float(candidate.get("band_max") or 0)
+            min_odds = float(candidate.get("min_odds") or 0)
+        except Exception:
+            continue
+        if not (band_min <= price < band_max):
+            continue
+        if price + 1e-12 < min_odds:
+            continue
+        q["quote_age_minutes"] = max(0.0, (now - ts).total_seconds() / 60.0)
+        out[book] = q
+    return out
+
+
+def _queued_streams(db, now: datetime):
+    """Ordered, one-candidate-per-event view of current HR streams."""
+    try:
+        rows = [dict(x) for x in db.fetchall(
+            """SELECT * FROM hit_rate_candidates
+               WHERE status='QUEUED' ORDER BY first_seen_at,id"""
+        )]
+    except Exception:
+        return {}
+
+    streams: Dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    seen: Dict[tuple[str, str, str], set[str]] = defaultdict(set)
+    for candidate in rows:
+        if not hr._actionable(candidate.get("commence_time"), now):
+            continue
+        key = (
+            str(candidate.get("policy_version") or ""),
+            str(candidate.get("experiment_key") or ""),
+            str(candidate.get("system_type") or ""),
+        )
+        event_id = str(candidate.get("event_id") or "")
+        if not event_id or event_id in seen[key]:
+            continue
+        seen[key].add(event_id)
+        streams[key].append(candidate)
+    return streams
+
+
+def _protected_reserve_plan(db, now: datetime) -> Dict[str, Dict[str, Any]]:
+    """Identify event polls capable of reviving/completing a recently near card.
+
+    A stream qualifies only if one bookmaker covered at least ``legs - 1``
+    distinct candidate events within the last hour. Existing fresh coverage is
+    preferred. Stale members of that recent same-book cluster are refresh
+    targets; if the cluster itself has only ``legs - 1`` events, at most two
+    additional candidate events are admitted as discovery attempts for the final
+    leg. Ordinary backlog never enters the protected reserve.
+    """
+    plan: Dict[str, Dict[str, Any]] = {}
+    streams = _queued_streams(db, now)
+
+    for (policy, experiment, system), candidates in streams.items():
+        spec = hr.SYSTEMS.get(system) or {}
+        try:
+            need = int(spec.get("legs") or 0)
+        except Exception:
+            need = 0
+        if need < 2 or len(candidates) < need:
+            continue
+
+        recent_by_event: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        fresh_by_event: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        for candidate in candidates:
+            event_id = str(candidate.get("event_id") or "")
+            recent_by_event[event_id] = _valid_quotes_for_window(
+                db, candidate, now, RESERVE_RECENT_QUOTE_MINUTES
+            )
+            fresh_by_event[event_id] = _valid_quotes_for_window(
+                db, candidate, now, float(hr.QUOTE_FRESHNESS_MINUTES)
+            )
+
+        books = set()
+        for quote_map in recent_by_event.values():
+            books.update(quote_map.keys())
+
+        for book in books:
+            recent_events = [
+                str(c.get("event_id") or "")
+                for c in candidates
+                if book in recent_by_event.get(str(c.get("event_id") or ""), {})
+            ]
+            if len(recent_events) < need - 1:
+                continue
+
+            fresh_events = {
+                str(c.get("event_id") or "")
+                for c in candidates
+                if book in fresh_by_event.get(str(c.get("event_id") or ""), {})
+            }
+            if len(fresh_events) >= need:
+                # This bookmaker is already card-complete; formation, not polling,
+                # should consume it.
+                continue
+
+            recent_ranked = recent_events[:need]
+            reserve_events = [eid for eid in recent_ranked if eid not in fresh_events]
+
+            # If the recent same-book cluster itself is one leg short, allow only
+            # a tiny number of discovery attempts for the missing leg.
+            if len(recent_events) == need - 1:
+                discovery = [
+                    str(c.get("event_id") or "")
+                    for c in candidates
+                    if str(c.get("event_id") or "") not in set(recent_events)
+                    and str(c.get("event_id") or "") not in fresh_events
+                ][:RESERVE_DISCOVERY_EVENTS_PER_STREAM]
+                reserve_events.extend(discovery)
+
+            if not reserve_events:
+                continue
+
+            fresh_count = len(fresh_events)
+            recent_count = len(recent_events)
+            for event_id in reserve_events:
+                entry = plan.setdefault(event_id, {
+                    "event_id": event_id,
+                    "card_yield": 0,
+                    "best_fresh_count": 0,
+                    "best_recent_count": 0,
+                    "best_need": need,
+                    "streams": [],
+                })
+                entry["card_yield"] = int(entry.get("card_yield") or 0) + 1
+                if fresh_count > int(entry.get("best_fresh_count") or 0):
+                    entry["best_fresh_count"] = fresh_count
+                if recent_count > int(entry.get("best_recent_count") or 0):
+                    entry["best_recent_count"] = recent_count
+                entry["best_need"] = min(int(entry.get("best_need") or need), need)
+                entry["streams"].append({
+                    "policy": policy,
+                    "experiment": experiment,
+                    "system": system,
+                    "bookmaker": book,
+                    "fresh": fresh_count,
+                    "recent": recent_count,
+                    "need": need,
+                })
+
+    return plan
+
+
+def _reserve_priority_key(db, target: Mapping[str, Any], now: datetime, meta: Mapping[str, Any]):
+    minutes = _minutes_to_kickoff(target, now)
+    need = int(meta.get("best_need") or 99)
+    fresh = int(meta.get("best_fresh_count") or 0)
+    recent = int(meta.get("best_recent_count") or 0)
+    deficit = max(0, need - fresh)
+    recent_deficit = max(0, need - recent)
+    yield_count = int(meta.get("card_yield") or 0)
+    age = _last_success_age_minutes(db, str(target.get("event_id") or ""), now)
+    return (
+        recent_deficit,
+        deficit,
+        -yield_count,
+        0 if minutes <= URGENT_KICKOFF_MINUTES else 1,
+        minutes,
+        -age,
+        str(target.get("first_seen_at") or ""),
+        str(target.get("event_id") or ""),
+    )
 
 
 def install() -> Dict[str, Any]:
@@ -142,10 +347,9 @@ def install() -> Dict[str, Any]:
 
     _ORIGINAL_TARGETS = hr._targets
 
-    # The retired Oct wrappers still sit in the call chain. Open their hard
-    # ceilings to 3,000 so they cannot suppress the due list before this patch
-    # applies the live conditional gate. The normal efficiency soft pacing stays
-    # at 2,500, so burst credits naturally remain focused on urgent/near-card work.
+    # Open the retired wrappers' hard ceilings to 3,000 so they cannot suppress
+    # the due list before this patch applies the protected reserve gate. Their
+    # normal soft pacing remains 2,500.
     hr.DAILY_REFRESH_CREDIT_BUDGET = BURST_DAILY_CREDITS
     hr_daily_boost.NORMAL_DAILY_CAP = BASE_DAILY_CREDITS
     hr_daily_boost.BOOST_DAILY_CAP = BURST_DAILY_CREDITS
@@ -159,18 +363,29 @@ def install() -> Dict[str, Any]:
         stamp = _utc(now)
         targets = list(_ORIGINAL_TARGETS(db, stamp))
 
-        # Once the normal 2,500 credits are spent, expose further targets only
-        # when a meaningful due backlog remains and provider-budget headroom is
-        # still healthy. Otherwise the effective behaviour remains a 2,500 cap.
         try:
             spent = int(hr._credits_today(db, stamp))
         except Exception:
             spent = BASE_DAILY_CREDITS
 
         if spent >= BASE_DAILY_CREDITS:
+            reserve_plan = _protected_reserve_plan(db, stamp)
+            targets = [
+                target for target in targets
+                if str(target.get("event_id") or "") in reserve_plan
+            ]
             allowed, _ = _burst_allowed(db, stamp, len(targets))
             if not allowed:
                 return []
+            return sorted(
+                targets,
+                key=lambda target: _reserve_priority_key(
+                    db,
+                    target,
+                    stamp,
+                    reserve_plan.get(str(target.get("event_id") or ""), {}),
+                ),
+            )
 
         try:
             _, near_events, state = credit_policy._hr_stream_readiness(db, stamp)
@@ -197,9 +412,12 @@ def install() -> Dict[str, Any]:
         "max_refresh_events_per_cycle": int(hr.MAX_REFRESH_EVENTS_PER_CYCLE),
         "base_daily_credit_cap": BASE_DAILY_CREDITS,
         "busy_day_credit_ceiling": BURST_DAILY_CREDITS,
-        "busy_day_min_due_events": BURST_MIN_DUE_EVENTS,
+        "protected_reserve_credits": PROTECTED_RESERVE_CREDITS,
+        "reserve_recent_quote_minutes": RESERVE_RECENT_QUOTE_MINUTES,
+        "reserve_discovery_events_per_stream": RESERVE_DISCOVERY_EVENTS_PER_STREAM,
         "provider_monthly_allowance": PROVIDER_MONTHLY_ALLOWANCE,
         "provider_projection_lookback_days": PROVIDER_LOOKBACK_DAYS,
+        "shared_quote_table": "live_yankee_quotes",
         "selection_rules_changed": False,
         "price_rules_changed": False,
         "same_book_rules_changed": False,
