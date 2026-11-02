@@ -27,12 +27,11 @@ from hit_rate_theoretical_result_collection_patch_v3 import (
 from multiples_funnel_diagnostic_patch import install as install_multiples_funnel_diagnostic
 from multiples_home_small_systems_patch import install as install_multiples_home_small_systems
 from live_yankee_credit_pacing_patch import install as install_live_yankee_credit_pacing
+from tennis_forward_readiness_patch import install as install_tennis_forward_readiness
 
-BUILD_VERSION = "0.19.107"
+BUILD_VERSION = "0.19.108"
 
-# The adaptive dashboard's final homepage renderer resolves BUILD_VERSION from
-# its module globals at request time, so update that release identity together
-# with every public version surface before exposing the app.
+# Keep all visible version surfaces aligned with the real production entrypoint.
 base.BUILD_VERSION = BUILD_VERSION
 base.adaptive_core.DASHBOARD_VERSION = BUILD_VERSION
 base.dashboard_responsiveness.BUILD_VERSION = BUILD_VERSION
@@ -40,12 +39,8 @@ base.curated.dashboard_layout_v2.VERSION = BUILD_VERSION
 base.curated.base_app.web_module.VERSION = BUILD_VERSION
 base.curated.base_app.app.version = BUILD_VERSION
 
-# Reallocate paid Odds-API quote capacity toward the stronger HR2 research lane.
-# The adaptive bootstrap installs several historical budget wrappers. Some of
-# those wrappers resolve their caps dynamically on every refresh, so changing
-# only hit_rate_multiples_lab.DAILY_REFRESH_CREDIT_BUDGET is not sufficient.
-# Synchronise every still-live HR authority here so 2,500 survives subsequent
-# refresh cycles instead of being reset to an old 400/500/1,000 ceiling.
+# Final paid Odds-API quote budgets. Synchronise all still-live wrappers because
+# several historical patches resolve their caps dynamically on each refresh.
 HIT_RATE_DAILY_CREDITS = 2_500
 LIVE_YANKEE_DAILY_CREDITS = 500
 LIVE_YANKEE_QUOTE_REFRESH_MINUTES = 10.0
@@ -96,20 +91,14 @@ except Exception as exc:
     hit_rate_small_systems = {"installed": False, "error": f"{type(exc).__name__}: {exc}"}
 print(f"HIT_RATE_HR2_SMALL_SYSTEMS_INSTALL {hit_rate_small_systems}", flush=True)
 
-# Keep the existing HR eligibility/pacing rules, but rank already-due quote
-# targets by card readiness and time-to-kickoff before the collector applies its
-# per-cycle event limit. This concentrates the available HR quote budget where
-# it can actually complete a same-book card rather than spending it uniformly.
+# Rank already-due HR quote targets by card readiness and time-to-kickoff before
+# the collector applies its event limit. Eligibility and card rules are unchanged.
 try:
     hit_rate_jit_priority = install_hit_rate_jit_priority()
 except Exception as exc:
     hit_rate_jit_priority = {"installed": False, "error": f"{type(exc).__name__}: {exc}"}
 print(f"HIT_RATE_JIT_PRIORITY_INSTALL {hit_rate_jit_priority}", flush=True)
 
-# Restore the existing forward-only HR price-tolerance study after the small
-# systems patch has registered Trixie/Double. Preserve its original forward
-# clock and P98/P96/P94 evidence, while adding P100/P90/P85. The lane reuses HR
-# quotes only: zero extra provider calls and no canonical HR state changes.
 try:
     hit_rate_price_tolerance_ladder = install_hit_rate_price_tolerance_ladder(base.curated.base_app.db)
 except Exception as exc:
@@ -128,9 +117,6 @@ except Exception as exc:
     hit_rate_theoretical_result_collection = {"installed": False, "error": f"{type(exc).__name__}: {exc}"}
 print(f"HR_THEORETICAL_RESULT_COLLECTION_BOOTSTRAP {hit_rate_theoretical_result_collection}", flush=True)
 
-# Reconcile already-finished HR-only tennis/multisport events immediately. The
-# worker hooks remain installed for future cards, but startup no longer depends
-# on the next scheduled engine cycle before stale PENDING legs can clear.
 try:
     hr_theoretical_startup_pass = run_hit_rate_theoretical_result_collection_once(
         base.curated.base_app.web_module.tennis_engine,
@@ -162,9 +148,6 @@ except Exception as exc:
     live_yankee_credit_pacing = {"installed": False, "error": f"{type(exc).__name__}: {exc}"}
 print(f"LIVE_YANKEE_CREDIT_PACING_INSTALL {live_yankee_credit_pacing}", flush=True)
 
-# Turn on the existing read-only funnel instrumentation in the real production
-# bootstrap. It exposes queue -> priced -> fresh strict -> max same-book -> ready
-# plus current quote-credit spend without adding provider calls.
 try:
     multiples_funnel_diagnostic = install_multiples_funnel_diagnostic(
         base.curated.base_app.app,
@@ -173,6 +156,20 @@ try:
 except Exception as exc:
     multiples_funnel_diagnostic = {"installed": False, "error": f"{type(exc).__name__}: {exc}"}
 print(f"MULTIPLES_FUNNEL_DIAGNOSTIC_INSTALL {multiples_funnel_diagnostic}", flush=True)
+
+# Freeze clean prospective tennis evidence from this release onward. Stored
+# results are re-applied at startup and after every normal tennis cycle; TPRED4
+# is then synchronised from the settled TPRED3 identity. Zero provider calls.
+try:
+    tennis_forward_readiness = install_tennis_forward_readiness(
+        base.curated.base_app.app,
+        base.curated.base_app.db,
+        base.curated.base_app.BASE_STYLE,
+        tennis_engine=getattr(base.curated.base_app.web_module, "tennis_engine", None),
+    )
+except Exception as exc:
+    tennis_forward_readiness = {"installed": False, "error": f"{type(exc).__name__}: {exc}"}
+print(f"TENNIS_FORWARD_READINESS_INSTALL {tennis_forward_readiness}", flush=True)
 
 print(
     "MULTIPLES_BUDGET_REALLOCATION "
