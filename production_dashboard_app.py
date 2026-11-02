@@ -28,8 +28,9 @@ from multiples_funnel_diagnostic_patch import install as install_multiples_funne
 from multiples_home_small_systems_patch import install as install_multiples_home_small_systems
 from live_yankee_credit_pacing_patch import install as install_live_yankee_credit_pacing
 from tennis_forward_readiness_patch import install as install_tennis_forward_readiness
+from tennis_forward_home_sync_fix import install as install_tennis_forward_home_sync_fix
 
-BUILD_VERSION = "0.19.108"
+BUILD_VERSION = "0.19.109"
 
 # Keep all visible version surfaces aligned with the real production entrypoint.
 base.BUILD_VERSION = BUILD_VERSION
@@ -170,6 +171,17 @@ try:
 except Exception as exc:
     tennis_forward_readiness = {"installed": False, "error": f"{type(exc).__name__}: {exc}"}
 print(f"TENNIS_FORWARD_READINESS_INSTALL {tennis_forward_readiness}", flush=True)
+
+# The readiness patch adds a homepage link. Keep that final presentation wrapper
+# synchronous so the established homepage async bridge remains in FastAPI's
+# threadpool instead of being called from a running event loop.
+try:
+    tennis_forward_home_sync_fix = install_tennis_forward_home_sync_fix(
+        base.curated.base_app.app,
+    )
+except Exception as exc:
+    tennis_forward_home_sync_fix = {"installed": False, "error": f"{type(exc).__name__}: {exc}"}
+print(f"TENNIS_FORWARD_HOME_SYNC_FIX_INSTALL {tennis_forward_home_sync_fix}", flush=True)
 
 print(
     "MULTIPLES_BUDGET_REALLOCATION "
