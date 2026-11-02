@@ -15,7 +15,7 @@ from fastapi.responses import HTMLResponse
 
 import tennis_forward_readiness_patch as readiness
 
-VERSION = "TENNIS_PREDICTIVE_READINESS_EMBED_V1"
+VERSION = "TENNIS_PREDICTIVE_READINESS_EMBED_V2_HEALTH_FIX"
 _INSTALLED = False
 
 
@@ -24,6 +24,74 @@ def _fmt(value: Any, digits: int = 1, suffix: str = "") -> str:
         return f"{float(value):.{digits}f}{suffix}"
     except Exception:
         return "—"
+
+
+def _fixed_settlement_health(db, now=None) -> Dict[str, Any]:
+    """Correct readiness-health SQL by qualifying the joined status column.
+
+    The original execution query joined tennis_execution_bets and tennis_events,
+    both of which expose a status column, so an unqualified status='OPEN' could
+    raise an ambiguous-column error. This is diagnostic-only and adds no calls.
+    """
+    now = now or readiness.datetime.now(readiness.timezone.utc)
+    cutoff = (now - readiness.timedelta(hours=readiness.STALE_HOURS)).isoformat()
+    specs = (
+        ("TENNIS_EXECUTION", "tennis_execution_bets", "b.status='OPEN'"),
+        ("TPRED3", "tennis_predictive3_predictions", "b.status='OPEN'"),
+        ("TPRED4", "tennis_predictive4_predictions", "b.status='OPEN'"),
+    )
+    lanes = []
+    for name, table, status_clause in specs:
+        try:
+            if table == "tennis_execution_bets":
+                row = db.fetchone(
+                    f"""
+                    SELECT COUNT(*) AS stale,
+                           SUM(CASE WHEN r.event_id IS NULL THEN 1 ELSE 0 END) AS missing_result,
+                           SUM(CASE WHEN r.event_id IS NOT NULL THEN 1 ELSE 0 END) AS stored_result
+                    FROM {table} b
+                    JOIN tennis_events e ON e.event_id=b.event_id
+                    LEFT JOIN tennis_results r ON r.event_id=b.event_id
+                    WHERE {status_clause} AND e.commence_time<=?
+                    """,
+                    (cutoff,),
+                ) or {}
+            else:
+                row = db.fetchone(
+                    f"""
+                    SELECT COUNT(*) AS stale,
+                           SUM(CASE WHEN r.event_id IS NULL THEN 1 ELSE 0 END) AS missing_result,
+                           SUM(CASE WHEN r.event_id IS NOT NULL THEN 1 ELSE 0 END) AS stored_result
+                    FROM {table} b
+                    LEFT JOIN tennis_results r ON r.event_id=b.event_id
+                    WHERE {status_clause} AND b.commence_time<=?
+                    """,
+                    (cutoff,),
+                ) or {}
+            stale = int(row.get("stale") or 0)
+            missing = int(row.get("missing_result") or 0)
+            stored = int(row.get("stored_result") or 0)
+            lanes.append({
+                "lane": name,
+                "stale_open": stale,
+                "missing_result": missing,
+                "stored_result_not_applied": stored,
+                "status": "HEALTHY" if stale == 0 else "LAGGING",
+            })
+        except Exception as exc:
+            lanes.append({
+                "lane": name,
+                "status": "ERROR",
+                "error": f"{type(exc).__name__}: {exc}",
+            })
+    return {
+        "status": "ERROR" if any(x.get("status") == "ERROR" for x in lanes)
+                  else "LAGGING" if any(x.get("status") == "LAGGING" for x in lanes)
+                  else "HEALTHY",
+        "stale_after_hours": readiness.STALE_HOURS,
+        "checked_at": now.isoformat(),
+        "lanes": lanes,
+    }
 
 
 def _panel_html(db) -> str:
@@ -111,6 +179,11 @@ def install(app, db) -> Dict[str, Any]:
     if _INSTALLED:
         return {"installed": True, "already_installed": True, "version": VERSION}
 
+    # Hotfix both the embedded and standalone readiness views. scoreboard()
+    # resolves settlement_health from the module at call time, so replacing this
+    # function is sufficient without touching any model or settlement authority.
+    readiness.settlement_health = _fixed_settlement_health
+
     route = next(
         (
             r for r in list(app.router.routes)
@@ -158,6 +231,7 @@ def install(app, db) -> Dict[str, Any]:
             "TPRED4_VALUE",
             "H2H_TPRED4_AGREE",
         ],
+        "settlement_health_fix": "qualified_status_column",
         "provider_calls_added": 0,
         "presentation_only": True,
         "betting_authority_changed": False,
