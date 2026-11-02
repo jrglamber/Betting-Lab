@@ -16,7 +16,7 @@ walkovers and cancellations are left unresolved rather than guessed.
 Research/settlement only. No selections, staking, alerts or betting authority.
 """
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 import json
 from typing import Any, Dict, Mapping, Optional
 
@@ -26,7 +26,7 @@ import tennis_rich_source as rich
 from db import utc_now_iso
 from tennis_shadow import settle_tennis_event
 
-VERSION = "TENNIS_RESULT_PIPELINE_FIX_V1"
+VERSION = "TENNIS_RESULT_PIPELINE_FIX_V2"
 CURRENT_REFRESH_HOURS = 4.0
 STARTUP_REPAIR_DAYS = 21
 CURRENT_REFRESH_LOOKBACK_DAYS = 1
@@ -36,17 +36,18 @@ _INSTALLED = False
 def _dt(value: Any) -> Optional[datetime]:
     if value in (None, ""):
         return None
-    text = str(value).replace("Z", "+00:00")
-    try:
-        out = datetime.fromisoformat(text)
-        if out.tzinfo is None:
-            out = out.replace(tzinfo=timezone.utc)
-        return out.astimezone(timezone.utc)
-    except Exception:
-        pass
+    text = str(value).strip()
+    for candidate in (text, text.replace("Z", "+00:00")):
+        try:
+            out = datetime.fromisoformat(candidate)
+            if out.tzinfo is None:
+                out = out.replace(tzinfo=timezone.utc)
+            return out.astimezone(timezone.utc)
+        except Exception:
+            pass
     for fmt in ("%Y-%m-%d", "%d.%m.%Y", "%d/%m/%Y"):
         try:
-            return datetime.strptime(str(value)[:10], fmt).replace(tzinfo=timezone.utc)
+            return datetime.strptime(text[:10], fmt).replace(tzinfo=timezone.utc)
         except Exception:
             pass
     return None
@@ -100,7 +101,13 @@ def _refresh_recent_rich_results(
     if not force and last is not None:
         hours = (now - last).total_seconds() / 3600.0
         if hours < CURRENT_REFRESH_HOURS:
-            return {"ok": True, "skipped": True, "reason": "current_refresh_not_due", "hours_since": hours, "requests": 0}
+            return {
+                "ok": True,
+                "skipped": True,
+                "reason": "current_refresh_not_due",
+                "hours_since": hours,
+                "requests": 0,
+            }
 
     client = rich.RichClient(db, max_requests=max_requests)
     if not client.key:
@@ -133,6 +140,10 @@ def _refresh_recent_rich_results(
     }
 
 
+def _date_tokens(day) -> list[str]:
+    return [day.isoformat(), day.strftime("%d.%m.%Y"), day.strftime("%d/%m/%Y")]
+
+
 def _candidate_rich_result(db, event: Mapping[str, Any]) -> Dict[str, Any]:
     tour = str(event.get("tour") or "").strip().lower()
     if tour not in {"atp", "wta"}:
@@ -145,18 +156,26 @@ def _candidate_rich_result(db, event: Mapping[str, Any]) -> Dict[str, Any]:
     if not n1 or not n2 or n1 == n2:
         return {"matched": False, "reason": "bad_player_identity"}
 
-    start = (commence.date() - timedelta(days=1)).isoformat()
-    end = (commence.date() + timedelta(days=1)).isoformat()
+    # Provider history has used both ISO and day-first date strings. Restrict
+    # the SQL read to the three nearby UTC calendar dates in all known formats,
+    # then parse and validate the date again in Python.
+    days = [commence.date() - timedelta(days=1), commence.date(), commence.date() + timedelta(days=1)]
+    tokens = [token for day in days for token in _date_tokens(day)]
+    placeholders = ",".join("?" for _ in tokens)
     rows = db.fetchall(
-        """
+        f"""
         SELECT * FROM tennis_rich_matches
-        WHERE tour=? AND substr(match_date,1,10)>=? AND substr(match_date,1,10)<=?
+        WHERE tour=? AND substr(match_date,1,10) IN ({placeholders})
         ORDER BY match_date,provider_match_id
         """,
-        (tour, start, end),
+        tuple([tour] + tokens),
     )
+
     candidates = []
     for row in rows:
+        match_dt = _dt(row.get("match_date"))
+        if match_dt is None or abs((match_dt.date() - commence.date()).days) > 1:
+            continue
         a = rich._norm_name(row.get("player1_name"))
         b = rich._norm_name(row.get("player2_name"))
         if {a, b} != {n1, n2}:
@@ -307,7 +326,7 @@ def bridge_cached_results(db, now: Optional[datetime] = None) -> Dict[str, Any]:
 def _startup_repair(db, now: Optional[datetime] = None) -> Dict[str, Any]:
     now = now or datetime.now(timezone.utc)
     _ensure_state(db)
-    done = _state_get(db, "startup_recent_result_repair_v1")
+    done = _state_get(db, "startup_recent_result_repair_v2")
     if done:
         return {"ok": True, "skipped": True, "reason": "already_completed", "completed_at": done}
     refresh = _refresh_recent_rich_results(
@@ -319,15 +338,23 @@ def _startup_repair(db, now: Optional[datetime] = None) -> Dict[str, Any]:
     )
     # Only mark the one-off repair complete after an actual provider attempt.
     if not refresh.get("skipped"):
-        _state_set(db, "startup_recent_result_repair_v1", utc_now_iso())
+        _state_set(db, "startup_recent_result_repair_v2", utc_now_iso())
     bridge = bridge_cached_results(db, now)
-    return {"ok": bool(refresh.get("ok", True)) and bool(bridge.get("ok", True)), "refresh": refresh, "bridge": bridge}
+    return {
+        "ok": bool(refresh.get("ok", True)) and bool(bridge.get("ok", True)),
+        "refresh": refresh,
+        "bridge": bridge,
+    }
 
 
 def install(db, tennis_engine=None) -> Dict[str, Any]:
     global _INSTALLED
     if _INSTALLED:
         return {"installed": True, "already_installed": True, "version": VERSION}
+
+    # Be self-contained when installed from the production bootstrap.
+    rich.install_schema(db)
+    tpred3.install_schema(db)
     _ensure_state(db)
 
     startup = _startup_repair(db)
