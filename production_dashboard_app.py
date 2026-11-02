@@ -29,8 +29,9 @@ from multiples_home_small_systems_patch import install as install_multiples_home
 from live_yankee_credit_pacing_patch import install as install_live_yankee_credit_pacing
 from tennis_forward_readiness_patch import install as install_tennis_forward_readiness
 from tennis_forward_home_sync_fix import install as install_tennis_forward_home_sync_fix
+from tennis_predictive_readiness_embed_patch import install as install_tennis_predictive_readiness_embed
 
-BUILD_VERSION = "0.19.109"
+BUILD_VERSION = "0.19.110"
 
 # Keep all visible version surfaces aligned with the real production entrypoint.
 base.BUILD_VERSION = BUILD_VERSION
@@ -182,6 +183,18 @@ try:
 except Exception as exc:
     tennis_forward_home_sync_fix = {"installed": False, "error": f"{type(exc).__name__}: {exc}"}
 print(f"TENNIS_FORWARD_HOME_SYNC_FIX_INSTALL {tennis_forward_home_sync_fix}", flush=True)
+
+# Keep all TPRED/tennis evidence together for the user: append the four forward
+# readiness lanes and settlement health to the existing /tennis-predictive page.
+# This is presentation-only and reuses the already-computed readiness scoreboard.
+try:
+    tennis_predictive_readiness_embed = install_tennis_predictive_readiness_embed(
+        base.curated.base_app.app,
+        base.curated.base_app.db,
+    )
+except Exception as exc:
+    tennis_predictive_readiness_embed = {"installed": False, "error": f"{type(exc).__name__}: {exc}"}
+print(f"TENNIS_PREDICTIVE_READINESS_EMBED_INSTALL {tennis_predictive_readiness_embed}", flush=True)
 
 print(
     "MULTIPLES_BUDGET_REALLOCATION "
