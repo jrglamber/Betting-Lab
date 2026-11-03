@@ -700,12 +700,20 @@ class MultiSportShadowEngine:
         due=[]
         for row in rows:
             next_mins=_next_event_minutes(self.db,row["sport_key"],now);b_int=_broad_interval_minutes(next_mins);c_int=_convergence_interval_minutes(next_mins)
+            # NCAAF-only reference freshness, preserving the existing global quota.
+            if row["sport_key"] == "americanfootball_ncaaf" and next_mins is not None and 0 < next_mins <= 360:
+                b_int = 15 if next_mins <= 90 else 45
             if _is_due(row.get("last_broad_poll_at"),b_int,now):
                 due.append({"mode":"breadth","sport_key":row["sport_key"],"title":row["title"],"lateness":_lateness(row.get("last_broad_poll_at"),b_int,now),"next_mins":next_mins})
             has_consensus=self.db.fetchone("SELECT id FROM multisport_consensus_snapshots WHERE sport_key=? LIMIT 1",(row["sport_key"],))
             if has_consensus and _is_due(row.get("last_convergence_poll_at"),c_int,now):
                 due.append({"mode":"convergence","sport_key":row["sport_key"],"title":row["title"],"lateness":_lateness(row.get("last_convergence_poll_at"),c_int,now),"next_mins":next_mins})
-        return sorted(due,key=lambda x:(10**9 if x["next_mins"] is None else max(0.0,float(x["next_mins"])),-float(x["lateness"]),0 if x["mode"]=="breadth" else 1,x["sport_key"]))
+        # Prioritize the NCAAF reference near kickoff; keep the four-poll cycle cap.
+        return sorted(due,key=lambda x:(
+            0 if (x["sport_key"]=="americanfootball_ncaaf" and x["mode"]=="breadth"
+                  and x["next_mins"] is not None and 0 < x["next_mins"] <= 90) else 1,
+            10**9 if x["next_mins"] is None else max(0.0,float(x["next_mins"])),
+            -float(x["lateness"]),0 if x["mode"]=="breadth" else 1,x["sport_key"]))
 
     def _poll_breadth(self,target:Mapping[str,Any],now:datetime)->Dict[str,Any]:
         allowed,reason=self.quota.decide(1)
