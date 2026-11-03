@@ -103,7 +103,7 @@ def report(path):
                                   "hits": sum(str(r.get("fhg_hit")).lower() in ("1", "true") for r in rows
                                               if r.get("status") == "SETTLED")}
                             for tier, rows in ((t, [r for r in fhg if r.get("tier") == t])
-                                               for t in sorted({r.get("tier") for r in fhg}))},
+                                               for t in sorted({r.get("tier") for r in fhg}, key=str))},
             },
             "limitations": [
                 "These are observational, overlapping research cohorts, not independent trials.",
