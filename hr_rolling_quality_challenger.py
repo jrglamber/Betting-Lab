@@ -21,6 +21,7 @@ from fastapi.responses import HTMLResponse
 
 import hit_rate_multiples_lab as hr
 import hr_portfolio_shadow as baseline
+import hr_market_integrity as integrity
 from db import sanitize_sensitive_text, utc_now_iso
 
 VERSION = "HR_ROLLING_QUALITY_CHALLENGER_V1"
@@ -146,7 +147,11 @@ def _rank_pool(items, all_book_options, now, earliest_quote, latest_quote, sourc
     seen = set()
     records = []
     for candidate, quote in items:
-        key = _identity(candidate)
+        if not integrity.market_actionable(candidate):
+            continue
+        # Same economic selection can arrive under different provider IDs;
+        # rank it once rather than awarding it multiple apparent positions.
+        key = integrity.selection_key(candidate)
         if key in seen:
             continue
         seen.add(key)
@@ -186,11 +191,13 @@ def _rank_pool(items, all_book_options, now, earliest_quote, latest_quote, sourc
 def _select(ranked, count):
     chosen, events = [], set()
     for item in ranked:
-        event = str(item["candidate"].get("event_id") or "")
-        if not event or event in events:
+        candidate = item["candidate"]
+        event = str(candidate.get("event_id") or "")
+        fixture = integrity.fixture_key(candidate)
+        if not event or fixture in events or not integrity.market_actionable(candidate):
             continue
         chosen.append(item)
-        events.add(event)
+        events.add(fixture)
         if len(chosen) == count:
             break
     return chosen if len(chosen) == count else []
