@@ -410,7 +410,7 @@ def _settle(db):
         db.execute("""UPDATE hr_quality_pairs SET status='SETTLED',
             baseline_pnl_units=?,quality_pnl_units=?,delta_pnl_units=?,settled_at=?
             WHERE baseline_group_id=?""",
-                   (b_pnl, q_pnl, q_pnl-b_pnl, utc_now_iso(), gid))
+                   (b_pnl, q_pnl, round(q_pnl-b_pnl, 8), utc_now_iso(), gid))
         settled += 1
     return settled
 
