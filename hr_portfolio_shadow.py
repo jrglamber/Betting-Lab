@@ -19,11 +19,10 @@ from fastapi.responses import HTMLResponse
 import hit_rate_multiples_lab as hr
 from db import sanitize_sensitive_text, utc_now_iso
 
-VERSION = "HR_PORTFOLIO_FORWARD_2026_11_04_V1"
+VERSION = "HR_PORTFOLIO_FORWARD_2026_11_04_V2"
 MANUAL_BOOKS = ("williamhill", "ladbrokes_uk")
 TOTAL_STAKE_GBP = 10.0
 MAX_GROUPS_PER_DAY = 8
-MAX_GROUPS_PER_COHORT_DAY = 4
 MIN_LEAD_MINUTES = 10
 FORMATS = {
     "DOUBLE": ((2,), 2),
@@ -60,23 +59,28 @@ def _schema(db):
         return_units REAL, pnl_units REAL, settled_at TEXT,
         UNIQUE(group_id,format)
     )""")
+    db.execute("""CREATE TABLE IF NOT EXISTS hr_portfolio_lane_policy (
+        source_lane TEXT PRIMARY KEY, status TEXT NOT NULL DEFAULT 'ELIGIBLE',
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL, review_note TEXT NOT NULL
+    )""")
     db.execute("CREATE INDEX IF NOT EXISTS idx_hrp_groups_created ON hr_portfolio_groups(created_at)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_hrp_legs_event ON hr_portfolio_legs(event_id)")
 
 
 def _state(db):
-    row = db.fetchone("SELECT * FROM hr_portfolio_state WHERE id=1")
+    row = db.fetchone("SELECT * FROM hr_portfolio_state WHERE id=2")
     if row:
         return dict(row)
     now = utc_now_iso()
     rules = {
-        "policy": VERSION, "forward_only": True, "source_cohorts": ["HR2_ONLY", "HR2_PLUS_NCAAF"],
-        "experimental_ncaaf": "americanfootball_ncaaf H2H source odds 3.00<=p<5.00",
+        "policy": VERSION, "forward_only": True, "pool": "UNIFIED",
+        "ncaaf": "NCAAF H2H 3.00<=p<5.00; no minimum or maximum share",
+        "lane_governance": "ELIGIBLE enters shadow; WATCH/PAUSED excluded, old evidence retained",
         "strict_same_book_only": list(MANUAL_BOOKS), "quote_freshness_minutes": 15,
-        "max_daily_groups": MAX_GROUPS_PER_DAY, "max_groups_per_cohort": MAX_GROUPS_PER_COHORT_DAY,
+        "max_daily_groups": MAX_GROUPS_PER_DAY, "no_source_quotas": True,
         "max_quote_spread_minutes": 5, "one_leg_per_event": True,
         "no_additional_quote_polls": True, "no_bet_authority": True,
-        "subsets": "first 2/3/4 frozen legs, as available",
+        "subsets": "first 2/3/4 qualifying frozen legs, as available",
         "four_leg_portfolio_allocation": {"DOUBLE": 0.5, "TRIXIE": 0.3, "YANKEE": 0.2},
         "three_leg_portfolio_allocation": {"DOUBLE": 0.6, "TRIXIE": 0.4},
         "two_leg_portfolio_allocation": {"DOUBLE": 1.0},
@@ -85,9 +89,9 @@ def _state(db):
     db.execute("""INSERT INTO hr_portfolio_state(
         id,started_at,policy_version,reference_stake_gbp,rules_json
     ) VALUES(?,?,?,?,?) ON CONFLICT(id) DO NOTHING""", (
-        1, now, VERSION, TOTAL_STAKE_GBP, json.dumps(rules, sort_keys=True),
+        2, now, VERSION, TOTAL_STAKE_GBP, json.dumps(rules, sort_keys=True),
     ))
-    return dict(db.fetchone("SELECT * FROM hr_portfolio_state WHERE id=1"))
+    return dict(db.fetchone("SELECT * FROM hr_portfolio_state WHERE id=2"))
 
 
 def _upcoming(candidate, now):
@@ -178,7 +182,12 @@ def _book_options(db, candidates, now, start):
     return by_book
 
 
-def _pick_unique(items, *, force_ncaaf):
+def _pick_unique(items):
+    """One coherent same-book slate; no special treatment by sport or lane.
+
+    A deliberately deterministic, pre-event FIFO baseline. Historical lane
+    performance is assessed separately; no retrospective winner selection.
+    """
     chosen = []
     events = set()
     pool = sorted(items, key=lambda pair: (
@@ -186,25 +195,35 @@ def _pick_unique(items, *, force_ncaaf):
         str(pair[0].get("event_id") or ""),
         str(pair[0].get("source_lane") or ""),
     ))
-    if force_ncaaf:
-        # The experimental mixed cohort includes a genuine NCAAF leg whenever
-        # it has a qualifying observed same-book price. No outcome-based choice.
-        nc = next((x for x in pool if str(x[0].get("source_lane") or "").startswith("NCAAF_")), None)
-        if not nc:
-            return []
-        chosen.append(nc)
-        events.add(str(nc[0]["event_id"]))
     for item in pool:
         eid = str(item[0].get("event_id") or "")
         if not eid or eid in events:
-            continue
-        if force_ncaaf and _leg_identity(item[0]) == _leg_identity(chosen[0][0]):
             continue
         chosen.append(item)
         events.add(eid)
         if len(chosen) == 4:
             break
     return chosen if len(chosen) >= 2 else []
+
+
+def _eligible_lanes(db, candidates):
+    """Freeze first-seen source-lane governance, retain prior review decisions."""
+    lanes = sorted({str(c.get("source_lane") or "") for c in candidates if c.get("source_lane")})
+    stamp = utc_now_iso()
+    for lane in lanes:
+        db.execute("""INSERT INTO hr_portfolio_lane_policy(
+            source_lane,status,created_at,updated_at,review_note
+        ) VALUES(?,?,?,?,?) ON CONFLICT(source_lane) DO NOTHING""", (
+            lane, "ELIGIBLE", stamp, stamp,
+            "Prospective unified-pool entry; review hit rate, CLV, ROI and sample before promotion",
+        ))
+    statuses = {
+        str(row["source_lane"]): str(row["status"]).upper()
+        for row in db.fetchall("SELECT source_lane,status FROM hr_portfolio_lane_policy")
+    }
+    return {
+        lane for lane in lanes if statuses.get(lane) == "ELIGIBLE"
+    }
 
 
 def _allocations(n):
@@ -221,28 +240,25 @@ def _form(db, now, state):
     ncaaf = _ncaaf_candidates(db, now)
     base_ids = {_leg_identity(c) for c in base}
     extra = [c for c in ncaaf if _leg_identity(c) not in base_ids]
+    # One pool: NCAAF can contribute 0, 1, 2, 3 or 4 legs.
+    # Old V1 comparison cohorts are archived and never fed new candidates.
+    eligible = _eligible_lanes(db, base + extra)
+    unified = [c for c in base + extra if str(c.get("source_lane") or "") in eligible]
     options = []
-    for cohort, pool in (
-        ("HR2_ONLY", base),
-        ("HR2_PLUS_NCAAF", base + extra),
-    ):
-        for book, entries in _book_options(db, pool, now, start).items():
-            picks = _pick_unique(entries, force_ncaaf=(cohort == "HR2_PLUS_NCAAF"))
-            if picks:
-                # All legs must be independently visible at the same bookmaker
-                # within a narrow time window, not merely some time today.
-                timestamps = [hr._parse(q.get("captured_at")) for _, q in picks]
-                if not all(timestamps) or max(timestamps)-min(timestamps) > timedelta(minutes=5):
-                    continue
-                options.append((cohort, book, picks))
+    for book, entries in _book_options(db, unified, now, start).items():
+        picks = _pick_unique(entries)
+        if picks:
+            timestamps = [hr._parse(q.get("captured_at")) for _, q in picks]
+            if all(timestamps) and max(timestamps)-min(timestamps) <= timedelta(minutes=5):
+                options.append(("UNIFIED", book, picks))
     today = now.date().isoformat() + "T00:00:00+00:00"
     formed = 0
     for cohort, book, picks in options:
         count = (db.fetchone(
-            "SELECT COUNT(*) AS n FROM hr_portfolio_groups WHERE created_at>=? AND cohort=?",
-            (today, cohort),
+            "SELECT COUNT(*) AS n FROM hr_portfolio_groups WHERE created_at>=? AND policy_version=?",
+            (today, VERSION),
         ) or {}).get("n") or 0
-        if int(count) >= MAX_GROUPS_PER_COHORT_DAY:
+        if int(count) >= MAX_GROUPS_PER_DAY:
             break
         identities = [_leg_identity(p[0]) for p in picks]
         raw = json.dumps([VERSION, cohort, book, identities], sort_keys=True)
@@ -279,7 +295,8 @@ def _form(db, now, state):
                 (gid, fmt, share, "OPEN"))
         formed += 1
     return {"formed": formed, "hr2_source_candidates": len(base),
-            "ncaaf_source_candidates": len(ncaaf), "ncaaf_extra_candidates": len(extra)}
+            "ncaaf_source_candidates": len(ncaaf), "ncaaf_extra_candidates": len(extra),
+            "eligible_lanes": len(eligible), "unified_candidates": len(unified)}
 
 
 def _return_for(format_name, legs):
@@ -340,19 +357,20 @@ def _settle(db):
 
 def status(db):
     _schema(db)
-    st = db.fetchone("SELECT * FROM hr_portfolio_state WHERE id=1") or {}
+    st = db.fetchone("SELECT * FROM hr_portfolio_state WHERE id=2") or {}
     groups = db.fetchall("""SELECT cohort,status,COUNT(*) AS n FROM hr_portfolio_groups
-        GROUP BY cohort,status ORDER BY cohort,status""")
+        WHERE policy_version=? GROUP BY cohort,status ORDER BY cohort,status""", (VERSION,))
     metrics = db.fetchall("""SELECT g.cohort,f.format,COUNT(*) AS settled,
         SUM(f.pnl_units) AS normalized_pnl_units,
         SUM(f.allocation_pct*f.pnl_units) AS portfolio_contribution_units
         FROM hr_portfolio_formats f JOIN hr_portfolio_groups g ON g.id=f.group_id
-        WHERE f.status='SETTLED' GROUP BY g.cohort,f.format ORDER BY g.cohort,f.format""")
+        WHERE f.status='SETTLED' AND g.policy_version=?
+        GROUP BY g.cohort,f.format ORDER BY g.cohort,f.format""", (VERSION,))
     group_pnl = db.fetchall("""SELECT g.id,g.cohort,g.settled_at,
         SUM(f.allocation_pct*f.pnl_units) AS weighted_pnl_units
         FROM hr_portfolio_groups g JOIN hr_portfolio_formats f ON f.group_id=g.id
-        WHERE g.status='SETTLED' AND f.status='SETTLED'
-        GROUP BY g.id,g.cohort,g.settled_at ORDER BY g.settled_at,g.id""")
+        WHERE g.status='SETTLED' AND f.status='SETTLED' AND g.policy_version=?
+        GROUP BY g.id,g.cohort,g.settled_at ORDER BY g.settled_at,g.id""", (VERSION,))
     portfolio = {}
     for raw in group_pnl:
         cohort = str(raw["cohort"])
@@ -383,13 +401,53 @@ def status(db):
         g.status,g.selection_count,
         (SELECT COUNT(*) FROM hr_portfolio_legs l WHERE l.group_id=g.id
          AND l.source_lane LIKE 'NCAAF_%') AS ncaaf_legs
-        FROM hr_portfolio_groups g ORDER BY g.id DESC LIMIT 25""")
+        FROM hr_portfolio_groups g WHERE g.policy_version=? ORDER BY g.id DESC LIMIT 25""", (VERSION,))
+    lane_policy = db.fetchall("""SELECT source_lane,status,review_note,updated_at
+        FROM hr_portfolio_lane_policy ORDER BY source_lane""")
+    leg_rows = db.fetchall("""SELECT l.source_lane,l.event_id,l.market_key,l.selection,l.point,
+        l.result,l.entry_odds
+        FROM hr_portfolio_legs l JOIN hr_portfolio_groups g ON g.id=l.group_id
+        WHERE g.policy_version=? ORDER BY l.id""", (VERSION,))
+    lane_summary = {}
+    for raw in leg_rows:
+        lane = str(raw.get("source_lane") or "")
+        d = lane_summary.setdefault(lane, {"source_lane": lane, "appearances": 0,
+                                           "unique_selections": 0, "settled": 0,
+                                           "wins": 0, "singles_pnl_units": 0.0})
+        d["appearances"] += 1
+        identity = _leg_identity(raw)
+        seen = d.setdefault("_seen", set())
+        if identity in seen:
+            continue
+        seen.add(identity)
+        d["unique_selections"] += 1
+        outcome = hr._result(raw.get("result"))
+        if outcome is None:
+            continue
+        d["settled"] += 1
+        d["wins"] += int(outcome == "WIN")
+        d["singles_pnl_units"] += (
+            float(raw.get("entry_odds") or 0)-1 if outcome == "WIN"
+            else -1.0 if outcome == "LOSS" else 0.0
+        )
+    for d in lane_summary.values():
+        d.pop("_seen", None)
+        d["hit_rate_pct"] = 100*d["wins"]/d["settled"] if d["settled"] else None
+        d["singles_roi_pct"] = 100*d["singles_pnl_units"]/d["settled"] if d["settled"] else None
+    legacy = db.fetchall("""SELECT policy_version,cohort,COUNT(*) AS groups
+        FROM hr_portfolio_groups WHERE policy_version<>?
+        GROUP BY policy_version,cohort ORDER BY policy_version,cohort""", (VERSION,))
     return {
         "version": VERSION, "research_only": True, "no_provider_calls": True,
+        "pool": "UNIFIED", "no_ncaaf_minimum_or_maximum": True,
+        "selection_policy": "FIFO baseline; model-ranked optimiser is not validated",
         "started_at": st.get("started_at"), "bookmakers": list(MANUAL_BOOKS),
         "daily_group_cap": MAX_GROUPS_PER_DAY,
         "groups": [dict(x) for x in groups], "formats": format_rows,
         "portfolio": list(portfolio.values()),
+        "lane_policy": [dict(x) for x in lane_policy],
+        "lane_metrics": list(lane_summary.values()),
+        "archived_v1_groups": [dict(x) for x in legacy],
         "latest_groups": [dict(x) for x in latest],
         "warning": "NCAAF outcome ROI positive but A/B CLV negative; independent forward verification required",
     }
@@ -464,9 +522,12 @@ def install(app, db):
             "<p>Forward from {}. Strict William Hill/Ladbrokes quotes; no additional polling. "
             "Per group: £10 total not £10 per format. Compare all valid formats and a "
             "singles benchmark on the same frozen leg set.</p>"
-            "<p><strong>NCAAF 3.00–4.99 is experimental.</strong> "
-            "HR2-only control and HR2+NCAAF cohorts remain separate. "
-            "No Telegram alerts, real wagers or changes to original HR2.</p>"
+            "<p><strong>One unified selection pool.</strong> Eligible HR2 and NCAAF 3.00–4.99 "
+            "legs compete without any sport quota: a group may have zero or all NCAAF. "
+            "Historical V1 cohorts remain archived, not mixed into these results. "
+            "Selection is currently a frozen chronological baseline, not a validated "
+            "EV optimiser. Lanes can be downgraded to WATCH/PAUSED as evidence develops. "
+            "No alerts, real wagers or changes to original HR2.</p>"
             "<h2>Portfolio comparison (£10 total/group)</h2><table border='1' cellpadding='6'>"
             "<tr><th>Cohort</th><th>Settled groups</th><th>P/L</th><th>ROI</th><th>Max DD</th></tr>{}</table>"
             "<h2>Settled format benchmarks</h2><table border='1' cellpadding='6'>"
@@ -481,7 +542,7 @@ def install(app, db):
 
     # Keep status/results in both weekly and manual export bundles.
     tables = ("hr_portfolio_state", "hr_portfolio_groups",
-              "hr_portfolio_legs", "hr_portfolio_formats")
+              "hr_portfolio_legs", "hr_portfolio_formats", "hr_portfolio_lane_policy")
     try:
         import exporter
         exporter.EXPORT_TABLES = tuple(dict.fromkeys(tuple(exporter.EXPORT_TABLES) + tables))
@@ -505,5 +566,5 @@ def install(app, db):
     hr._page = page_with_link
     _INSTALLED = True
     return {"installed": True, "version": VERSION, "forward_only": True,
-            "ncaaf_pool": "experimental mixed cohort", "extra_paid_api_calls": 0,
+            "ncaaf_pool": "unified no sport quotas", "extra_paid_api_calls": 0,
             "execution_authority": False, "tables": tables}
