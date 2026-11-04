@@ -16,6 +16,7 @@ import json
 
 from db import sanitize_sensitive_text, utc_now_iso
 import hr_portfolio_shadow as portfolio
+import hr_market_integrity as integrity
 import hit_rate_multiples_lab as hr
 import telegram_alerts
 
@@ -97,8 +98,10 @@ def _valid(group, legs, now):
         return False, "not_supported_bookmaker"
     if count not in (2, 3, 4) or len(legs) != count:
         return False, "incomplete_group"
-    if len({str(x.get("event_id")) for x in legs}) != count:
+    if len({integrity.fixture_key(x) for x in legs}) != count:
         return False, "repeat_fixture"
+    if any(not integrity.market_actionable(x) for x in legs):
+        return False, "market_line_missing"
     quotes = [_stamp(x.get("quote_captured_at")) for x in legs]
     kicks = [_stamp(x.get("commence_time")) for x in legs]
     if not all(quotes) or not all(kicks):
@@ -118,7 +121,7 @@ def _valid(group, legs, now):
 
 def _signature(legs):
     identities = sorted(
-        [list(portfolio._leg_identity(x)) for x in legs],
+        [list(integrity.selection_key(x)) for x in legs],
         key=lambda item: json.dumps(item, sort_keys=True),
     )
     return sha256(json.dumps(identities, sort_keys=True).encode("utf-8")).hexdigest()
