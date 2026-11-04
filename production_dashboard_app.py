@@ -37,7 +37,7 @@ from tennis_forward_home_sync_fix import install as install_tennis_forward_home_
 from tennis_predictive_readiness_embed_patch import install as install_tennis_predictive_readiness_embed
 from verified_jacquet_machac_rescue import run_once as repair_verified_jacquet_machac
 
-BUILD_VERSION = "0.19.128"
+BUILD_VERSION = "0.19.129"
 
 # Keep all visible version surfaces aligned with the real production entrypoint.
 base.BUILD_VERSION = BUILD_VERSION
@@ -306,6 +306,19 @@ try:
 except Exception as exc:
     hr_portfolio_queues = {"installed": False, "error": f"{type(exc).__name__}: {exc}"}
 print(f"HR_PORTFOLIO_QUEUES_INSTALL {hr_portfolio_queues}", flush=True)
+
+# Read-only matched-pick ROI: each settled multiple is compared against singles
+# formed from the exact same frozen selections and prices, at equal total stake.
+# This is a diagnostic only: no settlement mutations, selections or provider calls.
+try:
+    from singles_vs_multiples_roi_audit import install as install_singles_vs_multiples_roi
+    singles_vs_multiples_roi = install_singles_vs_multiples_roi(
+        base.curated.base_app.app, base.curated.base_app.db
+    )
+except Exception as exc:
+    singles_vs_multiples_roi = {"installed": False, "error": f"{type(exc).__name__}: {exc}"}
+print(f"SINGLES_VS_MULTIPLES_INSTALL {singles_vs_multiples_roi}", flush=True)
+
 
 # Reconcile the independently verified 2 November ATP Paris result against every
 # locally recorded exact fixture ID, then run ordinary shadow/card settlement.
