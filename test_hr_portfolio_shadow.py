@@ -40,27 +40,47 @@ def test_fixed_total_stake_is_not_triple_counted():
     assert _allocations(4)["DOUBLE"] == 0.5
 
 
-def test_forced_ncaaf_is_one_of_distinct_events():
-    rows = [
-        ({"event_id": "A", "source_lane": "NORMAL", "source_created_at": "2026-11-04T01:00:00Z",
-          "market_key": "h2h", "selection": "a"}, {"price": 2}),
-        ({"event_id": "A", "source_lane": "NORMAL", "source_created_at": "2026-11-04T01:00:01Z",
-          "market_key": "h2h", "selection": "other"}, {"price": 2}),
-        ({"event_id": "B", "source_lane": "NCAAF_3_TO_4_99_EXPERIMENTAL",
-          "source_created_at": "2026-11-04T02:00:00Z",
-          "market_key": "h2h", "selection": "b"}, {"price": 4}),
-    ]
-    picked = _pick_unique(rows, force_ncaaf=True)
-    assert len(picked) == 2
-    assert picked[0][0]["event_id"] == "B"
-    assert {x[0]["event_id"] for x in picked} == {"A", "B"}
+def _row(event, lane, created, price=2):
+    return (
+        {"event_id": event, "source_lane": lane, "source_created_at": created,
+         "market_key": "h2h", "selection": event.lower()},
+        {"price": price, "captured_at": "2026-11-04T12:00:00Z"},
+    )
 
 
-def test_ncaaf_cohort_cannot_be_formed_without_ncaaf():
+def test_unified_pool_can_have_zero_ncaaf():
     rows = [
-        ({"event_id": "A", "source_lane": "NORMAL", "source_created_at": "2026-11-04",
-          "market_key": "h2h", "selection": "a"}, {"price": 2}),
-        ({"event_id": "B", "source_lane": "NORMAL", "source_created_at": "2026-11-04",
-          "market_key": "h2h", "selection": "b"}, {"price": 2}),
+        _row("A", "FOOTBALL", "2026-11-04T01:00:00Z"),
+        _row("B", "EUROLEAGUE", "2026-11-04T01:01:00Z"),
+        _row("C", "FOOTBALL", "2026-11-04T01:02:00Z"),
+        _row("D", "NFL", "2026-11-04T01:03:00Z"),
     ]
-    assert _pick_unique(rows, force_ncaaf=True) == []
+    chosen = _pick_unique(rows)
+    assert len(chosen) == 4
+    assert not any("NCAAF" in r[0]["source_lane"] for r in chosen)
+
+
+def test_unified_pool_can_have_all_ncaaf():
+    rows = [
+        _row("A", "NCAAF_3_TO_4_99_EXPERIMENTAL", "2026-11-04T01:00:00Z", 4),
+        _row("B", "NCAAF_3_TO_4_99_EXPERIMENTAL", "2026-11-04T01:01:00Z", 3),
+        _row("C", "NCAAF_3_TO_4_99_EXPERIMENTAL", "2026-11-04T01:02:00Z", 4),
+        _row("D", "NCAAF_3_TO_4_99_EXPERIMENTAL", "2026-11-04T01:03:00Z", 3),
+    ]
+    chosen = _pick_unique(rows)
+    assert len(chosen) == 4
+    assert all("NCAAF" in r[0]["source_lane"] for r in chosen)
+
+
+def test_unified_pool_flexible_mixed_and_unique_events():
+    rows = [
+        _row("A", "FOOTBALL", "2026-11-04T01:00:00Z"),
+        _row("A", "NCAAF_3_TO_4_99_EXPERIMENTAL", "2026-11-04T01:00:01Z"),
+        _row("B", "NCAAF_3_TO_4_99_EXPERIMENTAL", "2026-11-04T01:01:00Z", 4),
+        _row("C", "EUROLEAGUE", "2026-11-04T01:02:00Z"),
+        _row("D", "NCAAF_3_TO_4_99_EXPERIMENTAL", "2026-11-04T01:03:00Z", 4),
+    ]
+    chosen = _pick_unique(rows)
+    assert len(chosen) == 4
+    assert len({x[0]["event_id"] for x in chosen}) == 4
+    assert sum("NCAAF" in x[0]["source_lane"] for x in chosen) == 2
