@@ -337,6 +337,17 @@ def build_uefa_coverage_export(db, settings, app_version: str):
     # Read-only export diagnostics; does not alter model/odds polling/betting.
     from xcomp_review_integrity import enhance_export
     files = enhance_export(files)
+    # Read-only per-league settlement triage and market benchmark; never allow
+    # diagnostics to block the main fast Challenge export.
+    try:
+        from challenge_ops_integrity_audit import enhance_ops_export
+        files = enhance_ops_export(db, files)
+    except Exception as exc:
+        import traceback
+        print(f"CHALLENGE_OPS_AUDIT_FAILED {type(exc).__name__}: {exc}", flush=True)
+        files["challenge_ops_audit_error.txt"] = (
+            f"Research-only diagnostics unavailable: {type(exc).__name__}: {exc}\n"
+        ).encode()
     out = io.BytesIO()
     with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as z:
         for name, value in files.items():
