@@ -501,75 +501,8 @@ def install(app, db):
 
     @app.get("/hr-portfolio-shadow", response_class=HTMLResponse)
     def portfolio_page():
-        s = status(db)
-        rows = "".join(
-            "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>".format(
-                escape(str(x["cohort"])), escape(str(x["format"])),
-                x["settled"], "{:+.2f}".format(float(x["normalized_pnl_units"] or 0)),
-            ) for x in s["formats"]
-        ) or "<tr><td colspan='4'>Awaiting forward settled comparisons</td></tr>"
-        portfolio_rows = "".join(
-            "<tr><td>{}</td><td>{}</td><td>{:+.2f}u</td><td>{:+.1f}%</td><td>{:.2f}u</td></tr>".format(
-                escape(str(x["cohort"])), int(x["settled_groups"]),
-                float(x["portfolio_pnl_units"]), float(x["portfolio_roi_pct"] or 0),
-                float(x["max_drawdown_units"]),
-            ) for x in s["portfolio"]
-        ) or "<tr><td colspan='5'>No portfolio settlements yet</td></tr>"
-        latest = "".join(
-            "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>".format(
-                int(x["id"]), escape(str(x["cohort"])), escape(str(x["bookmaker_key"])),
-                int(x["selection_count"]), escape(str(x["status"])),
-            ) for x in s["latest_groups"]
-        ) or "<tr><td colspan='5'>Awaiting two or more simultaneous same-book opportunities</td></tr>"
-        lanes = "".join(
-            "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>".format(
-                escape(str(x["source_lane"])),
-                int(x["unique_selections"]), int(x["settled"]),
-                "—" if x["hit_rate_pct"] is None else "{:.1f}%".format(x["hit_rate_pct"]),
-                "—" if x["singles_roi_pct"] is None else "{:+.1f}%".format(x["singles_roi_pct"]),
-            ) for x in s["lane_metrics"]
-        ) or "<tr><td colspan='5'>Awaiting frozen selections</td></tr>"
-        lane_states = "".join(
-            "<tr><td>{}</td><td>{}</td><td>{}</td></tr>".format(
-                escape(str(x["source_lane"])), escape(str(x["status"])),
-                escape(str(x["review_note"])),
-            ) for x in s["lane_policy"]
-        ) or "<tr><td colspan='3'>Awaiting eligible lanes</td></tr>"
-        mix = s["recent_ncaaf_mix"]
-        html = (
-            "<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>"
-            "<title>HR Portfolio Shadow</title></head><body>"
-            "<p><a href='/hit-rate-multiples'>← Hit-Rate Multiples</a></p>"
-            "<h1>HR Portfolio Shadow — research only</h1>"
-            "<p>Forward from {}. Strict William Hill/Ladbrokes quotes; no additional polling. "
-            "Per group: £10 total not £10 per format. Compare all valid formats and a "
-            "singles benchmark on the same frozen leg set.</p>"
-            "<p><strong>One unified selection pool.</strong> Eligible HR2 and NCAAF 3.00–4.99 "
-            "legs compete without any sport quota: a group may have zero or all NCAAF. "
-            "Historical V1 cohorts remain archived, not mixed into these results. "
-            "Selection is currently a frozen chronological baseline, not a validated "
-            "EV optimiser. Lanes can be downgraded to WATCH/PAUSED as evidence develops. "
-            "No alerts, real wagers or changes to original HR2.</p>"
-            "<h2>Portfolio comparison (£10 total/group)</h2><table border='1' cellpadding='6'>"
-            "<tr><th>Cohort</th><th>Settled groups</th><th>P/L</th><th>ROI</th><th>Max DD</th></tr>{}</table>"
-            "<p>Recent NCAAF mix (last 25 groups): none <strong>{}</strong> · "
-            "mixed <strong>{}</strong> · all NCAAF <strong>{}</strong>.</p>"
-            "<h2>Settled format benchmarks</h2><table border='1' cellpadding='6'>"
-            "<tr><th>Cohort</th><th>Format</th><th>Settled</th><th>Normalised P&amp;L (u)</th></tr>"
-            "{}"
-            "</table><h2>Per-lane forward evidence</h2><p>Unique underlying selections, "
-            "not duplicated card appearances. Descriptive ROI, not proof of edge.</p>"
-            "<table border='1' cellpadding='6'><tr><th>Lane</th><th>Unique</th>"
-            "<th>Settled</th><th>Hit rate</th><th>Singles ROI</th></tr>{}</table>"
-            "<h2>Lane eligibility</h2><table border='1' cellpadding='6'>"
-            "<tr><th>Lane</th><th>Status</th><th>Review note</th></tr>{}</table>"
-            "<h2>Latest shadow groups</h2><table border='1' cellpadding='6'>"
-            "<tr><th>ID</th><th>Cohort</th><th>Bookmaker</th><th>Legs</th><th>Status</th></tr>{}</table>"
-            "<p><a href='/api/hr-portfolio-shadow/status'>Machine-readable status</a></p>"
-            "</body></html>"
-        ).format(escape(str(s["started_at"] or "first maintenance")), portfolio_rows,
-                 mix["zero"], mix["some"], mix["all"], rows, lanes, lane_states, latest)
-        return HTMLResponse(html)
+        from hr_portfolio_presentation import render_portfolio
+        return HTMLResponse(render_portfolio(status(db)))
 
     # Keep status/results in both weekly and manual export bundles.
     tables = ("hr_portfolio_state", "hr_portfolio_groups",
@@ -586,14 +519,14 @@ def install(app, db):
     except Exception as exc:
         print(f"HR_PORTFOLIO_SPLIT_EXPORT_ERROR {type(exc).__name__}: {exc}", flush=True)
 
+    # Keep navigation at the top of the existing HR Lab, not below its
+    # accumulated cards. Share the same destination with the challenger.
     previous_page = hr._page
+
     def page_with_link(web_module):
-        body = previous_page(web_module)
-        if "href='/hr-portfolio-shadow'" not in body:
-            body = body.replace(
-                "</body>", "<p><a href='/hr-portfolio-shadow'>HR Portfolio Shadow (new)</a></p></body>", 1,
-            )
-        return body
+        from hr_portfolio_presentation import main_hr_quicklinks
+        return main_hr_quicklinks(previous_page(web_module))
+
     hr._page = page_with_link
     _INSTALLED = True
     return {"installed": True, "version": VERSION, "forward_only": True,
