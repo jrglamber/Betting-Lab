@@ -201,7 +201,14 @@ def _maybe_send_connection_test(db: Database, bot_token: str, chat_id: str) -> b
     return True
 
 
-def _send_telegram(bot_token: str, chat_id: str, text: str) -> Dict[str, Any]:
+def _send_telegram(
+    bot_token: str, chat_id: str, text: str, *, source: str = ""
+) -> Dict[str, Any]:
+    # Deployment-wide outbound allowlist: only the chronological HR Portfolio
+    # Shadow can send Telegram. Protects against legacy senders being
+    # accidentally reactivated by another research/worker wrapper.
+    if source != "HR_PORTFOLIO_SHADOW":
+        raise RuntimeError("TELEGRAM_SOURCE_DISABLED: HR_PORTFOLIO_SHADOW_ONLY")
     endpoint = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     body = parse.urlencode({
         "chat_id": chat_id,
