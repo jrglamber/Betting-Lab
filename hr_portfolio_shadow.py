@@ -1,0 +1,509 @@
+from __future__ import annotations
+
+"""Forward-only, zero-provider-cost HR portfolio shadow.
+
+This is intentionally separate from frozen HR1/HR2 and Live Yankee streams.
+No bookmaker execution, Telegram alerts, quote polling or change to HR policy.
+The first study uses fixed, preregistered rules rather than optimizing to ROI.
+"""
+
+from datetime import datetime, timedelta, timezone
+from html import escape
+from itertools import combinations
+from math import prod
+from typing import Any, Mapping
+import hashlib
+import json
+
+from fastapi.responses import HTMLResponse
+import hit_rate_multiples_lab as hr
+from db import sanitize_sensitive_text, utc_now_iso
+
+VERSION = "HR_PORTFOLIO_FORWARD_2026_11_04_V1"
+MANUAL_BOOKS = ("williamhill", "ladbrokes_uk")
+TOTAL_STAKE_GBP = 10.0
+MAX_GROUPS_PER_DAY = 8
+MAX_GROUPS_PER_COHORT_DAY = 4
+MIN_LEAD_MINUTES = 10
+FORMATS = {
+    "DOUBLE": ((2,), 2),
+    "TRIXIE": ((2, 3), 3),
+    "YANKEE": ((2, 3, 4), 4),
+}
+_INSTALLED = False
+
+
+def _schema(db):
+    id_type = "BIGSERIAL PRIMARY KEY" if db.is_postgres else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    db.execute("""CREATE TABLE IF NOT EXISTS hr_portfolio_state (
+        id INTEGER PRIMARY KEY, started_at TEXT NOT NULL, policy_version TEXT NOT NULL,
+        reference_stake_gbp REAL NOT NULL, rules_json TEXT NOT NULL
+    )""")
+    db.execute(f"""CREATE TABLE IF NOT EXISTS hr_portfolio_groups (
+        id {id_type}, group_key TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL,
+        policy_version TEXT NOT NULL, cohort TEXT NOT NULL, bookmaker_key TEXT NOT NULL,
+        selection_count INTEGER NOT NULL, status TEXT NOT NULL,
+        reference_stake_gbp REAL NOT NULL, settled_at TEXT
+    )""")
+    db.execute(f"""CREATE TABLE IF NOT EXISTS hr_portfolio_legs (
+        id {id_type}, group_id INTEGER NOT NULL, leg_order INTEGER NOT NULL,
+        source_lane TEXT NOT NULL, source_table TEXT NOT NULL, source_id INTEGER NOT NULL,
+        event_id TEXT NOT NULL, sport_key TEXT, market_key TEXT NOT NULL,
+        selection TEXT NOT NULL, point REAL, entry_odds REAL NOT NULL,
+        bookmaker_key TEXT NOT NULL, quote_captured_at TEXT NOT NULL,
+        home_team TEXT, away_team TEXT, commence_time TEXT,
+        result TEXT, settled_at TEXT, UNIQUE(group_id,leg_order)
+    )""")
+    db.execute(f"""CREATE TABLE IF NOT EXISTS hr_portfolio_formats (
+        id {id_type}, group_id INTEGER NOT NULL, format TEXT NOT NULL,
+        allocation_pct REAL NOT NULL, status TEXT NOT NULL,
+        return_units REAL, pnl_units REAL, settled_at TEXT,
+        UNIQUE(group_id,format)
+    )""")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_hrp_groups_created ON hr_portfolio_groups(created_at)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_hrp_legs_event ON hr_portfolio_legs(event_id)")
+
+
+def _state(db):
+    row = db.fetchone("SELECT * FROM hr_portfolio_state WHERE id=1")
+    if row:
+        return dict(row)
+    now = utc_now_iso()
+    rules = {
+        "policy": VERSION, "forward_only": True, "source_cohorts": ["HR2_ONLY", "HR2_PLUS_NCAAF"],
+        "experimental_ncaaf": "americanfootball_ncaaf H2H source odds 3.00<=p<5.00",
+        "strict_same_book_only": list(MANUAL_BOOKS), "quote_freshness_minutes": 15,
+        "max_daily_groups": MAX_GROUPS_PER_DAY, "max_groups_per_cohort": MAX_GROUPS_PER_COHORT_DAY,
+        "max_quote_spread_minutes": 5, "one_leg_per_event": True,
+        "no_additional_quote_polls": True, "no_bet_authority": True,
+        "subsets": "first 2/3/4 frozen legs, as available",
+        "four_leg_portfolio_allocation": {"DOUBLE": 0.5, "TRIXIE": 0.3, "YANKEE": 0.2},
+        "three_leg_portfolio_allocation": {"DOUBLE": 0.6, "TRIXIE": 0.4},
+        "two_leg_portfolio_allocation": {"DOUBLE": 1.0},
+        "singles_benchmark": "all group legs equal weight; zero portfolio allocation",
+    }
+    db.execute("""INSERT INTO hr_portfolio_state(
+        id,started_at,policy_version,reference_stake_gbp,rules_json
+    ) VALUES(?,?,?,?,?) ON CONFLICT(id) DO NOTHING""", (
+        1, now, VERSION, TOTAL_STAKE_GBP, json.dumps(rules, sort_keys=True),
+    ))
+    return dict(db.fetchone("SELECT * FROM hr_portfolio_state WHERE id=1"))
+
+
+def _upcoming(candidate, now):
+    kick = hr._parse(candidate.get("commence_time"))
+    return bool(kick and now + timedelta(minutes=MIN_LEAD_MINUTES) < kick <=
+                now + timedelta(hours=hr.FORMATION_HORIZON_HOURS))
+
+
+def _base_candidates(db, now):
+    policy = (db.fetchone(
+        "SELECT policy_version FROM hit_rate_policy_versions WHERE is_active=1 "
+        "ORDER BY activated_at DESC LIMIT 1"
+    ) or {}).get("policy_version")
+    if not policy:
+        return []
+    rows = db.fetchall("""SELECT * FROM hit_rate_candidates
+        WHERE policy_version=? AND experiment_key='HR2' AND
+              status IN ('QUEUED','CONSUMED') ORDER BY first_seen_at,id LIMIT 1200""",
+        (policy,))
+    out = []
+    seen = set()
+    for raw in rows:
+        c = dict(raw)
+        if not _upcoming(c, now):
+            continue
+        key = _leg_identity(c)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(c)
+    return out
+
+
+def _ncaaf_candidates(db, now):
+    rows = db.fetchall("""SELECT b.id AS source_id,b.created_at AS source_created_at,
+           b.event_id,e.sport_key,e.league_title AS league,e.commence_time,
+           e.home_team,e.away_team,'h2h' AS market_key,b.selection,
+           NULL AS point,b.min_odds,b.offered_odds AS source_odds
+        FROM multisport_execution_bets b
+        JOIN multisport_events e ON e.event_id=b.event_id
+        WHERE b.status='OPEN' AND e.status='UPCOMING'
+          AND lower(e.sport_key) LIKE '%ncaaf%'
+          AND b.offered_odds>=3.0 AND b.offered_odds<5.0
+        ORDER BY b.created_at,b.id LIMIT 300""")
+    out = []
+    for r in rows:
+        c = dict(r)
+        if not _upcoming(c, now):
+            continue
+        if float(c.get("min_odds") or 0) <= 1:
+            continue
+        c.update(
+            source_lane="NCAAF_3_TO_4_99_EXPERIMENTAL",
+            source_table="multisport_execution_bets",
+            band_min=3.0, band_max=5.0,
+            first_seen_at=c.get("source_created_at"),
+        )
+        out.append(c)
+    return out
+
+
+def _leg_identity(c):
+    return (
+        str(c.get("event_id") or "").lower(),
+        str(c.get("market_key") or "").lower(),
+        str(c.get("selection") or "").strip().lower(),
+        str(c.get("point") if c.get("point") is not None else ""),
+    )
+
+
+def _book_options(db, candidates, now, start):
+    by_book = {b: [] for b in MANUAL_BOOKS}
+    for c in candidates:
+        # hr._quotes enforces source/market/point, minimum odds, odds band,
+        # quote timestamp and 15-minute freshness. Never use loose tolerance.
+        try:
+            quoted = hr._quotes(db, c, now, False)
+        except Exception:
+            continue
+        for book in MANUAL_BOOKS:
+            q = quoted.get(book)
+            if not q:
+                continue
+            ts = hr._parse(q.get("captured_at"))
+            if not ts or ts < start:
+                continue
+            by_book[book].append((dict(c), dict(q)))
+    return by_book
+
+
+def _pick_unique(items, *, force_ncaaf):
+    chosen = []
+    events = set()
+    pool = sorted(items, key=lambda pair: (
+        str(pair[0].get("source_created_at") or pair[0].get("first_seen_at") or ""),
+        str(pair[0].get("event_id") or ""),
+        str(pair[0].get("source_lane") or ""),
+    ))
+    if force_ncaaf:
+        # The experimental mixed cohort includes a genuine NCAAF leg whenever
+        # it has a qualifying observed same-book price. No outcome-based choice.
+        nc = next((x for x in pool if str(x[0].get("source_lane") or "").startswith("NCAAF_")), None)
+        if not nc:
+            return []
+        chosen.append(nc)
+        events.add(str(nc[0]["event_id"]))
+    for item in pool:
+        eid = str(item[0].get("event_id") or "")
+        if not eid or eid in events:
+            continue
+        if force_ncaaf and _leg_identity(item[0]) == _leg_identity(chosen[0][0]):
+            continue
+        chosen.append(item)
+        events.add(eid)
+        if len(chosen) == 4:
+            break
+    return chosen if len(chosen) >= 2 else []
+
+
+def _allocations(n):
+    if n >= 4:
+        return {"DOUBLE": 0.5, "TRIXIE": 0.3, "YANKEE": 0.2, "SINGLES": 0.0}
+    if n == 3:
+        return {"DOUBLE": 0.6, "TRIXIE": 0.4, "SINGLES": 0.0}
+    return {"DOUBLE": 1.0, "SINGLES": 0.0}
+
+
+def _form(db, now, state):
+    start = hr._parse(state["started_at"])
+    base = _base_candidates(db, now)
+    ncaaf = _ncaaf_candidates(db, now)
+    base_ids = {_leg_identity(c) for c in base}
+    extra = [c for c in ncaaf if _leg_identity(c) not in base_ids]
+    options = []
+    for cohort, pool in (
+        ("HR2_ONLY", base),
+        ("HR2_PLUS_NCAAF", base + extra),
+    ):
+        for book, entries in _book_options(db, pool, now, start).items():
+            picks = _pick_unique(entries, force_ncaaf=(cohort == "HR2_PLUS_NCAAF"))
+            if picks:
+                # All legs must be independently visible at the same bookmaker
+                # within a narrow time window, not merely some time today.
+                timestamps = [hr._parse(q.get("captured_at")) for _, q in picks]
+                if not all(timestamps) or max(timestamps)-min(timestamps) > timedelta(minutes=5):
+                    continue
+                options.append((cohort, book, picks))
+    today = now.date().isoformat() + "T00:00:00+00:00"
+    formed = 0
+    for cohort, book, picks in options:
+        count = (db.fetchone(
+            "SELECT COUNT(*) AS n FROM hr_portfolio_groups WHERE created_at>=? AND cohort=?",
+            (today, cohort),
+        ) or {}).get("n") or 0
+        if int(count) >= MAX_GROUPS_PER_COHORT_DAY:
+            break
+        identities = [_leg_identity(p[0]) for p in picks]
+        raw = json.dumps([VERSION, cohort, book, identities], sort_keys=True)
+        group_key = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+        if db.fetchone("SELECT id FROM hr_portfolio_groups WHERE group_key=?", (group_key,)):
+            continue
+        stamp = utc_now_iso()
+        db.execute("""INSERT INTO hr_portfolio_groups(
+            group_key,created_at,policy_version,cohort,bookmaker_key,
+            selection_count,status,reference_stake_gbp
+        ) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(group_key) DO NOTHING""", (
+            group_key, stamp, VERSION, cohort, book, len(picks), "OPEN", TOTAL_STAKE_GBP,
+        ))
+        g = db.fetchone("SELECT id FROM hr_portfolio_groups WHERE group_key=?", (group_key,))
+        if not g:
+            continue
+        gid = int(g["id"])
+        for i, (c, q) in enumerate(picks, 1):
+            db.execute("""INSERT INTO hr_portfolio_legs(
+                group_id,leg_order,source_lane,source_table,source_id,event_id,
+                sport_key,market_key,selection,point,entry_odds,bookmaker_key,
+                quote_captured_at,home_team,away_team,commence_time
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(group_id,leg_order) DO NOTHING""", (
+                gid, i, c["source_lane"], c["source_table"], int(c["source_id"]),
+                c["event_id"], c.get("sport_key"), c["market_key"], c["selection"],
+                c.get("point"), float(q["price"]), book, q["captured_at"],
+                c.get("home_team"), c.get("away_team"), c.get("commence_time"),
+            ))
+        for fmt, share in _allocations(len(picks)).items():
+            db.execute("""INSERT INTO hr_portfolio_formats(
+                group_id,format,allocation_pct,status
+            ) VALUES(?,?,?,?) ON CONFLICT(group_id,format) DO NOTHING""",
+                (gid, fmt, share, "OPEN"))
+        formed += 1
+    return {"formed": formed, "hr2_source_candidates": len(base),
+            "ncaaf_source_candidates": len(ncaaf), "ncaaf_extra_candidates": len(extra)}
+
+
+def _return_for(format_name, legs):
+    if format_name == "SINGLES":
+        orders = ((i,) for i in range(len(legs)))
+    else:
+        sizes, take = FORMATS[format_name]
+        if len(legs) < take:
+            return None
+        orders = (comb for size in sizes for comb in combinations(range(take), size))
+    lines = list(orders)
+    total = 0.0
+    for combo in lines:
+        if any(legs[i]["result"] == "LOSS" for i in combo):
+            continue
+        total += prod(
+            float(legs[i]["entry_odds"]) if legs[i]["result"] == "WIN" else 1.0
+            for i in combo
+        )
+    return total / len(lines) if lines else None
+
+
+def _settle(db):
+    finished = 0
+    groups = db.fetchall("SELECT * FROM hr_portfolio_groups WHERE status='OPEN' ORDER BY id")
+    for g in groups:
+        gid = int(g["id"])
+        legs = [dict(x) for x in db.fetchall(
+            "SELECT * FROM hr_portfolio_legs WHERE group_id=? ORDER BY leg_order", (gid,)
+        )]
+        if len(legs) != int(g["selection_count"]):
+            continue
+        for leg in legs:
+            if hr._result(leg.get("result")):
+                continue
+            result = hr._source_result(db, leg)
+            if result:
+                db.execute("""UPDATE hr_portfolio_legs SET result=?,settled_at=?
+                    WHERE id=?""", (result, utc_now_iso(), int(leg["id"])))
+                leg["result"] = result
+        if any(hr._result(x.get("result")) is None for x in legs):
+            continue
+        for leg in legs:
+            leg["result"] = hr._result(leg["result"])
+        for item in db.fetchall("SELECT * FROM hr_portfolio_formats WHERE group_id=?", (gid,)):
+            ret = _return_for(item["format"], legs)
+            if ret is None:
+                continue
+            db.execute("""UPDATE hr_portfolio_formats SET status='SETTLED',
+                return_units=?,pnl_units=?,settled_at=? WHERE id=?""", (
+                ret, ret-1.0, utc_now_iso(), int(item["id"]),
+            ))
+        db.execute("UPDATE hr_portfolio_groups SET status='SETTLED',settled_at=? WHERE id=?",
+                   (utc_now_iso(), gid))
+        finished += 1
+    return {"settled_groups": finished}
+
+
+def status(db):
+    _schema(db)
+    st = db.fetchone("SELECT * FROM hr_portfolio_state WHERE id=1") or {}
+    groups = db.fetchall("""SELECT cohort,status,COUNT(*) AS n FROM hr_portfolio_groups
+        GROUP BY cohort,status ORDER BY cohort,status""")
+    metrics = db.fetchall("""SELECT g.cohort,f.format,COUNT(*) AS settled,
+        SUM(f.pnl_units) AS normalized_pnl_units,
+        SUM(f.allocation_pct*f.pnl_units) AS portfolio_contribution_units
+        FROM hr_portfolio_formats f JOIN hr_portfolio_groups g ON g.id=f.group_id
+        WHERE f.status='SETTLED' GROUP BY g.cohort,f.format ORDER BY g.cohort,f.format""")
+    group_pnl = db.fetchall("""SELECT g.id,g.cohort,g.settled_at,
+        SUM(f.allocation_pct*f.pnl_units) AS weighted_pnl_units
+        FROM hr_portfolio_groups g JOIN hr_portfolio_formats f ON f.group_id=g.id
+        WHERE g.status='SETTLED' AND f.status='SETTLED'
+        GROUP BY g.id,g.cohort,g.settled_at ORDER BY g.settled_at,g.id""")
+    portfolio = {}
+    for raw in group_pnl:
+        cohort = str(raw["cohort"])
+        item = portfolio.setdefault(cohort, {
+            "cohort": cohort, "settled_groups": 0, "portfolio_pnl_units": 0.0,
+            "portfolio_roi_pct": None, "max_drawdown_units": 0.0,
+        })
+        pnl = float(raw.get("weighted_pnl_units") or 0)
+        item["settled_groups"] += 1
+        item["portfolio_pnl_units"] += pnl
+        # Peak starts at zero; losses cannot masquerade as drawdown recovery.
+        running = item["portfolio_pnl_units"]
+        peak = item.setdefault("_peak", 0.0)
+        peak = max(peak, running)
+        item["_peak"] = peak
+        item["max_drawdown_units"] = max(item["max_drawdown_units"], peak-running)
+    for item in portfolio.values():
+        n = item["settled_groups"]
+        item["portfolio_roi_pct"] = 100.0 * item["portfolio_pnl_units"] / n if n else None
+        item.pop("_peak", None)
+    format_rows = []
+    for row in metrics:
+        item = dict(row)
+        n = int(item.get("settled") or 0)
+        item["roi_pct"] = 100.0 * float(item.get("normalized_pnl_units") or 0) / n if n else None
+        format_rows.append(item)
+    latest = db.fetchall("""SELECT g.id,g.created_at,g.cohort,g.bookmaker_key,
+        g.status,g.selection_count,
+        (SELECT COUNT(*) FROM hr_portfolio_legs l WHERE l.group_id=g.id
+         AND l.source_lane LIKE 'NCAAF_%') AS ncaaf_legs
+        FROM hr_portfolio_groups g ORDER BY g.id DESC LIMIT 25""")
+    return {
+        "version": VERSION, "research_only": True, "no_provider_calls": True,
+        "started_at": st.get("started_at"), "bookmakers": list(MANUAL_BOOKS),
+        "daily_group_cap": MAX_GROUPS_PER_DAY,
+        "groups": [dict(x) for x in groups], "formats": format_rows,
+        "portfolio": list(portfolio.values()),
+        "latest_groups": [dict(x) for x in latest],
+        "warning": "NCAAF outcome ROI positive but A/B CLV negative; independent forward verification required",
+    }
+
+
+def run_maintenance(db, now=None):
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    now = now.astimezone(timezone.utc)
+    _schema(db)
+    st = _state(db)
+    formed = _form(db, now, st)
+    settled = _settle(db)
+    payload = {"version": VERSION, **formed, **settled}
+    db.record_collector_run("HR_PORTFOLIO_SHADOW_MAINT", True, detail=json.dumps(payload))
+    return payload
+
+
+def install(app, db):
+    global _INSTALLED
+    if _INSTALLED:
+        return {"installed": True, "already_installed": True, "version": VERSION}
+    previous = hr.run_maintenance
+
+    def with_portfolio(*args, **kwargs):
+        result = previous(*args, **kwargs)
+        try:
+            run_maintenance(args[0] if args else db, now=kwargs.get("now"))
+        except Exception as exc:
+            error = sanitize_sensitive_text(exc)
+            try:
+                db.record_collector_run("HR_PORTFOLIO_SHADOW_MAINT", False, detail=error)
+            except Exception:
+                pass
+            print(f"HR_PORTFOLIO_SHADOW_ERROR {type(exc).__name__}: {error}", flush=True)
+        return result
+
+    hr.run_maintenance = with_portfolio
+
+    @app.get("/api/hr-portfolio-shadow/status")
+    def portfolio_status():
+        return status(db)
+
+    @app.get("/hr-portfolio-shadow", response_class=HTMLResponse)
+    def portfolio_page():
+        s = status(db)
+        rows = "".join(
+            "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>".format(
+                escape(str(x["cohort"])), escape(str(x["format"])),
+                x["settled"], "{:+.2f}".format(float(x["normalized_pnl_units"] or 0)),
+            ) for x in s["formats"]
+        ) or "<tr><td colspan='4'>Awaiting forward settled comparisons</td></tr>"
+        portfolio_rows = "".join(
+            "<tr><td>{}</td><td>{}</td><td>{:+.2f}u</td><td>{:+.1f}%</td><td>{:.2f}u</td></tr>".format(
+                escape(str(x["cohort"])), int(x["settled_groups"]),
+                float(x["portfolio_pnl_units"]), float(x["portfolio_roi_pct"] or 0),
+                float(x["max_drawdown_units"]),
+            ) for x in s["portfolio"]
+        ) or "<tr><td colspan='5'>No portfolio settlements yet</td></tr>"
+        latest = "".join(
+            "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>".format(
+                int(x["id"]), escape(str(x["cohort"])), escape(str(x["bookmaker_key"])),
+                int(x["selection_count"]), escape(str(x["status"])),
+            ) for x in s["latest_groups"]
+        ) or "<tr><td colspan='5'>Awaiting two or more simultaneous same-book opportunities</td></tr>"
+        html = (
+            "<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>"
+            "<title>HR Portfolio Shadow</title></head><body>"
+            "<p><a href='/hit-rate-multiples'>← Hit-Rate Multiples</a></p>"
+            "<h1>HR Portfolio Shadow — research only</h1>"
+            "<p>Forward from {}. Strict William Hill/Ladbrokes quotes; no additional polling. "
+            "Per group: £10 total not £10 per format. Compare all valid formats and a "
+            "singles benchmark on the same frozen leg set.</p>"
+            "<p><strong>NCAAF 3.00–4.99 is experimental.</strong> "
+            "HR2-only control and HR2+NCAAF cohorts remain separate. "
+            "No Telegram alerts, real wagers or changes to original HR2.</p>"
+            "<h2>Portfolio comparison (£10 total/group)</h2><table border='1' cellpadding='6'>"
+            "<tr><th>Cohort</th><th>Settled groups</th><th>P/L</th><th>ROI</th><th>Max DD</th></tr>{}</table>"
+            "<h2>Settled format benchmarks</h2><table border='1' cellpadding='6'>"
+            "<tr><th>Cohort</th><th>Format</th><th>Settled</th><th>Normalised P&amp;L (u)</th></tr>"
+            "{}"
+            "</table><h2>Latest shadow groups</h2><table border='1' cellpadding='6'>"
+            "<tr><th>ID</th><th>Cohort</th><th>Bookmaker</th><th>Legs</th><th>Status</th></tr>{}</table>"
+            "<p><a href='/api/hr-portfolio-shadow/status'>Machine-readable status</a></p>"
+            "</body></html>"
+        ).format(escape(str(s["started_at"] or "first maintenance")), portfolio_rows, rows, latest)
+        return HTMLResponse(html)
+
+    # Keep status/results in both weekly and manual export bundles.
+    tables = ("hr_portfolio_state", "hr_portfolio_groups",
+              "hr_portfolio_legs", "hr_portfolio_formats")
+    try:
+        import exporter
+        exporter.EXPORT_TABLES = tuple(dict.fromkeys(tuple(exporter.EXPORT_TABLES) + tables))
+    except Exception as exc:
+        print(f"HR_PORTFOLIO_FULL_EXPORT_ERROR {type(exc).__name__}: {exc}", flush=True)
+    try:
+        import split_exporter
+        split_exporter.WEEKLY_TABLES = tuple(dict.fromkeys(tuple(split_exporter.WEEKLY_TABLES) + tables))
+        split_exporter.MANUAL_TABLES = tuple(dict.fromkeys(tuple(split_exporter.MANUAL_TABLES) + tables))
+    except Exception as exc:
+        print(f"HR_PORTFOLIO_SPLIT_EXPORT_ERROR {type(exc).__name__}: {exc}", flush=True)
+
+    previous_page = hr._page
+    def page_with_link(web_module):
+        body = previous_page(web_module)
+        if "href='/hr-portfolio-shadow'" not in body:
+            body = body.replace(
+                "</body>", "<p><a href='/hr-portfolio-shadow'>HR Portfolio Shadow (new)</a></p></body>", 1,
+            )
+        return body
+    hr._page = page_with_link
+    _INSTALLED = True
+    return {"installed": True, "version": VERSION, "forward_only": True,
+            "ncaaf_pool": "experimental mixed cohort", "extra_paid_api_calls": 0,
+            "execution_authority": False, "tables": tables}
