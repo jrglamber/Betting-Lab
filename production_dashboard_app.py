@@ -7,6 +7,7 @@ sitecustomize startup hook.
 """
 
 import adaptive_dashboard_app as base
+from football_coverage_expansion_patch import run_cross_comp_maintenance
 from uefa_fhg_coverage_export_patch import install as install_uefa_fhg_coverage_export
 from challenge_selection_framework_v5 import install as install_challenge_selection_framework_v5
 import credit_policy_unlimited_patch as credit_policy
@@ -35,7 +36,7 @@ from tennis_forward_readiness_patch import install as install_tennis_forward_rea
 from tennis_forward_home_sync_fix import install as install_tennis_forward_home_sync_fix
 from tennis_predictive_readiness_embed_patch import install as install_tennis_predictive_readiness_embed
 
-BUILD_VERSION = "0.19.116"
+BUILD_VERSION = "0.19.117"
 
 # Keep all visible version surfaces aligned with the real production entrypoint.
 base.BUILD_VERSION = BUILD_VERSION
@@ -44,6 +45,16 @@ base.dashboard_responsiveness.BUILD_VERSION = BUILD_VERSION
 base.curated.dashboard_layout_v2.VERSION = BUILD_VERSION
 base.curated.base_app.web_module.VERSION = BUILD_VERSION
 base.curated.base_app.app.version = BUILD_VERSION
+
+# New evidence-led £200→£2,000 manual challenge policy.  The adaptive
+# bootstrap has already installed the October legacy and CLV-first wrappers;
+# this export-only V5 layer supersedes their staking annotations, preserving
+# the legacy policy as separate historical files. No execution authority.
+try:
+    challenge_selection_framework_v5 = install_challenge_selection_framework_v5(BUILD_VERSION)
+except Exception as exc:
+    challenge_selection_framework_v5 = {"installed": False, "error": f"{type(exc).__name__}: {exc}"}
+print(f"CHALLENGE_SELECTION_FRAMEWORK_V5_INSTALL {challenge_selection_framework_v5}", flush=True)
 
 # The adaptive bootstrap installs FHG1 and cross-competition research;
 # the £200→£2,000 challenge wrapper is already installed in production.
@@ -55,15 +66,15 @@ except Exception as exc:
     uefa_fhg_coverage_export = {"installed": False, "error": f"{type(exc).__name__}: {exc}"}
 print(f"UEFA_FHG_COVERAGE_EXPORT_INSTALL {uefa_fhg_coverage_export}", flush=True)
 
-# New evidence-led £200→£2,000 manual challenge policy.  The adaptive
-# bootstrap has already installed the October legacy and CLV-first wrappers;
-# this export-only V5 layer supersedes their staking annotations, preserving
-# the legacy policy as separate historical files. No execution authority.
+
+# Ensure research-only cross-competition forecasts are reconciled at startup,
+# even if the existing periodic worker has not completed a cycle yet.
+# This uses stored local training/results only: zero paid provider calls.
 try:
-    challenge_selection_framework_v5 = install_challenge_selection_framework_v5(BUILD_VERSION)
+    uefa_xcomp_startup = run_cross_comp_maintenance(base.curated.base_app.db)
 except Exception as exc:
-    challenge_selection_framework_v5 = {"installed": False, "error": f"{type(exc).__name__}: {exc}"}
-print(f"CHALLENGE_SELECTION_FRAMEWORK_V5_INSTALL {challenge_selection_framework_v5}", flush=True)
+    uefa_xcomp_startup = {"error": f"{type(exc).__name__}: {exc}", "installed": False}
+print(f"UEFA_XCOMP_STARTUP_RECONCILIATION {uefa_xcomp_startup}", flush=True)
 
 # Final paid Odds-API quote budgets. Synchronise all still-live wrappers because
 # several historical patches resolve their caps dynamically on each refresh.
