@@ -70,8 +70,9 @@ def _first_seen(c):
     return str(c.get("source_created_at") or c.get("first_seen_at") or "")
 
 
-def _build_rows(candidates, eligible_lanes, by_book, now):
+def _build_rows(candidates, eligible_lanes, by_book, now, *, conflicting_fixtures=None):
     """Pure, deterministic assembly from an already-fetched quote cache."""
+    conflicting_fixtures = set(conflicting_fixtures or ())
     # A source candidate can be quoted by more than one bookmaker. Such rows
     # are displayed separately, not conflated into an imaginary one-book price.
     by_identity: dict[tuple[str, ...], dict[str, dict[str, Any]]] = {}
@@ -142,6 +143,9 @@ def _build_rows(candidates, eligible_lanes, by_book, now):
         if not lane_ok:
             excluded += 1
             choices = [(None, None, "WATCH_OR_PAUSED")]
+        elif integrity.fixture_key(c) in conflicting_fixtures:
+            waiting += 1
+            choices = [(None, None, "DIRECT_OPPOSITION_ABSTAIN")]
         elif not integrity.market_actionable(c):
             waiting += 1
             choices = [(None, None, "MISSING_MARKET_LINE")]
@@ -254,6 +258,12 @@ def _build_rows(candidates, eligible_lanes, by_book, now):
             str(c.get("source_lane") or "") in eligible_lanes
             and not integrity.market_actionable(c) for c in full_universe
         ),
+        "conflicting_fixtures_abstained": len(conflicting_fixtures),
+        "conflicting_candidate_options": sum(
+            integrity.fixture_key(c) in conflicting_fixtures
+            and str(c.get("source_lane") or "") in eligible_lanes
+            for c in full_universe
+        ),
         "visible_candidates": len(universe),
         "priced_visible_candidates": priced,
         "waiting_visible_candidates": waiting,
@@ -262,7 +272,8 @@ def _build_rows(candidates, eligible_lanes, by_book, now):
     }
 
 
-def capture(db, now, candidates, eligible_lanes, by_book):
+def capture(db, now, candidates, eligible_lanes, by_book, *,
+            conflicting_fixtures=None):
     """Called by the baseline from the already computed, same-book quote map."""
     _schema(db)
     current = db.fetchone("SELECT snapshot_at FROM hr_portfolio_queue_state WHERE id=1")
@@ -271,7 +282,10 @@ def capture(db, now, candidates, eligible_lanes, by_book):
         if last and (now-last).total_seconds() < MIN_REFRESH_SECONDS:
             return {"updated": False, "reason": "recent_snapshot"}
     snapshot_at = now.isoformat()
-    rows, metrics = _build_rows(candidates, eligible_lanes, by_book, now)
+    rows, metrics = _build_rows(
+        candidates, eligible_lanes, by_book, now,
+        conflicting_fixtures=conflicting_fixtures,
+    )
     fields = [
         "snapshot_at", "source_lane", "source_status", "event_id",
         "sport_key", "market_key", "selection", "point",
@@ -300,6 +314,8 @@ def capture(db, now, candidates, eligible_lanes, by_book):
         "raw_source_rows": metrics["raw_source_rows"],
         "merged_source_rows": metrics["merged_source_rows"],
         "missing_line_candidates": metrics["missing_line_candidates"],
+        "conflicting_fixtures_abstained": metrics["conflicting_fixtures_abstained"],
+        "conflicting_candidate_options": metrics["conflicting_candidate_options"],
     }
     db.execute("""INSERT INTO hr_portfolio_queue_state(
         id,snapshot_at,version,source_candidates,eligible_candidates,
@@ -367,6 +383,10 @@ def read(db, *, view="portfolio", limit=DISPLAY_LIMIT):
         "snapshot_at": st["snapshot_at"], "version": VERSION,
         "duplicate_raw_rows_collapsed": int(diagnostics.get("merged_source_rows") or 0),
         "missing_line_candidates": int(diagnostics.get("missing_line_candidates") or 0),
+        "conflicting_fixtures_abstained": int(
+            diagnostics.get("conflicting_fixtures_abstained") or 0),
+        "conflicting_candidate_options": int(
+            diagnostics.get("conflicting_candidate_options") or 0),
         "status": "SNAPSHOT",
         "source_candidates": int(st["source_candidates"]),
         "eligible_candidates": int(st["eligible_candidates"]),
