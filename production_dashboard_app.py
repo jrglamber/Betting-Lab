@@ -35,8 +35,9 @@ from tennis_result_retry_guard import install as install_tennis_result_retry_gua
 from tennis_forward_readiness_patch import install as install_tennis_forward_readiness
 from tennis_forward_home_sync_fix import install as install_tennis_forward_home_sync_fix
 from tennis_predictive_readiness_embed_patch import install as install_tennis_predictive_readiness_embed
+from verified_jacquet_machac_rescue import run_once as repair_verified_jacquet_machac
 
-BUILD_VERSION = "0.19.127"
+BUILD_VERSION = "0.19.128"
 
 # Keep all visible version surfaces aligned with the real production entrypoint.
 base.BUILD_VERSION = BUILD_VERSION
@@ -305,6 +306,15 @@ try:
 except Exception as exc:
     hr_portfolio_queues = {"installed": False, "error": f"{type(exc).__name__}: {exc}"}
 print(f"HR_PORTFOLIO_QUEUES_INSTALL {hr_portfolio_queues}", flush=True)
+
+# Reconcile the independently verified 2 November ATP Paris result against every
+# locally recorded exact fixture ID, then run ordinary shadow/card settlement.
+# No provider requests, backfilled picks or forced outcomes for other matches.
+try:
+    verified_tennis_repair = repair_verified_jacquet_machac(base.curated.base_app.db)
+except Exception as exc:
+    verified_tennis_repair = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+print(f"VERIFIED_TENNIS_REPAIR_BOOTSTRAP {verified_tennis_repair}", flush=True)
 
 print(
     "MULTIPLES_BUDGET_REALLOCATION "
