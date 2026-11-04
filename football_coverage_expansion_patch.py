@@ -287,6 +287,12 @@ def _team_key(target: str, snapshot: Mapping[str, Any]) -> Optional[str]:
     team_rows = snapshot.get("team_rows") or {}
     if key in team_rows:
         return key
+    # Accept curated UEFA provider aliases only when the matching domestic
+    # team is actually present in the stored training snapshot.
+    from uefa_team_aliases import resolve_team
+    alias_key, _ = resolve_team(str(target), set(team_rows), allow_fuzzy=False)
+    if alias_key:
+        return alias_key
     names_map = snapshot.get("names") or {}
     mapped = _team_mapping(str(target), list(names_map.values()))
     if not mapped:
@@ -490,6 +496,44 @@ def freeze_predictions(db, now: Optional[datetime] = None) -> Dict[str, Any]:
             (now.isoformat(), end.isoformat(), "soccer_%"),
         )
     ]
+    # Reject stale or conflicting UEFA provider IDs before fitting XCOMP.
+    # Verified schedule changes have an explicit canonical kickoff; unverified
+    # duplicates are excluded instead of silently choosing the first entry.
+    from uefa_team_aliases import VERIFIED_SCHEDULE_OVERRIDES
+    duplicate_groups = {}
+    for event in events:
+        sport = str(event.get("sport_key") or "")
+        if sport not in (
+            "soccer_uefa_champs_league",
+            "soccer_uefa_europa_league",
+            "soccer_uefa_europa_conference_league",
+        ):
+            continue
+        fixture = (
+            sport,
+            _normalize_text(str(event.get("home_team") or "")),
+            _normalize_text(str(event.get("away_team") or "")),
+        )
+        duplicate_groups.setdefault(fixture, []).append(event)
+    rejected_event_ids = set()
+    for fixture, group in duplicate_groups.items():
+        if len(group) <= 1:
+            continue
+        official = _parse(VERIFIED_SCHEDULE_OVERRIDES.get(fixture))
+        canonical = [
+            e for e in group if official is not None
+            and _parse(e.get("commence_time")) == official
+        ]
+        if len(canonical) == 1:
+            keep_id = str(canonical[0].get("event_id") or "")
+            rejected_event_ids.update(
+                str(e.get("event_id") or "") for e in group
+                if str(e.get("event_id") or "") != keep_id
+            )
+        else:
+            rejected_event_ids.update(str(e.get("event_id") or "") for e in group)
+    events = [e for e in events if str(e.get("event_id") or "") not in rejected_event_ids]
+
     created = skipped = 0
     reasons: Dict[str, int] = defaultdict(int)
     for event in events:
@@ -563,6 +607,7 @@ def freeze_predictions(db, now: Optional[datetime] = None) -> Dict[str, Any]:
         "training_rows": len(snapshot.get("rows") or []),
         "baseline_competitions": len(snapshot.get("baselines") or {}),
         "provider_calls": 0,
+        "duplicate_uefa_provider_ids_excluded": len(rejected_event_ids),
         "betting_authority": False,
     }
 
