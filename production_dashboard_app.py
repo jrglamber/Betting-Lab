@@ -36,7 +36,7 @@ from tennis_forward_readiness_patch import install as install_tennis_forward_rea
 from tennis_forward_home_sync_fix import install as install_tennis_forward_home_sync_fix
 from tennis_predictive_readiness_embed_patch import install as install_tennis_predictive_readiness_embed
 
-BUILD_VERSION = "0.19.126"
+BUILD_VERSION = "0.19.127"
 
 # Keep all visible version surfaces aligned with the real production entrypoint.
 base.BUILD_VERSION = BUILD_VERSION
