@@ -75,6 +75,7 @@ def _build_rows(candidates, eligible_lanes, by_book, now):
     # A source candidate can be quoted by more than one bookmaker. Such rows
     # are displayed separately, not conflated into an imaginary one-book price.
     by_identity: dict[tuple[str, ...], dict[str, dict[str, Any]]] = {}
+    quote_origin: dict[tuple[tuple[str, ...], str], dict[str, Any]] = {}
     for book in portfolio.MANUAL_BOOKS:
         for c, q in by_book.get(book, []):
             key = _identity(c)
@@ -83,6 +84,7 @@ def _build_rows(candidates, eligible_lanes, by_book, now):
             old = quotes.get(book)
             if not old or (ts and ts > _quote_time(old)):
                 quotes[book] = dict(q)
+                quote_origin[(key, book)] = dict(c)
 
     # The visibility cap never changes strategy formation. Reserve space
     # for priced legs AND waiting/paused candidates so neither queue section
@@ -150,22 +152,26 @@ def _build_rows(candidates, eligible_lanes, by_book, now):
             priced += 1
             choices = [(b, q, "FRESH_BOOK_QUOTE") for b, q in books.items()]
         for book, quote, state in choices:
+            # A canonical option may come from several upstream IDs. Use the
+            # actual source of each bookmaker's qualifying quote for ranking
+            # and minimum-odds attribution, not an unrelated duplicate row.
+            source = quote_origin.get((identity, book), c) if book else c
             ts = _quote_time(quote) if quote else None
             rows.append({
                 "snapshot_at": now.isoformat(),
-                "source_lane": str(c.get("source_lane") or ""),
-                "source_status": str(c.get("status") or "UPCOMING"),
-                "event_id": str(c.get("event_id") or ""),
-                "sport_key": c.get("sport_key"),
-                "market_key": str(c.get("market_key") or ""),
-                "selection": str(c.get("selection") or ""),
-                "point": c.get("point"),
-                "home_team": c.get("home_team"),
-                "away_team": c.get("away_team"),
-                "commence_time": c.get("commence_time"),
-                "source_first_seen_at": _first_seen(c),
-                "source_odds": c.get("source_odds"),
-                "min_odds": c.get("min_odds"),
+                "source_lane": str(source.get("source_lane") or ""),
+                "source_status": str(source.get("status") or "UPCOMING"),
+                "event_id": str(source.get("event_id") or ""),
+                "sport_key": source.get("sport_key"),
+                "market_key": str(source.get("market_key") or ""),
+                "selection": str(source.get("selection") or ""),
+                "point": source.get("point"),
+                "home_team": source.get("home_team"),
+                "away_team": source.get("away_team"),
+                "commence_time": source.get("commence_time"),
+                "source_first_seen_at": _first_seen(source),
+                "source_odds": source.get("source_odds"),
+                "min_odds": source.get("min_odds"),
                 "bookmaker_key": book,
                 "quote_price": float(quote["price"]) if quote else None,
                 "quote_captured_at": quote.get("captured_at") if quote else None,
