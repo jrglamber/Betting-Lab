@@ -23,6 +23,7 @@ VERSION = "HR_PORTFOLIO_FORWARD_2026_11_04_V1"
 MANUAL_BOOKS = ("williamhill", "ladbrokes_uk")
 TOTAL_STAKE_GBP = 10.0
 MAX_GROUPS_PER_DAY = 8
+MAX_GROUPS_PER_COHORT_DAY = 4
 MIN_LEAD_MINUTES = 10
 FORMATS = {
     "DOUBLE": ((2,), 2),
@@ -72,7 +73,8 @@ def _state(db):
         "policy": VERSION, "forward_only": True, "source_cohorts": ["HR2_ONLY", "HR2_PLUS_NCAAF"],
         "experimental_ncaaf": "americanfootball_ncaaf H2H source odds 3.00<=p<5.00",
         "strict_same_book_only": list(MANUAL_BOOKS), "quote_freshness_minutes": 15,
-        "max_daily_groups": MAX_GROUPS_PER_DAY, "one_leg_per_event": True,
+        "max_daily_groups": MAX_GROUPS_PER_DAY, "max_groups_per_cohort": MAX_GROUPS_PER_COHORT_DAY,
+        "max_quote_spread_minutes": 5, "one_leg_per_event": True,
         "no_additional_quote_polls": True, "no_bet_authority": True,
         "subsets": "first 2/3/4 frozen legs, as available",
         "four_leg_portfolio_allocation": {"DOUBLE": 0.5, "TRIXIE": 0.3, "YANKEE": 0.2},
@@ -227,15 +229,20 @@ def _form(db, now, state):
         for book, entries in _book_options(db, pool, now, start).items():
             picks = _pick_unique(entries, force_ncaaf=(cohort == "HR2_PLUS_NCAAF"))
             if picks:
+                # All legs must be independently visible at the same bookmaker
+                # within a narrow time window, not merely some time today.
+                timestamps = [hr._parse(q.get("captured_at")) for _, q in picks]
+                if not all(timestamps) or max(timestamps)-min(timestamps) > timedelta(minutes=5):
+                    continue
                 options.append((cohort, book, picks))
     today = now.date().isoformat() + "T00:00:00+00:00"
     formed = 0
     for cohort, book, picks in options:
         count = (db.fetchone(
-            "SELECT COUNT(*) AS n FROM hr_portfolio_groups WHERE created_at>=?",
-            (today,),
+            "SELECT COUNT(*) AS n FROM hr_portfolio_groups WHERE created_at>=? AND cohort=?",
+            (today, cohort),
         ) or {}).get("n") or 0
-        if int(count) >= MAX_GROUPS_PER_DAY:
+        if int(count) >= MAX_GROUPS_PER_COHORT_DAY:
             break
         identities = [_leg_identity(p[0]) for p in picks]
         raw = json.dumps([VERSION, cohort, book, identities], sort_keys=True)
