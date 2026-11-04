@@ -14,6 +14,12 @@ from predictive_football import _normalize_text
 
 VERSION = "UEFA_TEAM_NAME_BRIDGE_V1"
 
+# Confirmed UEFA's 27-Oct rescheduling notice; never infer fixture changes
+# merely from similarity between two upstream event records.
+VERIFIED_SCHEDULE_OVERRIDES = {
+    ("soccer_uefa_europa_league", "rennes", "olympiakos piraeus"): "2026-11-04T15:30:00+00:00",
+}
+
 # Values are football-data-style alternatives, not synthetic history.
 ALTERNATIVES = {
     "borussia dortmund": ("dortmund",),
@@ -61,4 +67,4 @@ def resolve_team(name: str, known_keys: set[str], *, allow_fuzzy: bool = True) -
     return None, "UNMAPPED"
 
 
-__all__ = ["VERSION", "ALTERNATIVES", "resolve_team"]
+__all__ = ["VERSION", "ALTERNATIVES", "VERIFIED_SCHEDULE_OVERRIDES", "resolve_team"]
