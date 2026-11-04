@@ -190,8 +190,8 @@ def queue_panels(snapshot: dict[str, Any] | None, *, view: str) -> str:
 
     heading = "Ranked candidates available now" if view == "quality" else "Chronological candidate queue"
     details = (
-        "Experimental price-quality ranking preview only; the challenger freezes "
-        "choices when the chronological engine forms a group."
+        "Experimental price-quality ranking of the displayed cache sample only; "
+        "the challenger freezes choices when the chronological engine forms a group."
         if view == "quality" else
         "First-available selections and qualifying same-book prices; "
         "existing chronological formation rules are unchanged."
