@@ -15,6 +15,7 @@ import json
 
 import hit_rate_multiples_lab as hr
 import hr_portfolio_shadow as portfolio
+import hr_market_integrity as integrity
 from db import utc_now_iso, sanitize_sensitive_text
 
 VERSION = "HR_PORTFOLIO_QUEUE_VISIBILITY_V1"
@@ -58,7 +59,7 @@ def _schema(db):
 
 
 def _identity(c):
-    return portfolio._leg_identity(c)
+    return integrity.selection_key(c)
 
 
 def _quote_time(quote):
@@ -86,16 +87,35 @@ def _build_rows(candidates, eligible_lanes, by_book, now):
     # The visibility cap never changes strategy formation. Reserve space
     # for priced legs AND waiting/paused candidates so neither queue section
     # appears empty just because older candidates fill the first 120 slots.
-    full_universe = sorted(candidates, key=lambda c: (
+    raw_universe = sorted(candidates, key=lambda c: (
         _first_seen(c), str(c.get("event_id") or ""),
         str(c.get("source_lane") or ""),
     ))
+    # Different upstream event IDs can represent exactly the same match and
+    # outcome. Display only one economic selection, retain all raw research.
+    # Prefer an eligible source when an identical candidate appears in both.
+    canonical = {}
+    for candidate in raw_universe:
+        key = _identity(candidate)
+        previous = canonical.get(key)
+        if previous is None or (
+            str(previous.get("source_lane") or "") not in eligible_lanes
+            and str(candidate.get("source_lane") or "") in eligible_lanes
+        ):
+            canonical[key] = candidate
+    full_universe = sorted(canonical.values(), key=lambda c: (
+        _first_seen(c), str(c.get("event_id") or ""),
+        str(c.get("source_lane") or ""),
+    ))
+    merged_rows = len(raw_universe)-len(full_universe)
     priced_candidates = [c for c in full_universe
                          if str(c.get("source_lane") or "") in eligible_lanes
+                         and integrity.market_actionable(c)
                          and by_identity.get(_identity(c))]
     waiting_candidates = [c for c in full_universe
                           if str(c.get("source_lane") or "") in eligible_lanes
-                          and not by_identity.get(_identity(c))]
+                          and (not integrity.market_actionable(c)
+                               or not by_identity.get(_identity(c)))]
     excluded_candidates = [c for c in full_universe
                            if str(c.get("source_lane") or "") not in eligible_lanes]
     wait_kept = waiting_candidates[:min(len(waiting_candidates), 30)]
@@ -120,6 +140,9 @@ def _build_rows(candidates, eligible_lanes, by_book, now):
         if not lane_ok:
             excluded += 1
             choices = [(None, None, "WATCH_OR_PAUSED")]
+        elif not integrity.market_actionable(c):
+            waiting += 1
+            choices = [(None, None, "MISSING_MARKET_LINE")]
         elif not books:
             waiting += 1
             choices = [(None, None, "WAITING_VALID_QUOTE")]
@@ -159,7 +182,16 @@ def _build_rows(candidates, eligible_lanes, by_book, now):
     for book in portfolio.MANUAL_BOOKS:
         priced_rows = [r for r in rows
                        if r["bookmaker_key"] == book and r["queue_status"] == "FRESH_BOOK_QUOTE"]
-        full_book_pairs = list(by_book.get(book, []))
+        # Remove duplicate feed entries from readiness statistics and never
+        # count ambiguous totals/handicaps as a quoted, actionable selection.
+        full_book_pairs = []
+        seen_prices = set()
+        for c, q in by_book.get(book, []):
+            key = _identity(c)
+            if not integrity.market_actionable(c) or key in seen_prices:
+                continue
+            seen_prices.add(key)
+            full_book_pairs.append((c, q))
         if not full_book_pairs:
             per_book[book] = {
                 "label": BOOK_LABELS[book], "quoted_selections": 0,
@@ -209,6 +241,13 @@ def _build_rows(candidates, eligible_lanes, by_book, now):
         }
 
     return rows, {
+        "distinct_candidates": len(full_universe),
+        "raw_source_rows": len(raw_universe),
+        "merged_source_rows": merged_rows,
+        "missing_line_candidates": sum(
+            str(c.get("source_lane") or "") in eligible_lanes
+            and not integrity.market_actionable(c) for c in full_universe
+        ),
         "visible_candidates": len(universe),
         "priced_visible_candidates": priced,
         "waiting_visible_candidates": waiting,
@@ -238,11 +277,24 @@ def capture(db, now, candidates, eligible_lanes, by_book):
     statement = "INSERT INTO hr_portfolio_queue_rows(" + ",".join(fields) + ") VALUES(" + ",".join("?" for _ in fields) + ")"
     for row in rows:
         db.execute(statement, tuple(row.get(k) for k in fields))
-    total = len(candidates)
+    total = int(metrics["distinct_candidates"])
     quoted_count = len({_identity(c) for book_items in by_book.values() for c, _ in book_items
-                        if str(c.get("source_lane") or "") in eligible_lanes})
-    excluded_count = sum(str(c.get("source_lane") or "") not in eligible_lanes for c in candidates)
+                        if str(c.get("source_lane") or "") in eligible_lanes
+                        and integrity.market_actionable(c)})
+    # Preserve duplicate raw candidate counts for diagnostics without inflating
+    # the unique selection queue; dashboard counts describe economic options.
+    seen_canonical = {}
+    for c in candidates:
+        key = _identity(c)
+        seen_canonical.setdefault(key, set()).add(str(c.get("source_lane") or ""))
+    excluded_count = sum(not (lanes & set(eligible_lanes)) for lanes in seen_canonical.values())
     eligible_count = total-excluded_count
+    book_summary = dict(metrics["bookmakers"])
+    book_summary["_diagnostics"] = {
+        "raw_source_rows": metrics["raw_source_rows"],
+        "merged_source_rows": metrics["merged_source_rows"],
+        "missing_line_candidates": metrics["missing_line_candidates"],
+    }
     db.execute("""INSERT INTO hr_portfolio_queue_state(
         id,snapshot_at,version,source_candidates,eligible_candidates,
         quoted_candidates,waiting_price_candidates,excluded_candidates,
@@ -262,7 +314,7 @@ def capture(db, now, candidates, eligible_lanes, by_book):
         max(0, eligible_count-quoted_count), excluded_count,
         metrics["visible_candidates"],
         max(0, total-metrics["visible_candidates"]),
-        json.dumps(metrics["bookmakers"], sort_keys=True),
+        json.dumps(book_summary, sort_keys=True),
     ))
     db.execute("DELETE FROM hr_portfolio_queue_rows WHERE snapshot_at<>?", (snapshot_at,))
     return {
@@ -303,8 +355,12 @@ def read(db, *, view="portfolio", limit=DISPLAY_LIMIT):
             ORDER BY queue_status,source_first_seen_at,event_id LIMIT ?""",
         (st["snapshot_at"], max(1, min(int(limit)//2, 75))),
     )]
+    book_summary = json.loads(st.get("bookmaker_summary_json") or "{}")
+    diagnostics = book_summary.pop("_diagnostics", {})
     return {
         "snapshot_at": st["snapshot_at"], "version": VERSION,
+        "duplicate_raw_rows_collapsed": int(diagnostics.get("merged_source_rows") or 0),
+        "missing_line_candidates": int(diagnostics.get("missing_line_candidates") or 0),
         "status": "SNAPSHOT",
         "source_candidates": int(st["source_candidates"]),
         "eligible_candidates": int(st["eligible_candidates"]),
@@ -313,7 +369,7 @@ def read(db, *, view="portfolio", limit=DISPLAY_LIMIT):
         "excluded_candidates": int(st["excluded_candidates"]),
         "visible_candidates": int(st["visible_candidates"]),
         "truncated_candidates": int(st["truncated_candidates"]),
-        "bookmakers": json.loads(st.get("bookmaker_summary_json") or "{}"),
+        "bookmakers": book_summary,
         "rows": rows, "waiting_rows": waiting, "view": view,
         "method": "shared_cached_snapshot_no_extra_API_calls",
         "note": (
