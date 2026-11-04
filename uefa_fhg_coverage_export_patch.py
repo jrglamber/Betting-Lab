@@ -14,11 +14,11 @@ import math
 import zipfile
 from collections import Counter
 from datetime import datetime, timedelta, timezone
-from difflib import SequenceMatcher
 from typing import Any, Dict, Mapping, Optional
 
 import challenge_export_patch as base
 from predictive_football import _normalize_text
+from uefa_team_aliases import resolve_team
 
 VERSION = "UEFA_FHG_RESEARCH_EXPORT_V1_2026_11_04"
 MODEL = "UEFA_FHG_DOMESTIC_SPLIT_PROXY_V1"
@@ -27,6 +27,12 @@ COMPETITIONS = (
     "soccer_uefa_europa_league",
     "soccer_uefa_europa_conference_league",
 )
+
+# Verified against UEFA announcement dated 27 Oct 2026. Do not mutate upstream
+# fixtures; suppress stale provider duplicates in this research export only.
+VERIFIED_RESCHEDULES = {
+    ("soccer_uefa_europa_league", "rennes", "olympiakos piraeus"): "2026-11-04T15:30:00+00:00",
+}
 LOOKBACK_DAYS = 730
 MIN_HOME_SPLIT = 5
 MIN_AWAY_SPLIT = 5
@@ -86,21 +92,7 @@ def _count(db, table: str, key: str) -> int:
 
 
 def _resolve_team(name: str, known_keys: set[str]) -> tuple[Optional[str], str]:
-    normalized = _normalize_text(name)
-    if normalized in known_keys:
-        return normalized, "EXACT"
-    if not normalized or len(normalized) < 5:
-        return None, "UNMAPPED"
-    # Restrict fuzzy matches to high-confidence, clearly unambiguous names.
-    nearest = sorted(
-        ((SequenceMatcher(None, normalized, k).ratio(), k) for k in known_keys),
-        reverse=True,
-    )[:2]
-    if nearest and nearest[0][0] >= 0.91 and (
-        len(nearest) == 1 or nearest[0][0] - nearest[1][0] >= 0.06
-    ):
-        return nearest[0][1], "FUZZY_HIGH_CONFIDENCE"
-    return None, "UNMAPPED"
+    return resolve_team(name, known_keys, allow_fuzzy=True)
 
 
 def _split(db, key: str, home: bool, kickoff: datetime) -> tuple[int, int]:
@@ -140,6 +132,37 @@ def _build_research(db, now: datetime, horizon_hours: int):
         and now < kickoff <= end
     ]
     future.sort(key=lambda x: (str(x.get("commence_time") or ""), str(x.get("event_id") or "")))
+
+    # Duplicate providers can retain the original date after a UEFA change.
+    # Only accept a canonical record when exactly one ID matches a verified KO.
+    groups = {}
+    for e in future:
+        fixture_key = (
+            str(e.get("sport_key") or ""),
+            _normalize_text(str(e.get("home_team") or "")),
+            _normalize_text(str(e.get("away_team") or "")),
+        )
+        groups.setdefault(fixture_key, []).append(e)
+    schedule_integrity = {}
+    for fixture_key, items in groups.items():
+        if len(items) <= 1:
+            continue
+        official = VERIFIED_RESCHEDULES.get(fixture_key)
+        correct = [
+            e for e in items
+            if official is not None and _parse(e.get("commence_time")) == _parse(official)
+        ]
+        if len(correct) == 1:
+            keep_id = str(correct[0].get("event_id") or "")
+            for e in items:
+                eid = str(e.get("event_id") or "")
+                schedule_integrity[eid] = (
+                    "VERIFIED_RESCHEDULE_CANONICAL" if eid == keep_id
+                    else "STALE_RESCHEDULED_FIXTURE"
+                )
+        else:
+            for e in items:
+                schedule_integrity[str(e.get("event_id") or "")] = "UNVERIFIED_DUPLICATE_SCHEDULE"
     half_history_names = _rows(
         db,
         "SELECT DISTINCT home_key AS team_key FROM first_half_goal_history UNION SELECT DISTINCT away_key AS team_key FROM first_half_goal_history",
@@ -166,8 +189,10 @@ def _build_research(db, now: datetime, horizon_hours: int):
             except Exception:
                 pass
         probability = None
-        reason = "ELIGIBLE"
-        if not home_key or not away_key:
+        reason = schedule_integrity.get(str(e.get("event_id") or ""), "ELIGIBLE")
+        if reason in {"STALE_RESCHEDULED_FIXTURE", "UNVERIFIED_DUPLICATE_SCHEDULE"}:
+            pass
+        elif not home_key or not away_key:
             reason = "UNMAPPED_DOMESTIC_TEAM"
         elif hn < MIN_HOME_SPLIT or an < MIN_AWAY_SPLIT:
             reason = "INSUFFICIENT_DOMESTIC_HALF_HISTORY"
@@ -190,6 +215,8 @@ def _build_research(db, now: datetime, horizon_hours: int):
             "reference_half_goal_rate": round(prior, 6),
             "estimated_probability": round(probability, 6) if probability is not None else None,
             "research_status": reason,
+            "schedule_integrity": schedule_integrity.get(str(e.get("event_id") or ""), "SINGLE_RECORD"),
+            "source_event_record_count": len(groups.get((str(e.get("sport_key") or ""), _normalize_text(str(e.get("home_team") or "")), _normalize_text(str(e.get("away_team") or ""))), [])),
             "model_version": MODEL, "calibration": "UNVALIDATED_CROSS_COMP_PROXY",
             "price_source": "NONE", "betting_authority": False,
         }
@@ -254,6 +281,8 @@ def build_uefa_coverage_export(db, settings, app_version: str):
             "uefa_fhg_proxy_evaluated": len(items),
             "uefa_fhg_proxy_unpriced_candidates": sum(e["research_status"] == "ELIGIBLE" for e in items),
             "unmapped_or_insufficient": sum(e["research_status"] in ("UNMAPPED_DOMESTIC_TEAM", "INSUFFICIENT_DOMESTIC_HALF_HISTORY") for e in items),
+            "stale_or_conflicting_fixture_rows": sum(e["research_status"] in ("STALE_RESCHEDULED_FIXTURE", "UNVERIFIED_DUPLICATE_SCHEDULE") for e in items),
+            "curated_alias_matches": sum(e["home_mapping"] == "CURATED_ALIAS" for e in items) + sum(e["away_mapping"] == "CURATED_ALIAS" for e in items),
             "provider_calls_added": 0,
         })
     files["uefa_coverage_diagnostics.csv"] = _csv(inventory)
@@ -264,6 +293,7 @@ def build_uefa_coverage_export(db, settings, app_version: str):
         "uefa_fhg_model": MODEL,
         "uefa_fhg_evidence": "UNVALIDATED_RESEARCH_ONLY",
         "uefa_fhg_proxy_candidate_count": len(candidates),
+        "uefa_stale_or_conflicting_fixture_rows": sum(e["research_status"] in ("STALE_RESCHEDULED_FIXTURE", "UNVERIFIED_DUPLICATE_SCHEDULE") for e in evaluations),
         "uefa_fhg_domestic_history_count": prior_n,
         "uefa_fhg_research_file": "uefa_fhg_research.csv",
         "uefa_coverage_diagnostics_file": "uefa_coverage_diagnostics.csv",
