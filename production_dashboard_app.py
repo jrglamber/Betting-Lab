@@ -36,7 +36,7 @@ from tennis_forward_readiness_patch import install as install_tennis_forward_rea
 from tennis_forward_home_sync_fix import install as install_tennis_forward_home_sync_fix
 from tennis_predictive_readiness_embed_patch import install as install_tennis_predictive_readiness_embed
 
-BUILD_VERSION = "0.19.120"
+BUILD_VERSION = "0.19.121"
 
 # Keep all visible version surfaces aligned with the real production entrypoint.
 base.BUILD_VERSION = BUILD_VERSION
@@ -278,6 +278,21 @@ try:
 except Exception as exc:
     hr_rolling_quality = {"installed": False, "error": f"{type(exc).__name__}: {exc}"}
 print(f"HR_ROLLING_QUALITY_INSTALL {hr_rolling_quality}", flush=True)
+
+# Single Telegram source: only the prospective chronological HR Portfolio
+# Shadow may notify. Disable Live Yankee, Heinz, XS1 and diagnostic senders;
+# retain all their settlement, odds, research and export functionality.
+# The Telegram transport itself also blocks any sender without this source ID.
+try:
+    from hr_portfolio_telegram import install as install_hr_portfolio_telegram
+    hr_portfolio_telegram = install_hr_portfolio_telegram(
+        base.curated.base_app.app,
+        base.curated.base_app.db,
+        base.curated.base_app.web_module.settings,
+    )
+except Exception as exc:
+    hr_portfolio_telegram = {"installed": False, "error": f"{type(exc).__name__}: {exc}"}
+print(f"HR_PORTFOLIO_TELEGRAM_INSTALL {hr_portfolio_telegram}", flush=True)
 
 print(
     "MULTIPLES_BUDGET_REALLOCATION "
