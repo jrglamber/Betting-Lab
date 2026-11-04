@@ -283,7 +283,7 @@ def queue_panels(snapshot: dict[str, Any] | None, *, view: str) -> str:
         "options for the same match are <strong>alternatives</strong>, not "
         "independent legs. Identical options from duplicate feeds are merged. "
         "<strong>Opposing predictions</strong> at the same market and line "
-        "are flagged and never placed together inside a multiple."
+        "trigger a portfolio abstention until direction has independent evidence."
         "</div>"
         "<div class='grid lab-metrics'>" +
         card("Duplicate source rows hidden",
@@ -292,8 +292,9 @@ def queue_panels(snapshot: dict[str, Any] | None, *, view: str) -> str:
         card("Missing market lines",
              _int(snapshot.get("missing_line_candidates", 0)),
              "Not permitted into new portfolio cards") +
-        card("Opposing fixture options",
-             _int(conflict_count), "Within displayed snapshot") +
+        card("Conflicted fixtures blocked",
+             _int(snapshot.get("conflicting_fixtures_abstained", 0)),
+             "No new portfolio cards or alerts from these fixtures") +
         "</div>"
     )
 
@@ -341,6 +342,8 @@ def queue_panels(snapshot: dict[str, Any] | None, *, view: str) -> str:
         states = {r.get("queue_status") for r in g["options"]}
         if states == {"WATCH_OR_PAUSED"}:
             return "WATCH/PAUSED source"
+        if "DIRECT_OPPOSITION_ABSTAIN" in states:
+            return "Opposing same-market/line candidates — PORTFOLIO ABSTAINS"
         if "MISSING_MARKET_LINE" in states:
             return "Missing totals/handicap line — NOT actionable"
         return "Waiting for valid fresh bookmaker price"

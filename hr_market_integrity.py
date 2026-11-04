@@ -110,3 +110,17 @@ def opposing_options(rows: list[Mapping[str, Any]]) -> bool:
         if m in {"totals", "btts", "h2h", "handicap"}:
             by_market.setdefault((m, point), set()).add(choice)
     return any(len(options) > 1 for options in by_market.values())
+
+def conflicted_fixture_keys(rows: list[Mapping[str, Any]]) -> set[tuple[str, ...]]:
+    """Exclude only fixtures with directly opposing *actionable* options.
+
+    This is a prospective research/alert abstention, not a deletion of raw
+    Over/Under predictions. A totals line difference is not a contradiction.
+    """
+    by_fixture: dict[tuple[str, ...], list[Mapping[str, Any]]] = {}
+    for row in rows:
+        if not market_actionable(row):
+            continue
+        by_fixture.setdefault(fixture_key(row), []).append(row)
+    return {fixture for fixture, candidates in by_fixture.items()
+            if opposing_options(candidates)}

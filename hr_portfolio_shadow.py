@@ -248,13 +248,23 @@ def _form(db, now, state):
     # One pool: NCAAF can contribute 0, 1, 2, 3 or 4 legs.
     # Old V1 comparison cohorts are archived and never fed new candidates.
     eligible = _eligible_lanes(db, base + extra)
-    unified = [c for c in base + extra if str(c.get("source_lane") or "") in eligible]
+    eligible_candidates = [
+        c for c in base + extra
+        if str(c.get("source_lane") or "") in eligible
+    ]
+    # Odds-band qualification can admit both Over and Under 2.5 for the
+    # same match. These are NOT two proven edges; abstain from the entire
+    # conflicting fixture until a validated directional choice exists.
+    conflicting_fixtures = integrity.conflicted_fixture_keys(eligible_candidates)
+    unified = [c for c in eligible_candidates
+               if integrity.fixture_key(c) not in conflicting_fixtures]
     # Cache the same queue and bookmaker quotes for the two read-only UIs.
     # This must never alter formation or trigger additional provider polling.
     by_book = _book_options(db, unified, now, start)
     try:
         from hr_portfolio_queues import capture
-        capture(db, now, base + extra, eligible, by_book)
+        capture(db, now, base + extra, eligible, by_book,
+                conflicting_fixtures=conflicting_fixtures)
     except Exception as exc:
         print(f"HR_PORTFOLIO_QUEUE_SNAPSHOT_ERROR {type(exc).__name__}: "
               f"{sanitize_sensitive_text(exc)}", flush=True)
@@ -310,7 +320,8 @@ def _form(db, now, state):
         formed += 1
     return {"formed": formed, "hr2_source_candidates": len(base),
             "ncaaf_source_candidates": len(ncaaf), "ncaaf_extra_candidates": len(extra),
-            "eligible_lanes": len(eligible), "unified_candidates": len(unified)}
+            "eligible_lanes": len(eligible), "unified_candidates": len(unified),
+            "conflicting_fixtures_abstained": len(conflicting_fixtures)}
 
 
 def _return_for(format_name, legs):
