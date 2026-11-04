@@ -204,10 +204,14 @@ def _portfolio(db):
                 "multiple_pnl": normalized, "legs": gs}
         cards.append(item)
         by_cohort[str(group["cohort"])].append(item)
-        singles = sum(_leg_pnl(l) for l in gs) / len(gs)
         for f in multiples:
+            limit = {"DOUBLE": 2, "TRIXIE": 3, "YANKEE": 4}[str(f["format"])]
+            same_legs = gs[:limit]
+            if len(same_legs) != limit:
+                continue
+            single_roi = sum(_leg_pnl(l) for l in same_legs) / limit
             format_totals[(str(group["cohort"]),str(f["format"]))].append(
-                (float(f["pnl_units"]), singles)
+                (float(f["pnl_units"]), single_roi)
             )
 
     formats = []
