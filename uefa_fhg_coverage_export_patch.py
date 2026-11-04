@@ -145,22 +145,26 @@ def _build_research(db, now: datetime, horizon_hours: int):
         groups.setdefault(fixture_key, []).append(e)
     schedule_integrity = {}
     for fixture_key, items in groups.items():
-        if len(items) <= 1:
+        official = _parse(VERIFIED_RESCHEDULES.get(fixture_key))
+        if official is not None:
+            # Check EVERY provider record against the official kickoff even
+            # when only the stale event remains in the future window.
+            canonical = [
+                e for e in items if _parse(e.get("commence_time")) == official
+            ]
+            if len(canonical) > 1:
+                for e in items:
+                    schedule_integrity[str(e.get("event_id") or "")] = "UNVERIFIED_DUPLICATE_SCHEDULE"
+            else:
+                for e in items:
+                    eid = str(e.get("event_id") or "")
+                    schedule_integrity[eid] = (
+                        "VERIFIED_RESCHEDULE_CANONICAL"
+                        if _parse(e.get("commence_time")) == official
+                        else "STALE_RESCHEDULED_FIXTURE"
+                    )
             continue
-        official = VERIFIED_RESCHEDULES.get(fixture_key)
-        correct = [
-            e for e in items
-            if official is not None and _parse(e.get("commence_time")) == _parse(official)
-        ]
-        if len(correct) == 1:
-            keep_id = str(correct[0].get("event_id") or "")
-            for e in items:
-                eid = str(e.get("event_id") or "")
-                schedule_integrity[eid] = (
-                    "VERIFIED_RESCHEDULE_CANONICAL" if eid == keep_id
-                    else "STALE_RESCHEDULED_FIXTURE"
-                )
-        else:
+        if len(items) > 1:
             for e in items:
                 schedule_integrity[str(e.get("event_id") or "")] = "UNVERIFIED_DUPLICATE_SCHEDULE"
     half_history_names = _rows(
@@ -259,7 +263,16 @@ def build_uefa_coverage_export(db, settings, app_version: str):
     now = datetime.now(timezone.utc)
     horizon = int(getattr(base, "HORIZON_HOURS", 48))
     events, evaluations, candidates, support, prior_n = _build_research(db, now, horizon)
-    existing = _read_csv(files.get("challenge_candidates.csv", b""))
+    stale_event_ids = {
+        str(e.get("event_id") or "") for e in evaluations
+        if e["research_status"] in ("STALE_RESCHEDULED_FIXTURE", "UNVERIFIED_DUPLICATE_SCHEDULE")
+    }
+    # Exclude known invalid future fixtures from *every* Challenge source,
+    # not only UEFA_FHG_RESEARCH. Keep reasons in the UEFA diagnostics CSV.
+    existing = [
+        r for r in _read_csv(files.get("challenge_candidates.csv", b""))
+        if str(r.get("event_id") or "") not in stale_event_ids
+    ]
     keys = {(str(r.get("event_id") or ""), str(r.get("market_key") or ""), str(r.get("source") or "")) for r in existing}
     for r in candidates:
         key = (str(r["event_id"]), str(r["market_key"]), str(r["source"]))
@@ -267,7 +280,10 @@ def build_uefa_coverage_export(db, settings, app_version: str):
             existing.append(r)
             keys.add(key)
     files["challenge_candidates.csv"] = _csv(existing)
-    files["challenge_model_support.csv"] = _csv(_read_csv(files.get("challenge_model_support.csv", b"")) + support)
+    files["challenge_model_support.csv"] = _csv([
+        r for r in _read_csv(files.get("challenge_model_support.csv", b""))
+        if str(r.get("event_id") or "") not in stale_event_ids
+    ] + support)
     files["uefa_fhg_research.csv"] = _csv(evaluations)
 
     inventory = []
@@ -295,6 +311,7 @@ def build_uefa_coverage_export(db, settings, app_version: str):
         "uefa_fhg_evidence": "UNVALIDATED_RESEARCH_ONLY",
         "uefa_fhg_proxy_candidate_count": len(candidates),
         "uefa_stale_or_conflicting_fixture_rows": sum(e["research_status"] in ("STALE_RESCHEDULED_FIXTURE", "UNVERIFIED_DUPLICATE_SCHEDULE") for e in evaluations),
+        "uefa_stale_fixture_records_excluded_from_challenge": len(stale_event_ids),
         "uefa_fhg_domestic_history_count": prior_n,
         "uefa_fhg_research_file": "uefa_fhg_research.csv",
         "uefa_coverage_diagnostics_file": "uefa_coverage_diagnostics.csv",
