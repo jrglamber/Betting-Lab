@@ -348,6 +348,37 @@ def status(db):
         SUM(f.allocation_pct*f.pnl_units) AS portfolio_contribution_units
         FROM hr_portfolio_formats f JOIN hr_portfolio_groups g ON g.id=f.group_id
         WHERE f.status='SETTLED' GROUP BY g.cohort,f.format ORDER BY g.cohort,f.format""")
+    group_pnl = db.fetchall("""SELECT g.id,g.cohort,g.settled_at,
+        SUM(f.allocation_pct*f.pnl_units) AS weighted_pnl_units
+        FROM hr_portfolio_groups g JOIN hr_portfolio_formats f ON f.group_id=g.id
+        WHERE g.status='SETTLED' AND f.status='SETTLED'
+        GROUP BY g.id,g.cohort,g.settled_at ORDER BY g.settled_at,g.id""")
+    portfolio = {}
+    for raw in group_pnl:
+        cohort = str(raw["cohort"])
+        item = portfolio.setdefault(cohort, {
+            "cohort": cohort, "settled_groups": 0, "portfolio_pnl_units": 0.0,
+            "portfolio_roi_pct": None, "max_drawdown_units": 0.0,
+        })
+        pnl = float(raw.get("weighted_pnl_units") or 0)
+        item["settled_groups"] += 1
+        item["portfolio_pnl_units"] += pnl
+        # Peak starts at zero; losses cannot masquerade as drawdown recovery.
+        running = item["portfolio_pnl_units"]
+        peak = item.setdefault("_peak", 0.0)
+        peak = max(peak, running)
+        item["_peak"] = peak
+        item["max_drawdown_units"] = max(item["max_drawdown_units"], peak-running)
+    for item in portfolio.values():
+        n = item["settled_groups"]
+        item["portfolio_roi_pct"] = 100.0 * item["portfolio_pnl_units"] / n if n else None
+        item.pop("_peak", None)
+    format_rows = []
+    for row in metrics:
+        item = dict(row)
+        n = int(item.get("settled") or 0)
+        item["roi_pct"] = 100.0 * float(item.get("normalized_pnl_units") or 0) / n if n else None
+        format_rows.append(item)
     latest = db.fetchall("""SELECT g.id,g.created_at,g.cohort,g.bookmaker_key,
         g.status,g.selection_count,
         (SELECT COUNT(*) FROM hr_portfolio_legs l WHERE l.group_id=g.id
@@ -357,7 +388,8 @@ def status(db):
         "version": VERSION, "research_only": True, "no_provider_calls": True,
         "started_at": st.get("started_at"), "bookmakers": list(MANUAL_BOOKS),
         "daily_group_cap": MAX_GROUPS_PER_DAY,
-        "groups": [dict(x) for x in groups], "formats": [dict(x) for x in metrics],
+        "groups": [dict(x) for x in groups], "formats": format_rows,
+        "portfolio": list(portfolio.values()),
         "latest_groups": [dict(x) for x in latest],
         "warning": "NCAAF outcome ROI positive but A/B CLV negative; independent forward verification required",
     }
@@ -411,6 +443,13 @@ def install(app, db):
                 x["settled"], "{:+.2f}".format(float(x["normalized_pnl_units"] or 0)),
             ) for x in s["formats"]
         ) or "<tr><td colspan='4'>Awaiting forward settled comparisons</td></tr>"
+        portfolio_rows = "".join(
+            "<tr><td>{}</td><td>{}</td><td>{:+.2f}u</td><td>{:+.1f}%</td><td>{:.2f}u</td></tr>".format(
+                escape(str(x["cohort"])), int(x["settled_groups"]),
+                float(x["portfolio_pnl_units"]), float(x["portfolio_roi_pct"] or 0),
+                float(x["max_drawdown_units"]),
+            ) for x in s["portfolio"]
+        ) or "<tr><td colspan='5'>No portfolio settlements yet</td></tr>"
         latest = "".join(
             "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>".format(
                 int(x["id"]), escape(str(x["cohort"])), escape(str(x["bookmaker_key"])),
@@ -428,6 +467,8 @@ def install(app, db):
             "<p><strong>NCAAF 3.00–4.99 is experimental.</strong> "
             "HR2-only control and HR2+NCAAF cohorts remain separate. "
             "No Telegram alerts, real wagers or changes to original HR2.</p>"
+            "<h2>Portfolio comparison (£10 total/group)</h2><table border='1' cellpadding='6'>"
+            "<tr><th>Cohort</th><th>Settled groups</th><th>P/L</th><th>ROI</th><th>Max DD</th></tr>{}</table>"
             "<h2>Settled format benchmarks</h2><table border='1' cellpadding='6'>"
             "<tr><th>Cohort</th><th>Format</th><th>Settled</th><th>Normalised P&amp;L (u)</th></tr>"
             "{}"
@@ -435,7 +476,7 @@ def install(app, db):
             "<tr><th>ID</th><th>Cohort</th><th>Bookmaker</th><th>Legs</th><th>Status</th></tr>{}</table>"
             "<p><a href='/api/hr-portfolio-shadow/status'>Machine-readable status</a></p>"
             "</body></html>"
-        ).format(escape(str(s["started_at"] or "first maintenance")), rows, latest)
+        ).format(escape(str(s["started_at"] or "first maintenance")), portfolio_rows, rows, latest)
         return HTMLResponse(html)
 
     # Keep status/results in both weekly and manual export bundles.
