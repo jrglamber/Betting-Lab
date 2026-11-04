@@ -258,28 +258,34 @@ def capture(db, now, candidates, eligible_lanes, by_book):
 def read(db, *, view="portfolio", limit=DISPLAY_LIMIT):
     _schema(db)
     st = db.fetchone("SELECT * FROM hr_portfolio_queue_state WHERE id=1")
+    empty = {
+        "snapshot_at": None, "version": VERSION,
+        "status": "AWAITING_FIRST_SNAPSHOT", "source_candidates": 0,
+        "eligible_candidates": 0, "quoted_candidates": 0,
+        "waiting_price_candidates": 0, "excluded_candidates": 0,
+        "visible_candidates": 0, "truncated_candidates": 0,
+        "bookmakers": {}, "rows": [], "waiting_rows": [], "view": view,
+        "method": "shared_cached_snapshot_no_extra_API_calls",
+    }
     if not st:
-        return {
-            "snapshot_at": None, "version": VERSION,
-            "status": "AWAITING_FIRST_SNAPSHOT", "source_candidates": 0,
-            "eligible_candidates": 0, "quoted_candidates": 0,
-            "waiting_price_candidates": 0, "excluded_candidates": 0,
-            "visible_candidates": 0, "truncated_candidates": 0,
-            "bookmakers": {}, "rows": [], "view": view,
-            "method": "shared_cached_snapshot_no_extra_API_calls",
-        }
+        return empty
     st = dict(st)
     order = (
-        "CASE WHEN queue_status='FRESH_BOOK_QUOTE' THEN 0 ELSE 1 END, "
         "bookmaker_key, quality_rank, source_first_seen_at, event_id"
         if view == "quality" else
-        "CASE WHEN queue_status='FRESH_BOOK_QUOTE' THEN 0 ELSE 1 END, "
         "source_first_seen_at, event_id, bookmaker_key"
     )
     # ORDER BY is a fixed internal literal; the client cannot supply SQL.
-    q = ("SELECT * FROM hr_portfolio_queue_rows WHERE snapshot_at=? "
+    q = ("SELECT * FROM hr_portfolio_queue_rows "
+         "WHERE snapshot_at=? AND queue_status='FRESH_BOOK_QUOTE' "
          "ORDER BY " + order + " LIMIT ?")
     rows = [dict(x) for x in db.fetchall(q, (st["snapshot_at"], max(1, min(int(limit), 150))))]
+    waiting = [dict(x) for x in db.fetchall(
+        """SELECT * FROM hr_portfolio_queue_rows
+            WHERE snapshot_at=? AND queue_status!='FRESH_BOOK_QUOTE'
+            ORDER BY queue_status,source_first_seen_at,event_id LIMIT ?""",
+        (st["snapshot_at"], max(1, min(int(limit)//2, 75))),
+    )]
     return {
         "snapshot_at": st["snapshot_at"], "version": VERSION,
         "status": "SNAPSHOT",
@@ -291,7 +297,7 @@ def read(db, *, view="portfolio", limit=DISPLAY_LIMIT):
         "visible_candidates": int(st["visible_candidates"]),
         "truncated_candidates": int(st["truncated_candidates"]),
         "bookmakers": json.loads(st.get("bookmaker_summary_json") or "{}"),
-        "rows": rows, "view": view,
+        "rows": rows, "waiting_rows": waiting, "view": view,
         "method": "shared_cached_snapshot_no_extra_API_calls",
         "note": (
             "Challenger queue is a live rank preview; no separate holds or cards "
