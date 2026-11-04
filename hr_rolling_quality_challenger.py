@@ -166,7 +166,7 @@ def _rank_pool(items, all_book_options, now, earliest_quote, latest_quote, sourc
         if kickoff <= now+timedelta(minutes=baseline.MIN_LEAD_MINUTES):
             continue
         book_count = sum(
-            any(_identity(other_c) == key and
+            any(integrity.selection_key(other_c) == key and
                 (earliest_quote <= _dt(other_q.get("captured_at")) <= latest_quote)
                 for other_c, other_q in book_items
                 if _dt(other_q.get("captured_at")) is not None)
