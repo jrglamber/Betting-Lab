@@ -515,7 +515,8 @@ def install(app, db):
     @app.get("/hr-quality-challenger", response_class=HTMLResponse)
     def quality_page():
         from hr_portfolio_presentation import render_quality
-        return HTMLResponse(render_quality(scoreboard(db)))
+        from hr_portfolio_queues import read as read_queue
+        return HTMLResponse(render_quality(scoreboard(db), queue=read_queue(db, view='quality')))
 
     # Native exports retain every paired decision, feature snapshot and result.
     tables = ("hr_quality_state", "hr_quality_pairs", "hr_quality_legs",
