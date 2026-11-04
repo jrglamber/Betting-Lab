@@ -20,7 +20,7 @@ import challenge_export_patch as base
 from predictive_football import _normalize_text
 from uefa_team_aliases import resolve_team
 
-VERSION = "UEFA_FHG_RESEARCH_EXPORT_V1_2026_11_04"
+VERSION = "UEFA_FHG_COVERAGE_EXPORT_V2_2026_11_04"
 MODEL = "UEFA_FHG_DOMESTIC_SPLIT_PROXY_V1"
 COMPETITIONS = (
     "soccer_uefa_champs_league",
@@ -243,11 +243,12 @@ def _build_research(db, now: datetime, horizon_hours: int):
             "source_id": e.get("event_id"), "event_id": e.get("event_id"),
             "commence_time": e.get("commence_time"), "sport_key": e.get("sport_key"),
             "league": e.get("league"), "home_team": e.get("home_team"),
-            "away_team": e.get("away_team"), "market_key": "fhg_over_0_5",
-            "selection": "Over", "point": 0.5, "bookmaker_key": None, "bookmaker_title": None,
+            "away_team": e.get("away_team"), "market_key": "fhg_over_0.5",
+            "selection": "Over 0.5 first-half goals", "point": None, "bookmaker_key": None, "bookmaker_title": None,
             "offered_odds": None, "odds_band": None, "fair_probability": round(probability, 6),
             "fair_odds": None, "edge_pct": None, "min_odds": None, "status": "OPEN",
             "notes": "UEFA domestic-half-time proxy, not calibrated or priced; manual research only.",
+            "created_at": now.isoformat(), "model_version": MODEL,
             "challenge_lane": "UEFA_FHG_UNVALIDATED", "challenge_status": "RESEARCH_ONLY",
             "challenge_stake_gbp": 0.0, "challenge_note": "Do not stake from this proxy alone.",
             "challenge_phase": "200_TO_2000_2026_11_03", "manual_current_price_required": True,
@@ -332,6 +333,10 @@ def build_uefa_coverage_export(db, settings, app_version: str):
         "and challenge_model_support.csv as RESEARCH_ONLY with zero stake, no live quote and no validated ROI.\n"
         "Not FHG1, not eligible for FHG1 acca formation, no added paid API calls or betting authority.\n"
     ).encode()
+    # Apply only after existing V5 framework and UEFA research append.
+    # Read-only export diagnostics; does not alter model/odds polling/betting.
+    from xcomp_review_integrity import enhance_export
+    files = enhance_export(files)
     out = io.BytesIO()
     with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as z:
         for name, value in files.items():
