@@ -133,9 +133,9 @@ def _ncaaf_candidates(db, now):
         FROM multisport_execution_bets b
         JOIN multisport_events e ON e.event_id=b.event_id
         WHERE b.status='OPEN' AND e.status='UPCOMING'
-          AND lower(e.sport_key) LIKE '%ncaaf%'
+          AND lower(e.sport_key) LIKE ?
           AND b.offered_odds>=3.0 AND b.offered_odds<5.0
-        ORDER BY b.created_at,b.id LIMIT 300""")
+        ORDER BY b.created_at,b.id LIMIT 300""", ("%ncaaf%",))
     out = []
     for r in rows:
         c = dict(r)
@@ -400,8 +400,8 @@ def status(db):
     latest = db.fetchall("""SELECT g.id,g.created_at,g.cohort,g.bookmaker_key,
         g.status,g.selection_count,
         (SELECT COUNT(*) FROM hr_portfolio_legs l WHERE l.group_id=g.id
-         AND l.source_lane LIKE 'NCAAF_%') AS ncaaf_legs
-        FROM hr_portfolio_groups g WHERE g.policy_version=? ORDER BY g.id DESC LIMIT 25""", (VERSION,))
+         AND l.source_lane LIKE ?) AS ncaaf_legs
+        FROM hr_portfolio_groups g WHERE g.policy_version=? ORDER BY g.id DESC LIMIT 25""", ("NCAAF_%", VERSION))
     lane_policy = db.fetchall("""SELECT source_lane,status,review_note,updated_at
         FROM hr_portfolio_lane_policy ORDER BY source_lane""")
     ncaaf_mix = {"zero": 0, "some": 0, "all": 0}
