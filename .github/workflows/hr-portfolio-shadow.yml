@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - "hr_portfolio_shadow.py"
+      - "hr_portfolio_queues.py"
+      - "test_hr_portfolio_queues.py"
       - "hr_portfolio_telegram.py"
       - "telegram_alerts.py"
       - "test_hr_portfolio_telegram.py"
@@ -35,6 +37,6 @@ jobs:
       - name: Install test dependencies
         run: python -m pip install -r requirements.txt
       - name: Syntax check
-        run: python -m py_compile hr_portfolio_shadow.py hr_portfolio_presentation.py hr_rolling_quality_challenger.py hr_portfolio_telegram.py telegram_alerts.py production_dashboard_app.py test_hr_portfolio_shadow.py test_hr_portfolio_postgres_links.py test_hr_rolling_quality_challenger.py test_hr_portfolio_presentation.py test_hr_portfolio_telegram.py
+        run: python -m py_compile hr_portfolio_queues.py test_hr_portfolio_queues.py hr_portfolio_shadow.py hr_portfolio_presentation.py hr_rolling_quality_challenger.py hr_portfolio_telegram.py telegram_alerts.py production_dashboard_app.py test_hr_portfolio_shadow.py test_hr_portfolio_postgres_links.py test_hr_rolling_quality_challenger.py test_hr_portfolio_presentation.py test_hr_portfolio_telegram.py
       - name: Forward-only shadow unit tests
-        run: python -m pytest -q test_hr_portfolio_shadow.py test_hr_portfolio_postgres_links.py test_hr_rolling_quality_challenger.py test_hr_portfolio_presentation.py test_hr_portfolio_telegram.py
+        run: python -m pytest -q test_hr_portfolio_queues.py test_hr_portfolio_shadow.py test_hr_portfolio_postgres_links.py test_hr_rolling_quality_challenger.py test_hr_portfolio_presentation.py test_hr_portfolio_telegram.py

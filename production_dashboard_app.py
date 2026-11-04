@@ -36,7 +36,7 @@ from tennis_forward_readiness_patch import install as install_tennis_forward_rea
 from tennis_forward_home_sync_fix import install as install_tennis_forward_home_sync_fix
 from tennis_predictive_readiness_embed_patch import install as install_tennis_predictive_readiness_embed
 
-BUILD_VERSION = "0.19.121"
+BUILD_VERSION = "0.19.122"
 
 # Keep all visible version surfaces aligned with the real production entrypoint.
 base.BUILD_VERSION = BUILD_VERSION
@@ -293,6 +293,18 @@ try:
 except Exception as exc:
     hr_portfolio_telegram = {"installed": False, "error": f"{type(exc).__name__}: {exc}"}
 print(f"HR_PORTFOLIO_TELEGRAM_INSTALL {hr_portfolio_telegram}", flush=True)
+
+# Read-only same-book candidate queue visibility for chronological Portfolio
+# Shadow and the quality-ranked challenger, using the existing quote cache.
+try:
+    from hr_portfolio_queues import install as install_hr_portfolio_queues
+    hr_portfolio_queues = install_hr_portfolio_queues(
+        base.curated.base_app.app,
+        base.curated.base_app.db,
+    )
+except Exception as exc:
+    hr_portfolio_queues = {"installed": False, "error": f"{type(exc).__name__}: {exc}"}
+print(f"HR_PORTFOLIO_QUEUES_INSTALL {hr_portfolio_queues}", flush=True)
 
 print(
     "MULTIPLES_BUDGET_REALLOCATION "
