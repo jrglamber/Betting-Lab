@@ -189,7 +189,8 @@ def _build_research(db, now: datetime, horizon_hours: int):
             except Exception:
                 pass
         probability = None
-        reason = schedule_integrity.get(str(e.get("event_id") or ""), "ELIGIBLE")
+        schedule_state = schedule_integrity.get(str(e.get("event_id") or ""), "SINGLE_RECORD")
+        reason = "ELIGIBLE" if schedule_state in ("SINGLE_RECORD", "VERIFIED_RESCHEDULE_CANONICAL") else schedule_state
         if reason in {"STALE_RESCHEDULED_FIXTURE", "UNVERIFIED_DUPLICATE_SCHEDULE"}:
             pass
         elif not home_key or not away_key:
