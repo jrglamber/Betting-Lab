@@ -303,28 +303,104 @@ DECISION_HIERARCHY = {
 }
 
 
+
+def _economic_selections(files):
+    """One row per event, market, line and side; retain raw source rows unchanged."""
+    data = files.get("challenge_candidates.csv", b"")
+    rows = list(csv.DictReader(io.StringIO(data.decode("utf-8-sig", errors="replace")))) if data else []
+    grouped = defaultdict(list)
+    outcomes = defaultdict(set)
+    for r in rows:
+        event_id = str(r.get("event_id") or "").strip()
+        market = str(r.get("market_key") or "").strip().lower()
+        selection = str(r.get("selection") or "").strip().lower()
+        point = _number(r.get("point"))
+        line = round(point, 5) if point is not None else None
+        if not event_id or not market or not selection:
+            continue
+        grouped[(event_id, market, line, selection)].append(r)
+        outcomes[(event_id, market, line)].add(selection)
+
+    selections = []
+    for (event_id, market, line, selection), group in sorted(grouped.items(), key=lambda pair: str(pair[0])):
+        representative = group[0]
+        priced = [
+            r for r in group if _number(r.get("offered_odds")) is not None
+            and _number(r.get("offered_odds")) > 1
+        ]
+        # Best OBSERVED quote across sources, not necessarily live, same book,
+        # available to this user's bookmaker, or free from stale quote risk.
+        best = max(priced, key=lambda r: _number(r.get("offered_odds"))) if priced else None
+        opposite_count = len(outcomes[(event_id, market, line)]) - 1
+        research_only = all(
+            str(r.get("challenge_status") or "").upper() == "RESEARCH_ONLY"
+            or str(r.get("source") or "") in ("XCOMP1_RESEARCH", "UEFA_FHG_RESEARCH")
+            for r in group
+        )
+        selection_ambiguous = market in ("totals", "totals_h1", "alternate_totals_h1") and line is None
+        selections.append({
+            "event_id": event_id, "commence_time": representative.get("commence_time"),
+            "sport_key": representative.get("sport_key"), "league": representative.get("league"),
+            "home_team": representative.get("home_team"), "away_team": representative.get("away_team"),
+            "market_key": market, "selection": representative.get("selection"), "point": line,
+            "raw_appearances": len(group),
+            "source_names": "|".join(sorted({str(r.get("source") or "") for r in group})),
+            "books_seen": "|".join(sorted({str(r.get("bookmaker_key") or "") for r in group if r.get("bookmaker_key")})),
+            "highest_recorded_odds": best.get("offered_odds") if best else None,
+            "highest_recorded_odds_book": best.get("bookmaker_key") if best else None,
+            "opposing_alternatives_at_same_line": opposite_count,
+            "line_ambiguous": selection_ambiguous,
+            "research_only": research_only,
+            "decision": (
+                "QUARANTINE_MISSING_LINE" if selection_ambiguous else
+                "RESEARCH_ONLY" if research_only else "PRICE_AND_EVIDENCE_REVIEW"
+            ),
+            "note": "No automatic stake. Repeated records are evidence observations; selection is not necessarily at William Hill.",
+        })
+    source_raw = Counter(str(r.get("source") or "") for r in rows)
+    source_unique = defaultdict(set)
+    for k, group in grouped.items():
+        for r in group:
+            source_unique[str(r.get("source") or "")].add(k)
+    return selections, {
+        "raw_rows": len(rows),
+        "distinct_economic_selections": len(selections),
+        "extra_appearances": sum(max(0, len(group) - 1) for group in grouped.values()),
+        "hit_rate_queue_raw": source_raw.get("HIT_RATE_QUEUE", 0),
+        "hit_rate_queue_distinct": len(source_unique.get("HIT_RATE_QUEUE", set())),
+        "opposing_alternative_groups": sum(len(values)>1 for values in outcomes.values()),
+        "missing_line_selections_quarantined": sum(bool(s["line_ambiguous"]) for s in selections),
+        "no_betting_authority": True,
+    }
+
+
 def enhance_ops_export(db, files: dict[str, bytes]) -> dict[str, bytes]:
     now = datetime.now(timezone.utc)
     overdue, per_league, fhg_summary = _fhg_diagnostics(db, now)
     benchmark, xcomp_summary = _xcomp_market_benchmark(db, now)
+    distinct, selection_summary = _economic_selections(files)
     files["fhg_overdue_audit.csv"] = _csv(overdue)
     files["fhg_settlement_by_league.csv"] = _csv(per_league)
     files["fhg_settlement_audit.json"] = json.dumps(fhg_summary, indent=2).encode()
     files["xcomp_consensus_benchmark.csv"] = _csv(benchmark)
     files["xcomp_validation_status.json"] = json.dumps(xcomp_summary, indent=2).encode()
     files["challenge_decision_hierarchy.json"] = json.dumps(DECISION_HIERARCHY, indent=2).encode()
+    files["challenge_distinct_selections.csv"] = _csv(distinct)
+    files["challenge_selection_inventory.json"] = json.dumps(selection_summary, indent=2).encode()
 
     summary = json.loads(files.get("challenge_summary.json", b"{}"))
     summary["ops_audit_version"] = VERSION
     summary["fhg_settlement_triage"] = fhg_summary
     summary["xcomp_validation"] = xcomp_summary
     summary["decision_hierarchy"] = "challenge_decision_hierarchy.json"
+    summary["selection_inventory"] = selection_summary
     files["challenge_summary.json"] = json.dumps(summary, indent=2, ensure_ascii=False).encode()
     manifest = json.loads(files.get("manifest.json", b"{}"))
     for path in (
         "fhg_overdue_audit.csv", "fhg_settlement_by_league.csv",
         "fhg_settlement_audit.json", "xcomp_consensus_benchmark.csv",
         "xcomp_validation_status.json", "challenge_decision_hierarchy.json",
+        "challenge_distinct_selections.csv", "challenge_selection_inventory.json",
     ):
         if path not in manifest.get("files", []):
             manifest.setdefault("files", []).append(path)
@@ -336,5 +412,7 @@ def enhance_ops_export(db, files: dict[str, bytes]) -> dict[str, bytes]:
         "prediction freeze. A consensus is NOT a bookmaker execution price, CLV,\n"
         "calibration proof or staking authority. Stable decision hierarchy does not\n"
         "alter the underlying models, their prices or selection/settlement logic.\n"
+        "challenge_distinct_selections.csv reduces repeat appearances to unique economic\n"
+        "picks, flags opposing alternatives and incomplete totals lines; no placing rights.\n"
     ).encode()
     return files
