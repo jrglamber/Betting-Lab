@@ -244,8 +244,17 @@ def _form(db, now, state):
     # Old V1 comparison cohorts are archived and never fed new candidates.
     eligible = _eligible_lanes(db, base + extra)
     unified = [c for c in base + extra if str(c.get("source_lane") or "") in eligible]
+    # Cache the same queue and bookmaker quotes for the two read-only UIs.
+    # This must never alter formation or trigger additional provider polling.
+    by_book = _book_options(db, unified, now, start)
+    try:
+        from hr_portfolio_queues import capture
+        capture(db, now, base + extra, eligible, by_book)
+    except Exception as exc:
+        print(f"HR_PORTFOLIO_QUEUE_SNAPSHOT_ERROR {type(exc).__name__}: "
+              f"{sanitize_sensitive_text(exc)}", flush=True)
     options = []
-    for book, entries in _book_options(db, unified, now, start).items():
+    for book, entries in by_book.items():
         picks = _pick_unique(entries)
         if picks:
             timestamps = [hr._parse(q.get("captured_at")) for _, q in picks]
@@ -502,7 +511,8 @@ def install(app, db):
     @app.get("/hr-portfolio-shadow", response_class=HTMLResponse)
     def portfolio_page():
         from hr_portfolio_presentation import render_portfolio
-        return HTMLResponse(render_portfolio(status(db)))
+        from hr_portfolio_queues import read as read_queue
+        return HTMLResponse(render_portfolio(status(db), queue=read_queue(db, view="portfolio")))
 
     # Keep status/results in both weekly and manual export bundles.
     tables = ("hr_portfolio_state", "hr_portfolio_groups",
