@@ -404,6 +404,12 @@ def status(db):
         FROM hr_portfolio_groups g WHERE g.policy_version=? ORDER BY g.id DESC LIMIT 25""", (VERSION,))
     lane_policy = db.fetchall("""SELECT source_lane,status,review_note,updated_at
         FROM hr_portfolio_lane_policy ORDER BY source_lane""")
+    ncaaf_mix = {"zero": 0, "some": 0, "all": 0}
+    for g in latest:
+        count = int(g.get("ncaaf_legs") or 0)
+        total = int(g.get("selection_count") or 0)
+        key = "zero" if count == 0 else "all" if count == total else "some"
+        ncaaf_mix[key] += 1
     leg_rows = db.fetchall("""SELECT l.source_lane,l.event_id,l.market_key,l.selection,l.point,
         l.result,l.entry_odds
         FROM hr_portfolio_legs l JOIN hr_portfolio_groups g ON g.id=l.group_id
@@ -447,6 +453,7 @@ def status(db):
         "portfolio": list(portfolio.values()),
         "lane_policy": [dict(x) for x in lane_policy],
         "lane_metrics": list(lane_summary.values()),
+        "recent_ncaaf_mix": ncaaf_mix,
         "archived_v1_groups": [dict(x) for x in legacy],
         "latest_groups": [dict(x) for x in latest],
         "warning": "NCAAF outcome ROI positive but A/B CLV negative; independent forward verification required",
@@ -514,6 +521,21 @@ def install(app, db):
                 int(x["selection_count"]), escape(str(x["status"])),
             ) for x in s["latest_groups"]
         ) or "<tr><td colspan='5'>Awaiting two or more simultaneous same-book opportunities</td></tr>"
+        lanes = "".join(
+            "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>".format(
+                escape(str(x["source_lane"])),
+                int(x["unique_selections"]), int(x["settled"]),
+                "—" if x["hit_rate_pct"] is None else "{:.1f}%".format(x["hit_rate_pct"]),
+                "—" if x["singles_roi_pct"] is None else "{:+.1f}%".format(x["singles_roi_pct"]),
+            ) for x in s["lane_metrics"]
+        ) or "<tr><td colspan='5'>Awaiting frozen selections</td></tr>"
+        lane_states = "".join(
+            "<tr><td>{}</td><td>{}</td><td>{}</td></tr>".format(
+                escape(str(x["source_lane"])), escape(str(x["status"])),
+                escape(str(x["review_note"])),
+            ) for x in s["lane_policy"]
+        ) or "<tr><td colspan='3'>Awaiting eligible lanes</td></tr>"
+        mix = s["recent_ncaaf_mix"]
         html = (
             "<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>"
             "<title>HR Portfolio Shadow</title></head><body>"
@@ -530,14 +552,23 @@ def install(app, db):
             "No alerts, real wagers or changes to original HR2.</p>"
             "<h2>Portfolio comparison (£10 total/group)</h2><table border='1' cellpadding='6'>"
             "<tr><th>Cohort</th><th>Settled groups</th><th>P/L</th><th>ROI</th><th>Max DD</th></tr>{}</table>"
+            "<p>Recent NCAAF mix (last 25 groups): none <strong>{}</strong> · "
+            "mixed <strong>{}</strong> · all NCAAF <strong>{}</strong>.</p>"
             "<h2>Settled format benchmarks</h2><table border='1' cellpadding='6'>"
             "<tr><th>Cohort</th><th>Format</th><th>Settled</th><th>Normalised P&amp;L (u)</th></tr>"
             "{}"
-            "</table><h2>Latest shadow groups</h2><table border='1' cellpadding='6'>"
+            "</table><h2>Per-lane forward evidence</h2><p>Unique underlying selections, "
+            "not duplicated card appearances. Descriptive ROI, not proof of edge.</p>"
+            "<table border='1' cellpadding='6'><tr><th>Lane</th><th>Unique</th>"
+            "<th>Settled</th><th>Hit rate</th><th>Singles ROI</th></tr>{}</table>"
+            "<h2>Lane eligibility</h2><table border='1' cellpadding='6'>"
+            "<tr><th>Lane</th><th>Status</th><th>Review note</th></tr>{}</table>"
+            "<h2>Latest shadow groups</h2><table border='1' cellpadding='6'>"
             "<tr><th>ID</th><th>Cohort</th><th>Bookmaker</th><th>Legs</th><th>Status</th></tr>{}</table>"
             "<p><a href='/api/hr-portfolio-shadow/status'>Machine-readable status</a></p>"
             "</body></html>"
-        ).format(escape(str(s["started_at"] or "first maintenance")), portfolio_rows, rows, latest)
+        ).format(escape(str(s["started_at"] or "first maintenance")), portfolio_rows,
+                 mix["zero"], mix["some"], mix["all"], rows, lanes, lane_states, latest)
         return HTMLResponse(html)
 
     # Keep status/results in both weekly and manual export bundles.
