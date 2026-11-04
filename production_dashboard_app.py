@@ -7,6 +7,7 @@ sitecustomize startup hook.
 """
 
 import adaptive_dashboard_app as base
+from uefa_fhg_coverage_export_patch import install as install_uefa_fhg_coverage_export
 from challenge_selection_framework_v5 import install as install_challenge_selection_framework_v5
 import credit_policy_unlimited_patch as credit_policy
 import hit_rate_daily_boost_patch as hr_daily_boost
@@ -34,7 +35,7 @@ from tennis_forward_readiness_patch import install as install_tennis_forward_rea
 from tennis_forward_home_sync_fix import install as install_tennis_forward_home_sync_fix
 from tennis_predictive_readiness_embed_patch import install as install_tennis_predictive_readiness_embed
 
-BUILD_VERSION = "0.19.114"
+BUILD_VERSION = "0.19.115"
 
 # Keep all visible version surfaces aligned with the real production entrypoint.
 base.BUILD_VERSION = BUILD_VERSION
@@ -43,6 +44,16 @@ base.dashboard_responsiveness.BUILD_VERSION = BUILD_VERSION
 base.curated.dashboard_layout_v2.VERSION = BUILD_VERSION
 base.curated.base_app.web_module.VERSION = BUILD_VERSION
 base.curated.base_app.app.version = BUILD_VERSION
+
+# The adaptive bootstrap installs FHG1 and cross-competition research;
+# the £200→£2,000 challenge wrapper is already installed in production.
+# Supplement the final export with zero-cost UEFA visibility and an explicitly
+# uncalibrated, unpriced first-half-goal research proxy (no betting authority).
+try:
+    uefa_fhg_coverage_export = install_uefa_fhg_coverage_export(BUILD_VERSION)
+except Exception as exc:
+    uefa_fhg_coverage_export = {"installed": False, "error": f"{type(exc).__name__}: {exc}"}
+print(f"UEFA_FHG_COVERAGE_EXPORT_INSTALL {uefa_fhg_coverage_export}", flush=True)
 
 # New evidence-led £200→£2,000 manual challenge policy.  The adaptive
 # bootstrap has already installed the October legacy and CLV-first wrappers;
