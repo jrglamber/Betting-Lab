@@ -137,7 +137,8 @@ def _build_rows(candidates, eligible_lanes, by_book, now):
     for book in portfolio.MANUAL_BOOKS:
         priced_rows = [r for r in rows
                        if r["bookmaker_key"] == book and r["queue_status"] == "FRESH_BOOK_QUOTE"]
-        if not priced_rows:
+        full_book_pairs = list(by_book.get(book, []))
+        if not full_book_pairs:
             per_book[book] = {
                 "label": BOOK_LABELS[book], "quoted_selections": 0,
                 "distinct_events": 0, "baseline_ready": False,
@@ -164,29 +165,23 @@ def _build_rows(candidates, eligible_lanes, by_book, now):
         for i, r in enumerate(ranked, 1):
             r["quality_rank"] = i
 
-        # Match the baseline's actual selection-prefix and five-minute rule.
-        picks = []
-        used = set()
-        for r in fifo:
-            if r["event_id"] in used:
-                continue
-            used.add(r["event_id"])
-            picks.append(r)
-            if len(picks) >= 4:
-                break
-        stamps = [hr._parse(x["quote_captured_at"]) for x in picks]
+        # Bookmaker readiness MUST use the full candidate universe, not
+        # the bounded rows shown on screen. The existing engine evaluates
+        # every candidate; the display limit must not create false blockers.
+        picks = portfolio._pick_unique(full_book_pairs)
+        stamps = [hr._parse(q.get("captured_at")) for _, q in picks]
         coherent = (len(picks) >= 2 and all(stamps) and
                     (max(stamps)-min(stamps)) <= timedelta(minutes=QUOTE_SPREAD_MINUTES))
-        events = {r["event_id"] for r in priced_rows}
+        events = {str(c.get("event_id") or "") for c, _ in full_book_pairs}
         per_book[book] = {
-            "label": BOOK_LABELS[book], "quoted_selections": len(priced_rows),
+            "label": BOOK_LABELS[book], "quoted_selections": len(full_book_pairs),
             "distinct_events": len(events), "baseline_ready": bool(coherent),
             "baseline_prefix_legs": len(picks),
             "reason": (
                 "Current FIFO prefix has enough same-book, time-coherent legs"
                 if coherent else
                 "Need at least two distinct fixtures at this bookmaker"
-                if len(picks) < 2 else
+                if len(events) < 2 else
                 "FIFO prefix quotes are more than five minutes apart"
             ),
         }
