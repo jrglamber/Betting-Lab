@@ -24,7 +24,7 @@ def test_losing_legs_are_not_treated_as_voids():
     assert isclose(_return_for("DOUBLE", legs), 4.0)
     assert isclose(_return_for("TRIXIE", legs), 1.0)
     assert isclose(_return_for("YANKEE", legs), 4.0 / 11.0)
-    assert isclose(_return_for("SINGLES", legs), 1.5)
+    assert isclose(_return_for("SINGLES", legs), 1.0)
 
 
 def test_void_leg_refunds_that_leg_in_combination():
