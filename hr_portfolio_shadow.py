@@ -17,6 +17,7 @@ import json
 
 from fastapi.responses import HTMLResponse
 import hit_rate_multiples_lab as hr
+import hr_market_integrity as integrity
 from db import sanitize_sensitive_text, utc_now_iso
 
 VERSION = "HR_PORTFOLIO_FORWARD_2026_11_04_V2"
@@ -183,24 +184,28 @@ def _book_options(db, candidates, now, start):
 
 
 def _pick_unique(items):
-    """One coherent same-book slate; no special treatment by sport or lane.
+    """Chronological baseline: first eligible option from each real fixture.
 
-    A deliberately deterministic, pre-event FIFO baseline. Historical lane
-    performance is assessed separately; no retrospective winner selection.
+    A repeated or opposing prediction from the same match cannot count as
+    another leg. Totals/spreads without a numerical line are not actionable.
+    The full alternative pool remains available to the queue/audit.
     """
     chosen = []
-    events = set()
+    fixtures = set()
     pool = sorted(items, key=lambda pair: (
         str(pair[0].get("source_created_at") or pair[0].get("first_seen_at") or ""),
         str(pair[0].get("event_id") or ""),
         str(pair[0].get("source_lane") or ""),
     ))
     for item in pool:
-        eid = str(item[0].get("event_id") or "")
-        if not eid or eid in events:
+        candidate = item[0]
+        if not candidate.get("event_id") or not integrity.market_actionable(candidate):
+            continue
+        fixture = integrity.fixture_key(candidate)
+        if fixture in fixtures:
             continue
         chosen.append(item)
-        events.add(eid)
+        fixtures.add(fixture)
         if len(chosen) == 4:
             break
     return chosen if len(chosen) >= 2 else []
