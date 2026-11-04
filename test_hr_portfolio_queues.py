@@ -120,3 +120,28 @@ def test_unpriced_items_are_visible_even_with_priced_items(tmp_path):
                               "recent_ncaaf_mix":{}},queue=payload)
     assert "E3 v Away" in html
     assert "WATCH/PAUSED source" in html
+
+
+
+def test_display_cap_does_not_hide_only_fresh_prices_or_misstate_readiness(tmp_path):
+    db=Database(db_path=str(tmp_path/"large.sqlite"))
+    now=_at()
+    candidates=[
+        _c(f"E{i:03}", "HR2_FOOTBALL", now-timedelta(hours=8)+timedelta(seconds=i))
+        for i in range(132)
+    ]
+    # Last two appeared after 130 older unpriced fixtures.
+    priced=candidates[-2:]
+    quotes={
+        "williamhill":[(priced[0],_q(2.1,1)),(priced[1],_q(2.2,1))],
+        "ladbrokes_uk":[],
+    }
+    queues.capture(db,now,candidates,{"HR2_FOOTBALL"},quotes)
+    p=queues.read(db,view="portfolio")
+    assert p["source_candidates"]==132
+    assert p["truncated_candidates"]==12
+    assert p["quoted_candidates"]==2
+    assert p["bookmakers"]["williamhill"]["baseline_ready"] is True
+    assert {r["event_id"] for r in p["rows"]}=={"E130","E131"}
+    assert len(p["waiting_rows"])>0
+    assert p["visible_candidates"]==120
