@@ -336,7 +336,11 @@ def install(app, db, base_style: str) -> Dict[str, Any]:
     def research_priorities_page():
         return HTMLResponse(_priority_page(db, base_style))
 
-    home_link = _surface_home_priorities(app, db)
+    # Preserve the audit, registry, forward freezes and standalone page, but
+    # remove its bulky 25 Oct Priority Watch section and anchor from the
+    # dashboard homepage. Research governance remains fully accessible at
+    # /research-priorities and through its exported data.
+    home_link = False
     _INSTALLED = True
     return {
         "installed": True,

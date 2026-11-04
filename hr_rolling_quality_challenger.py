@@ -514,52 +514,8 @@ def install(app, db):
 
     @app.get("/hr-quality-challenger", response_class=HTMLResponse)
     def quality_page():
-        s = scoreboard(db)
-        rows = "".join(
-            "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{:+.2f}u</td></tr>".format(
-                int(x["baseline_group_id"]), escape(str(x["bookmaker_key"])),
-                int(x["candidate_count"]), escape(str(x["status"])),
-                float(x.get("delta_pnl_units") or 0),
-            )
-            for x in s["latest"]
-        ) or "<tr><td colspan='5'>No matched prospective decisions yet</td></tr>"
-        fmt = "".join(
-            "<tr><td>{}</td><td>{}</td><td>{:+.2f}</td><td>{:+.2f}</td></tr>".format(
-                escape(str(x["format"])), int(x["settled"]),
-                float(x.get("baseline_pnl_units") or 0),
-                float(x.get("quality_pnl_units") or 0),
-            ) for x in s["formats"]
-        ) or "<tr><td colspan='4'>Awaiting paired settlement</td></tr>"
-        body = (
-            "<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>"
-            "<title>HR Rolling Quality Challenger</title></head><body>"
-            "<p><a href='/hr-portfolio-shadow'>← HR Portfolio</a></p>"
-            "<h1>Rolling HR quality challenger — forward shadow only</h1>"
-            "<p>Same bookmaker, decision, available selections, leg count, quote window, "
-            "and £10 group stake as chronological baseline. No new polling. "
-            "Frozen price-quality heuristic: 55% source-minimum price premium (capped), "
-            "35% quote freshness, 10% same-selection bookmaker availability. "
-            "<strong>Not a validated model of win probability or expected value.</strong></p>"
-            "<p>Started: {}. Paired settled: <strong>{}</strong>; pending: <strong>{}</strong>."
-            " Baseline P/L: <strong>{:+.2f}u</strong>; quality P/L: <strong>{:+.2f}u</strong>; "
-            "paired difference: <strong>{:+.2f}u</strong>.</p>"
-            "<p>Quality better: {} · Baseline better: {} · Same P/L: {}. "
-            "Paired comparisons share underlying fixtures; do not count as separate wagers.</p>"
-            "<h2>Format comparison on exactly matched decisions</h2>"
-            "<table border='1' cellpadding='6'><tr><th>Format</th><th>Settled</th>"
-            "<th>FIFO P/L (u)</th><th>Ranked P/L (u)</th></tr>{}</table>"
-            "<h2>Recent decisions</h2><table border='1' cellpadding='6'>"
-            "<tr><th>Group</th><th>Book</th><th>Candidates</th><th>Status</th>"
-            "<th>Quality less FIFO (u)</th></tr>{}</table>"
-            "<p>Skipped/unmatched decisions and exact frozen candidate-score audit "
-            "are available through the <a href='/api/hr-quality-challenger/status'>status API</a> "
-            "and weekly research exports.</p></body></html>"
-        ).format(
-            escape(str(s["started_at"] or "not started")), s["paired"], s["pending"],
-            s["baseline_pnl_units"], s["quality_pnl_units"], s["paired_delta_pnl_units"],
-            s["quality_wins"], s["baseline_wins"], s["same_result"], fmt, rows,
-        )
-        return HTMLResponse(body)
+        from hr_portfolio_presentation import render_quality
+        return HTMLResponse(render_quality(scoreboard(db)))
 
     # Native exports retain every paired decision, feature snapshot and result.
     tables = ("hr_quality_state", "hr_quality_pairs", "hr_quality_legs",
@@ -576,26 +532,8 @@ def install(app, db):
     except Exception as exc:
         print("HR_QUALITY_SPLIT_EXPORT_ERROR " + sanitize_sensitive_text(exc), flush=True)
 
-    # Add navigation after the existing portfolio page without changing data.
-    route = next((r for r in app.router.routes if getattr(r, "path", None) ==
-                  "/hr-portfolio-shadow" and "GET" in getattr(r, "methods", set())), None)
-    if route:
-        original = route.endpoint
-        app.router.routes.remove(route)
-
-        def portfolio_with_quality():
-            response = original()
-            if not isinstance(response, HTMLResponse):
-                return response
-            html = response.body.decode("utf-8")
-            link = "<p><a href='/hr-quality-challenger'>Rolling Quality Challenger (paired A/B)</a></p>"
-            html = html.replace("</body>", link+"</body>", 1)
-            headers = {k: v for k, v in response.headers.items() if k.lower() != "content-length"}
-            return HTMLResponse(html, status_code=response.status_code, headers=headers)
-
-        app.add_api_route("/hr-portfolio-shadow", portfolio_with_quality,
-                          methods=["GET"], response_class=HTMLResponse, name=route.name,
-                          include_in_schema=getattr(route, "include_in_schema", True))
+    # Navigation is now shared by both research dashboards and already sits
+    # at the top of the HR Lab. Do not wrap/re-register portfolio routes.
     _INSTALLED = True
     return {
         "installed": True, "version": VERSION,
