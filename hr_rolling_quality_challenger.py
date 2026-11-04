@@ -348,6 +348,11 @@ def _form_wrapper(previous_form):
         }
         eligible = [c for c in sources
                     if statuses.get(str(c.get("source_lane") or "")) == "ELIGIBLE"]
+        # Match baseline's pre-event safety abstention exactly: a ranked
+        # contender must not reintroduce a fixture whose eligible source
+        # contains directly opposed choices for the same market/point.
+        conflicts = integrity.conflicted_fixture_keys(eligible)
+        eligible = [c for c in eligible if integrity.fixture_key(c) not in conflicts]
         options = baseline._book_options(db, eligible, now, _dt(state["started_at"]))
         formed = skipped = 0
         for g in new_groups:
