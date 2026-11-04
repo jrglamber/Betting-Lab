@@ -157,7 +157,123 @@ def main_hr_quicklinks(html: str) -> str:
     return html.replace(marker, nav_html + marker, 1)
 
 
-def render_portfolio(s: dict[str, Any]) -> str:
+
+def queue_panels(snapshot: dict[str, Any] | None, *, view: str) -> str:
+    """Same shared snapshot: chronological on Portfolio, ranked on Challenger."""
+    if snapshot is None:
+        return ""
+    if not snapshot.get("snapshot_at"):
+        return panel("Rolling selection queue",
+                     note="Runs from the existing Hit-Rate maintenance cycle",
+                     contents="<div class='lab-empty'>Awaiting first cached queue snapshot</div>")
+    from datetime import datetime, timezone
+
+    def when(value):
+        if not value:
+            return "—"
+        try:
+            d = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            if d.tzinfo is None:
+                d = d.replace(tzinfo=timezone.utc)
+            return d.astimezone(timezone.utc).strftime("%d %b %H:%M UTC")
+        except (TypeError, ValueError):
+            return str(value)
+
+    def fixture(item):
+        a, b = item.get("home_team"), item.get("away_team")
+        return f"{a} v {b}" if a and b else str(item.get("event_id") or "—")
+
+    def book(item):
+        return {"williamhill": "William Hill", "ladbrokes_uk": "Ladbrokes"}.get(
+            item.get("bookmaker_key"), "—"
+        )
+
+    heading = "Ranked candidates available now" if view == "quality" else "Chronological candidate queue"
+    details = (
+        "Experimental price-quality ranking preview only; the challenger freezes "
+        "choices when the chronological engine forms a group."
+        if view == "quality" else
+        "First-available selections and qualifying same-book prices; "
+        "existing chronological formation rules are unchanged."
+    )
+    result = (
+        "<div class='lab-summary'><strong>" + _t(heading) + "</strong> · " +
+        _t(details) + "<div class='muted' style='margin-top:8px'>"
+        "Snapshot " + _t(when(snapshot["snapshot_at"])) +
+        " · Updated from existing quote cache · No additional API polling</div></div>"
+        "<div class='grid lab-metrics'>" +
+        card("Upcoming in pool", _int(snapshot.get("source_candidates", 0))) +
+        card("Eligible", _int(snapshot.get("eligible_candidates", 0))) +
+        card("Fresh priced", _int(snapshot.get("quoted_candidates", 0))) +
+        card("Waiting for price", _int(snapshot.get("waiting_price_candidates", 0))) +
+        "</div>"
+    )
+    books = snapshot.get("bookmakers") or {}
+    result += panel(
+        "Same-bookmaker readiness",
+        note="At least two distinct fixtures are required for a double",
+        contents="<div class='grid lab-metrics'>" +
+        "".join(
+            card((books.get(b) or {}).get("label") or title,
+                 str((books.get(b) or {}).get("distinct_events") or 0) + " fixtures",
+                 (books.get(b) or {}).get("reason") or "No qualifying quote yet")
+            for b, title in (("williamhill", "William Hill"), ("ladbrokes_uk", "Ladbrokes"))
+        ) + "</div>",
+    )
+    data = snapshot.get("rows") or []
+    if view == "quality":
+        headers = ["Rank", "Book", "Source lane", "Fixture", "Market / selection",
+                   "Price", "Score", "Kickoff", "Quote age*"]
+        entries = [
+            [_int(r.get("quality_rank")), book(r), r.get("source_lane"), fixture(r),
+             str(r.get("market_key")) + " · " + str(r.get("selection")),
+             _num(r.get("quote_price"), 2), _num(r.get("quality_score"), 1),
+             when(r.get("commence_time")), _num(r.get("quote_age_minutes"), 1, suffix="m")]
+            for r in data
+        ]
+    else:
+        headers = ["FIFO", "Source lane", "Fixture", "Market / selection",
+                   "Book", "Price", "Kickoff", "Quote age*"]
+        entries = [
+            [_int(r.get("baseline_rank")), r.get("source_lane"), fixture(r),
+             str(r.get("market_key")) + " · " + str(r.get("selection")),
+             book(r), _num(r.get("quote_price"), 2),
+             when(r.get("commence_time")), _num(r.get("quote_age_minutes"), 1, suffix="m")]
+            for r in data
+        ]
+    result += panel(
+        "Currently priced queue",
+        note="The score/FIFO rank is per bookmaker, not an issued betting instruction",
+        contents=table(headers, entries, "No qualifying fresh bookmaker prices currently cached"),
+    )
+    result += panel(
+        "Awaiting prices or excluded",
+        note="Upcoming pool selections not currently ready for formation",
+        contents=table(
+            ["Source lane", "Fixture", "Market / selection", "Kickoff", "Reason"],
+            [[r.get("source_lane"), fixture(r),
+              str(r.get("market_key")) + " · " + str(r.get("selection")),
+              when(r.get("commence_time")),
+              "WATCH/PAUSED source" if r.get("queue_status") == "WATCH_OR_PAUSED"
+              else "Waiting for valid fresh bookmaker price"]
+             for r in (snapshot.get("waiting_rows") or [])],
+            "No displayed selections waiting for a price",
+        ),
+    )
+    result += (
+        "<p class='lab-foot'>*Quote age is at the displayed snapshot time. "
+        "Prices and kickoff proximity must be rechecked. Showing up to " +
+        _int(snapshot.get("visible_candidates", 0)) + " of " +
+        _int(snapshot.get("source_candidates", 0)) +
+        " upcoming candidate identities; extra candidates beyond the display cap: " +
+        _int(snapshot.get("truncated_candidates", 0)) +
+        ". The research engine still sees its full permitted pool. "
+        "No extra odds calls, Telegram notifications or execution authority.</p>"
+    )
+    return result
+
+
+def render_portfolio(s: dict[str, Any], queue: dict[str, Any] | None = None) -> str:
     portfolio = next(
         (p for p in s.get("portfolio", []) if p.get("cohort") == "UNIFIED"),
         (s.get("portfolio") or [None])[0],
@@ -186,6 +302,7 @@ def render_portfolio(s: dict[str, Any]) -> str:
         "<strong>Research only:</strong> no automated bets or alerts."
         "</div>"
     )
+    body += queue_panels(queue, view="portfolio")
     body += panel(
         "Portfolio results", note="Same £10 total reference stake per group",
         contents=table(
@@ -263,7 +380,7 @@ def render_portfolio(s: dict[str, Any]) -> str:
     return body
 
 
-def render_quality(s: dict[str, Any]) -> str:
+def render_quality(s: dict[str, Any], queue: dict[str, Any] | None = None) -> str:
     paired = int(s.get("paired") or 0)
     body = page_open(
         "Rolling Quality Challenger", active="hr-quality-challenger",
@@ -290,6 +407,7 @@ def render_quality(s: dict[str, Any]) -> str:
         "minimum · 35% quote freshness · 10% bookmaker availability. "
         "This is a heuristic, not a calibrated win-probability or EV model.</div>"
     )
+    body += queue_panels(queue, view="quality")
     body += panel(
         "Paired decision health",
         note="No retrospective re-selection",
