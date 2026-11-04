@@ -205,7 +205,8 @@ def queue_panels(snapshot: dict[str, Any] | None, *, view: str) -> str:
         card("Upcoming in pool", _int(snapshot.get("source_candidates", 0))) +
         card("Eligible", _int(snapshot.get("eligible_candidates", 0))) +
         card("Fresh priced", _int(snapshot.get("quoted_candidates", 0))) +
-        card("Waiting for price", _int(snapshot.get("waiting_price_candidates", 0))) +
+        card("Not yet actionable", _int(snapshot.get("waiting_price_candidates", 0)),
+             "Includes waiting prices and missing market lines") +
         "</div>"
     )
     books = snapshot.get("bookmakers") or {}
@@ -220,44 +221,139 @@ def queue_panels(snapshot: dict[str, Any] | None, *, view: str) -> str:
             for b, title in (("williamhill", "William Hill"), ("ladbrokes_uk", "Ladbrokes"))
         ) + "</div>",
     )
+    import hr_market_integrity as integrity
+
+    def collapse_options(items, *, include_book):
+        """One fixture per row, with distinct markets as clearly labelled alternatives."""
+        buckets = {}
+        for r in items:
+            fixture_id = integrity.fixture_key(r)
+            key = ((r.get("bookmaker_key"), fixture_id)
+                   if include_book else fixture_id)
+            buckets.setdefault(key, []).append(r)
+        grouped = []
+        for alternatives in buckets.values():
+            options = {}
+            for r in alternatives:
+                mk = integrity.market_key(r)
+                previous = options.get(mk)
+                if previous is None or (
+                    r.get("quote_price") is not None
+                    and float(r.get("quote_price") or 0) >
+                    float(previous.get("quote_price") or 0)
+                ):
+                    options[mk] = r
+            ordered = list(options.values())
+            if view == "quality":
+                ordered.sort(key=lambda r: (
+                    -(float(r.get("quality_score") or 0)), str(r.get("source_first_seen_at") or ""),
+                ))
+            else:
+                ordered.sort(key=lambda r: (
+                    str(r.get("source_first_seen_at") or ""), str(r.get("source_lane") or ""),
+                ))
+            chosen = ordered[0]
+            conflict = integrity.opposing_options(ordered)
+            grouped.append({
+                "chosen": chosen, "options": ordered,
+                "conflict": conflict, "n": len(ordered),
+            })
+        grouped.sort(key=lambda g: (
+            (int(g["chosen"].get("quality_rank") or 999999)
+             if view == "quality" else
+             str(g["chosen"].get("source_first_seen_at") or "")),
+            str(g["chosen"].get("event_id") or ""),
+        ))
+        return grouped
+
+    def option_label(r, *, priced):
+        line = integrity.market_label(r)
+        if priced and r.get("quote_price") is not None:
+            return line + " @ " + _num(r.get("quote_price"), 2)
+        return line
+
     data = snapshot.get("rows") or []
+    priced_groups = collapse_options(data, include_book=True)
+    awaiting_groups = collapse_options(snapshot.get("waiting_rows") or [],
+                                      include_book=False)
+    conflict_count = sum(int(x["conflict"]) for x in priced_groups + awaiting_groups)
+    result += (
+        "<div class='lab-summary'><strong>Fixture-first view:</strong> one row per "
+        "underlying match (and per bookmaker where quoted). Several market "
+        "options for the same match are <strong>alternatives</strong>, not "
+        "independent legs. Identical options from duplicate feeds are merged. "
+        "<strong>Opposing predictions</strong> at the same market and line "
+        "are flagged and never placed together inside a multiple."
+        "</div>"
+        "<div class='grid lab-metrics'>" +
+        card("Duplicate source rows hidden",
+             _int(snapshot.get("duplicate_raw_rows_collapsed", 0)),
+             "Original source evidence retained") +
+        card("Missing market lines",
+             _int(snapshot.get("missing_line_candidates", 0)),
+             "Not permitted into new portfolio cards") +
+        card("Opposing fixture options",
+             _int(conflict_count), "Within displayed snapshot") +
+        "</div>"
+    )
+
+    def alternatives_text(g, *, priced):
+        options = [option_label(r, priced=priced) for r in g["options"]]
+        labels = " | ".join(options[:8])
+        if len(options) > 8:
+            labels += " | +" + _int(len(options)-8) + " more alternatives"
+        if g["conflict"]:
+            labels += "  [OPPOSING PREDICTIONS — ONE FIXTURE ONLY]"
+        return labels
+
     if view == "quality":
-        headers = ["Rank", "Book", "Source lane", "Fixture", "Market / selection",
-                   "Price", "Score", "Kickoff", "Quote age*"]
+        headers = ["Top rank", "Book", "Fixture", "Ranked option",
+                   "Other market options (alternatives)", "Score", "Kickoff"]
         entries = [
-            [_int(r.get("quality_rank")), book(r), r.get("source_lane"), fixture(r),
-             str(r.get("market_key")) + " · " + str(r.get("selection")),
-             _num(r.get("quote_price"), 2), _num(r.get("quality_score"), 1),
-             when(r.get("commence_time")), _num(r.get("quote_age_minutes"), 1, suffix="m")]
-            for r in data
+            [_int(g["chosen"].get("quality_rank")),
+             book(g["chosen"]), fixture(g["chosen"]),
+             option_label(g["chosen"], priced=True),
+             alternatives_text(g, priced=True),
+             _num(g["chosen"].get("quality_score"), 1),
+             when(g["chosen"].get("commence_time"))]
+            for g in priced_groups
         ]
     else:
-        headers = ["FIFO", "Source lane", "Fixture", "Market / selection",
-                   "Book", "Price", "Kickoff", "Quote age*"]
+        headers = ["First FIFO", "Book", "Fixture", "First option",
+                   "Market options (not additional legs)", "Kickoff"]
         entries = [
-            [_int(r.get("baseline_rank")), r.get("source_lane"), fixture(r),
-             str(r.get("market_key")) + " · " + str(r.get("selection")),
-             book(r), _num(r.get("quote_price"), 2),
-             when(r.get("commence_time")), _num(r.get("quote_age_minutes"), 1, suffix="m")]
-            for r in data
+            [_int(g["chosen"].get("baseline_rank")),
+             book(g["chosen"]), fixture(g["chosen"]),
+             option_label(g["chosen"], priced=True),
+             alternatives_text(g, priced=True),
+             when(g["chosen"].get("commence_time"))]
+            for g in priced_groups
         ]
+
     result += panel(
         "Currently priced queue",
-        note="The score/FIFO rank is per bookmaker, not an issued betting instruction",
-        contents=table(headers, entries, "No qualifying fresh bookmaker prices currently cached"),
+        note="One row per fixture and bookmaker, with alternatives grouped",
+        contents=table(headers, entries,
+                       "No qualifying fresh bookmaker prices currently cached"),
     )
+
+    def reason(g):
+        states = {r.get("queue_status") for r in g["options"]}
+        if states == {"WATCH_OR_PAUSED"}:
+            return "WATCH/PAUSED source"
+        if "MISSING_MARKET_LINE" in states:
+            return "Missing totals/handicap line — NOT actionable"
+        return "Waiting for valid fresh bookmaker price"
+
     result += panel(
         "Awaiting prices or excluded",
-        note="Upcoming pool selections not currently ready for formation",
+        note="One fixture with its distinct market alternatives, not duplicate bets",
         contents=table(
-            ["Source lane", "Fixture", "Market / selection", "Kickoff", "Reason"],
-            [[r.get("source_lane"), fixture(r),
-              str(r.get("market_key")) + " · " + str(r.get("selection")),
-              when(r.get("commence_time")),
-              "WATCH/PAUSED source" if r.get("queue_status") == "WATCH_OR_PAUSED"
-              else "Waiting for valid fresh bookmaker price"]
-             for r in (snapshot.get("waiting_rows") or [])],
-            "No displayed selections waiting for a price",
+            ["Fixture", "Distinct market options", "Kickoff", "Reason"],
+            [[fixture(g["chosen"]), alternatives_text(g, priced=False),
+              when(g["chosen"].get("commence_time")), reason(g)]
+             for g in awaiting_groups],
+            "No displayed selections awaiting a valid quote",
         ),
     )
     result += (
