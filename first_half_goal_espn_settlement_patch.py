@@ -20,7 +20,7 @@ import first_half_goal_lab as fhg
 import first_half_goal_settlement_patch as legacy
 from db import sanitize_sensitive_text
 
-VERSION = "FHG1_ESPN_SETTLEMENT_V1"
+VERSION = "FHG1_ESPN_SETTLEMENT_V2_EXPANDED_DOMESTIC"
 MIN_AGE_MINUTES = 180
 REFRESH_MINUTES = 60
 SOURCE_STATE_PREFIX = "FHG1:ESPN_SETTLEMENT_V1"
@@ -35,6 +35,24 @@ LEAGUE_SLUGS = {
     "soccer_england_league1": "eng.3",
     "soccer_england_league2": "eng.4",
     "soccer_spl": "sco.1",
+    "soccer_scotland_championship": "sco.2",
+    "soccer_scotland_league_one": "sco.3",
+    "soccer_scotland_league_two": "sco.4",
+    # The FHG expanded domestic research universe already collects these
+    # competitions, but their results had no timely ESPN verification path.
+    "soccer_germany_bundesliga": "ger.1",
+    "soccer_germany_bundesliga2": "ger.2",
+    "soccer_italy_serie_a": "ita.1",
+    "soccer_italy_serie_b": "ita.2",
+    "soccer_spain_la_liga": "esp.1",
+    "soccer_spain_segunda_division": "esp.2",
+    "soccer_france_ligue_one": "fra.1",
+    "soccer_france_ligue_two": "fra.2",
+    "soccer_netherlands_eredivisie": "ned.1",
+    "soccer_belgium_first_div": "bel.1",
+    "soccer_portugal_primeira_liga": "por.1",
+    "soccer_turkey_super_league": "tur.1",
+    "soccer_greece_super_league": "gre.1",
 }
 
 _INSTALLED = False
@@ -190,7 +208,11 @@ def _settle_from_espn(db, now: datetime) -> Dict[str, Any]:
     for (sport, day), candidates in grouped.items():
         league = LEAGUE_SLUGS[sport]
         key = f"{SOURCE_STATE_PREFIX}:{sport}:{day}"
-        if not fhg._source_due(db, key, now, REFRESH_MINUTES / 60.0):
+        # Old unresolved fixtures are sampled sparingly. This avoids
+        # continually polling months-old rows which cannot be confirmed.
+        day_dt = datetime.fromisoformat(day).replace(tzinfo=timezone.utc)
+        refresh_hours = 12.0 if (now - day_dt).days >= 7 else REFRESH_MINUTES / 60.0
+        if not fhg._source_due(db, key, now, refresh_hours):
             continue
         out["attempted"] += 1
         try:
