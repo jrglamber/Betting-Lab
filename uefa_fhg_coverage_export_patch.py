@@ -73,7 +73,13 @@ def _rows(db, sql: str, params=()):
 
 def _count(db, table: str, key: str) -> int:
     try:
-        row = db.fetchone(f"SELECT COUNT(*) AS n FROM {table} WHERE sport_key=?", (key,))
+        if table == "execution_shadow_bets":
+            row = db.fetchone(
+                "SELECT COUNT(*) AS n FROM execution_shadow_bets b JOIN events e ON e.event_id=b.event_id WHERE e.sport_key=?",
+                (key,),
+            )
+        else:
+            row = db.fetchone(f"SELECT COUNT(*) AS n FROM {table} WHERE sport_key=?", (key,))
         return int((row or {}).get("n") or 0)
     except Exception:
         return 0
