@@ -83,12 +83,34 @@ def _build_rows(candidates, eligible_lanes, by_book, now):
             if not old or (ts and ts > _quote_time(old)):
                 quotes[book] = dict(q)
 
-    # This is a visibility cap, not a cap on what the actual strategy evaluates.
-    universe = sorted(candidates, key=lambda c: (
+    # The visibility cap never changes strategy formation. Reserve space
+    # for priced legs AND waiting/paused candidates so neither queue section
+    # appears empty just because older candidates fill the first 120 slots.
+    full_universe = sorted(candidates, key=lambda c: (
         _first_seen(c), str(c.get("event_id") or ""),
         str(c.get("source_lane") or ""),
     ))
-    universe = universe[:VISIBLE_CANDIDATES]
+    priced_candidates = [c for c in full_universe
+                         if str(c.get("source_lane") or "") in eligible_lanes
+                         and by_identity.get(_identity(c))]
+    waiting_candidates = [c for c in full_universe
+                          if str(c.get("source_lane") or "") in eligible_lanes
+                          and not by_identity.get(_identity(c))]
+    excluded_candidates = [c for c in full_universe
+                           if str(c.get("source_lane") or "") not in eligible_lanes]
+    wait_kept = waiting_candidates[:min(len(waiting_candidates), 30)]
+    paused_kept = excluded_candidates[:min(len(excluded_candidates), 10)]
+    room = VISIBLE_CANDIDATES - len(wait_kept) - len(paused_kept)
+    priced_kept = priced_candidates[:max(0, room)]
+    universe = priced_kept + wait_kept + paused_kept
+    if len(universe) < VISIBLE_CANDIDATES:
+        seen = {_identity(c) for c in universe}
+        for c in full_universe:
+            if len(universe) >= VISIBLE_CANDIDATES:
+                break
+            if _identity(c) not in seen:
+                universe.append(c)
+                seen.add(_identity(c))
     priced = waiting = excluded = 0
     rows = []
     for c in universe:
