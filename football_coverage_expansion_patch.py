@@ -497,6 +497,7 @@ def freeze_predictions(db, now: Optional[datetime] = None) -> Dict[str, Any]:
         )
     ]
     # Reject stale or conflicting UEFA provider IDs before fitting XCOMP.
+    from predictive_football import _normalize_text
     # Verified schedule changes have an explicit canonical kickoff; unverified
     # duplicates are excluded instead of silently choosing the first entry.
     from uefa_team_aliases import VERIFIED_SCHEDULE_OVERRIDES
@@ -516,6 +517,16 @@ def freeze_predictions(db, now: Optional[datetime] = None) -> Dict[str, Any]:
         )
         duplicate_groups.setdefault(fixture, []).append(event)
     rejected_event_ids = set()
+    # Enforce official kickoffs even if the canonical event is now past and no
+    # longer present in the forward window. Otherwise a stale future duplicate
+    # would silently become a new forecast the next day.
+    for fixture, group in duplicate_groups.items():
+        official = _parse(VERIFIED_SCHEDULE_OVERRIDES.get(fixture))
+        if official is not None:
+            rejected_event_ids.update(
+                str(e.get("event_id") or "") for e in group
+                if _parse(e.get("commence_time")) != official
+            )
     for fixture, group in duplicate_groups.items():
         if len(group) <= 1:
             continue
