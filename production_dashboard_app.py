@@ -39,7 +39,7 @@ from tennis_predictive_readiness_embed_patch import install as install_tennis_pr
 from verified_jacquet_machac_rescue import run_once as repair_verified_jacquet_machac
 from verified_van_assche_tien_rescue import run_once as repair_verified_van_assche_tien
 
-BUILD_VERSION = "0.19.135"
+BUILD_VERSION = "0.19.136"
 
 # Keep all visible version surfaces aligned with the real production entrypoint.
 base.BUILD_VERSION = BUILD_VERSION
@@ -358,6 +358,23 @@ try:
     print(f"HR2_PORTFOLIO_QUALITY_HEALTH {_diag}", flush=True)
 except Exception as exc:
     print(f"HR2_PORTFOLIO_QUALITY_HEALTH_ERROR {type(exc).__name__}: {exc}", flush=True)
+
+# Read-only actual-frozen-price HR2 pocket audit. This counts one economic
+# selection once across all four multiple formats, and never mistakes the
+# theoretical target price for a placeable singles quote.
+try:
+    import json as _hr2_json
+    from hr2_singles_pocket_audit import install as _install_hr2_singles
+    from hr2_singles_pocket_audit import report as _hr2_pocket_report
+    _audit_db = base.curated.base_app.db
+    _audit_app = base.curated.base_app.app
+    _audit_install = _install_hr2_singles(_audit_app, _audit_db)
+    print(f"HR2_UNIQUE_SINGLES_POCKET_INSTALL {_audit_install}", flush=True)
+    print("HR2_UNIQUE_SINGLES_POCKET_AUDIT " + _hr2_json.dumps(
+        _hr2_pocket_report(_audit_db), sort_keys=True,
+    ), flush=True)
+except Exception as exc:
+    print(f"HR2_UNIQUE_SINGLES_POCKET_AUDIT_ERROR {type(exc).__name__}: {exc}", flush=True)
 
 # Read-only matched-pick ROI: each settled multiple is compared against singles
 # formed from the exact same frozen selections and prices, at equal total stake.
