@@ -18,7 +18,7 @@ from typing import Any
 import hit_rate_multiples_lab as hr
 import hr_market_integrity as integrity
 
-VERSION = "HR2_UNIQUE_SINGLES_POCKET_AUDIT_V1"
+VERSION = "HR2_UNIQUE_SINGLES_POCKET_AUDIT_V2_BAND_SLICES"
 POLICY_VERSION = "HRM_2026-10-18_V3_THEORETICAL_QUEUE"
 
 
@@ -109,6 +109,60 @@ def report(db) -> dict[str, Any]:
             ),
         })
     rows.sort(key=lambda x: (-x["settled_with_known_outcome"], x["lane"]))
+
+    # Split the inherited broad lanes at actual frozen odds. This is essential
+    # to distinguish the HR1 core (e.g. totals <2.00) from the extra HR2
+    # price band (2.00-2.99). Old EuroLeague/NFL broad sources are historical,
+    # NOT evidence that those deprecated ranges remain in the current pool.
+    slice_specs = {
+        "FOOTBALL_TOTALS_1_80_2_99": (
+            ("Football totals 1.80-1.99", 1.8, 2.0),
+            ("Football totals 2.00-2.99", 2.0, 3.0),
+        ),
+        "TENNIS_H2H_1_80_2_99": (
+            ("Tennis H2H 1.80-1.99", 1.8, 2.0),
+            ("Tennis H2H 2.00-2.99", 2.0, 3.0),
+        ),
+        "EUROLEAGUE_H2H_1_50_2_99": (
+            ("EuroLeague H2H 1.50-1.99 (historical)", 1.5, 2.0),
+            ("EuroLeague H2H 2.00-2.99 (retired)", 2.0, 3.0),
+        ),
+        "NFL_H2H_1_50_2_99": (
+            ("NFL H2H 1.50-1.99 (historical)", 1.5, 2.0),
+            ("NFL H2H 2.00-2.99 (historical)", 2.0, 3.0),
+        ),
+    }
+    band_slices = []
+    for lane, specs in slice_specs.items():
+        for label, lo, hi in specs:
+            matches = [x for x in grouped.get(lane, ())
+                       if lo <= x["odds"] < hi]
+            if not matches:
+                continue
+            rated = [x for x in matches if x["result"] in ("WIN", "LOSS")]
+            refunded = [x for x in matches if x["result"] in ("PUSH", "VOID")]
+            settled = rated + refunded
+            wins = sum(x["result"] == "WIN" for x in rated)
+            pnl = sum(
+                x["odds"] - 1 if x["result"] == "WIN"
+                else -1 if x["result"] == "LOSS" else 0 for x in settled
+            )
+            band_slices.append({
+                "parent_lane": lane,
+                "band": label,
+                "min_odds": lo,
+                "max_exclusive": hi,
+                "unique_quoted": len(matches),
+                "settled": len(settled),
+                "unsettled": len(matches) - len(settled),
+                "wins": wins,
+                "losses": len(rated) - wins,
+                "hit_rate_pct": round(100 * wins / len(rated), 2) if rated else None,
+                "singles_roi_pct": round(100 * pnl / len(settled), 2) if settled else None,
+                "singles_pnl_units": round(pnl, 4),
+                "first_card_at": min(x["first_card_at"] for x in matches),
+                "last_card_at": max(x["first_card_at"] for x in matches),
+            })
     all_items = list(unique.values())
     all_done = [x for x in all_items if x["result"] in ("WIN", "LOSS", "PUSH", "VOID")]
     all_decided = [x for x in all_done if x["result"] in ("WIN", "LOSS")]
@@ -135,6 +189,7 @@ def report(db) -> dict[str, Any]:
         "duplicate_multiple_leg_appearances_collapsed": duplicate_appearances,
         "across_pocket_duplicate_appearances": across_pocket_duplicates,
         "pockets": rows,
+        "price_band_slices": band_slices,
         "no_api_requests": True, "betting_authority": False,
     }
 
