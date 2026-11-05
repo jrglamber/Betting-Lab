@@ -13,11 +13,11 @@ from tennis_predictive3_safety_patch import install as install_tpred3_safety
 from tennis_predictive3_refresh_patch import install as install_tpred3_refresh
 import tennis_rich_source as rich_source
 from tennis_rich_source_safety_patch import install as install_rich_source_safety
-from tennis_rich_context import maintenance as run_rich_context_maintenance
-from tennis_rich_source import maintenance as run_rich_maintenance
+import tennis_rich_context as rich_context
+import tennis_result_priority_budget_patch as priority_budget
 from tennis_rich_source import status as rich_status
 
-VERSION = "TPRED_RUNTIME_PATCH_V7_1"
+VERSION = "TPRED_RUNTIME_PATCH_V7_2_FREE_TPRED"
 RICH_FIRST_DELAY_SECONDS = 20
 RICH_BACKFILL_INTERVAL_SECONDS = 15 * 60
 RICH_IDLE_INTERVAL_SECONDS = 4 * 60 * 60
@@ -114,6 +114,58 @@ def _forward_snapshot(db) -> Dict[str, Any]:
         }
 
 
+def _run_free_fixture_context(db, now: datetime) -> Dict[str, Any]:
+    """Spend at most four calls/day on upcoming ATP/WTA fixture identities.
+
+    TPRED3 requires these identities and surfaces before it can generate
+    forward predictions. Historical ranking backfills and per-match stats
+    remain disabled on the free tier; rankings are budgeted separately.
+    """
+    if not priority_budget._INSTALLED:
+        return {
+            "ok": True, "requests": 0,
+            "reason": "free_priority_guard_not_installed",
+            "betting_authority": False,
+        }
+    rich_context.install_schema(db)
+    state = db.fetchone(
+        "SELECT last_fixture_sync_at FROM tennis_rich_context_state WHERE singleton_id=1"
+    ) or {}
+    if str(state.get("last_fixture_sync_at") or "")[:10] == now.date().isoformat():
+        return {
+            "ok": True, "requests": 0,
+            "reason": "free_fixtures_already_current",
+            "betting_authority": False,
+        }
+    used = rich_source._used_today(db, now)
+    budget = max(
+        0, int(rich_source.DAILY_REQUEST_CAP)
+        - used - priority_budget._result_reserve(rich_source.DAILY_REQUEST_CAP)
+    )
+    permitted = min(priority_budget.FREE_FIXTURE_DAILY_BUDGET, budget)
+    if permitted <= 0:
+        return {
+            "ok": True, "requests": 0,
+            "reason": "free_fixture_budget_unavailable",
+            "betting_authority": False,
+        }
+    client = rich_source.RichClient(db, max_requests=permitted)
+    if not client.available:
+        return {
+            "ok": False, "requests": 0,
+            "reason": "free_fixture_provider_unavailable",
+            "betting_authority": False,
+        }
+    fixtures = rich_context.sync_upcoming_fixtures(db, client, now)
+    return {
+        "ok": client.errors == 0, "requests": client.requests,
+        "errors": client.errors, "fixtures": fixtures,
+        "mode": "FREE_UPCOMING_FIXTURES_ONLY",
+        "historical_rankings": {"skipped": "free_tier_weekly_current_rankings"},
+        "betting_authority": False,
+    }
+
+
 def _start_rich_worker(tennis_engine, db) -> bool:
     if getattr(tennis_engine, "_tpred_rich_worker_started", False):
         return False
@@ -125,16 +177,34 @@ def _start_rich_worker(tennis_engine, db) -> bool:
             try:
                 limits = _rich_limits()
 
-                # Base collector: result universe + cached per-match stats.
-                result = run_rich_maintenance(db, max_requests=int(limits["cycle_cap"]))
+                free_tier = priority_budget._free_tier(int(limits["daily_cap"]))
+                now = datetime.now(timezone.utc)
+
+                # Resolve this at runtime, not from a startup import alias.
+                # Production wraps rich_source.maintenance to reserve result
+                # requests; the old fixed alias bypassed that crucial guard.
+                if free_tier and not priority_budget._INSTALLED:
+                    result = {
+                        "ok": True, "requests": 0,
+                        "reason": "free_priority_guard_not_installed",
+                        "betting_authority": False,
+                    }
+                else:
+                    result = rich_source.maintenance(
+                        db, now=now, max_requests=int(limits["cycle_cap"])
+                    )
                 result = dict(result or {})
                 result["temporary_backfill_boost"] = limits
                 print(f"TPRED_RICH_MAINTENANCE {result}", flush=True)
 
-                # Separate chronological context: dated rankings + upcoming
-                # fixture surface. This deliberately never uses today's rank
-                # for a historical prediction. It shares the same daily guard.
-                context = run_rich_context_maintenance(db)
+                # TPRED3's exact ATP/WTA fixture identity + surface requires
+                # daily context; allocate a few calls, not the full old
+                # historical ranking/statistics backfill. Current rankings are
+                # refreshed weekly by the free-tier priority budget module.
+                if free_tier:
+                    context = _run_free_fixture_context(db, now)
+                else:
+                    context = rich_context.maintenance(db, now=now)
                 print(f"TPRED_RICH_CONTEXT {context}", flush=True)
 
                 # TPRED3 is isolated from TPRED1/2 and runs only after the rich
@@ -155,7 +225,12 @@ def _start_rich_worker(tennis_engine, db) -> bool:
                 # using the 15-minute backfill cadence until per-match rich
                 # stats are also cached (subject to the provider daily cap).
                 complete = history_complete and stats_backlog == 0
-                delay = RICH_IDLE_INTERVAL_SECONDS if complete else RICH_BACKFILL_INTERVAL_SECONDS
+                # Optional stats are intentionally paused on free: do not run
+                # an expensive 15-minute historical backfill loop all day.
+                delay = (RICH_IDLE_INTERVAL_SECONDS
+                         if free_tier and priority_budget._INSTALLED
+                         else RICH_IDLE_INTERVAL_SECONDS if complete
+                         else RICH_BACKFILL_INTERVAL_SECONDS)
             except Exception as exc:
                 print(
                     f"TPRED_RICH_MAINTENANCE {{'ok': False, 'error': '{type(exc).__name__}: {exc}', 'betting_authority': False}}",
@@ -219,6 +294,8 @@ def install(tennis_engine, db) -> Dict[str, Any]:
         "rich_source_worker": rich_worker_started,
         "rich_source_schedule": {
             "first_delay_seconds": RICH_FIRST_DELAY_SECONDS,
+            "free_tier_cycle_seconds": RICH_IDLE_INTERVAL_SECONDS,
+            "free_tier_fixture_budget": priority_budget.FREE_FIXTURE_DAILY_BUDGET,
             "backfill_interval_seconds": RICH_BACKFILL_INTERVAL_SECONDS,
             "idle_interval_seconds": RICH_IDLE_INTERVAL_SECONDS,
             "idle_requires_stats_backlog_zero": True,
