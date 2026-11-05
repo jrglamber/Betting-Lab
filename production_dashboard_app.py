@@ -39,7 +39,7 @@ from tennis_predictive_readiness_embed_patch import install as install_tennis_pr
 from verified_jacquet_machac_rescue import run_once as repair_verified_jacquet_machac
 from verified_van_assche_tien_rescue import run_once as repair_verified_van_assche_tien
 
-BUILD_VERSION = "0.19.137"
+BUILD_VERSION = "0.19.138"
 
 # Keep all visible version surfaces aligned with the real production entrypoint.
 base.BUILD_VERSION = BUILD_VERSION
@@ -295,10 +295,9 @@ except Exception as exc:
     hr_rolling_quality = {"installed": False, "error": f"{type(exc).__name__}: {exc}"}
 print(f"HR_ROLLING_QUALITY_INSTALL {hr_rolling_quality}", flush=True)
 
-# Single Telegram source: only the prospective chronological HR Portfolio
-# Shadow may notify. Disable Live Yankee, Heinz, XS1 and diagnostic senders;
-# retain all their settlement, odds, research and export functionality.
-# The Telegram transport itself also blocks any sender without this source ID.
+# Retain the existing historical Portfolio Telegram audit tables/route,
+# then supersede its sending permissions with standard HR2-only routing below.
+# All research, odds, settlement and export functions remain unchanged.
 try:
     from hr_portfolio_telegram import install as install_hr_portfolio_telegram
     hr_portfolio_telegram = install_hr_portfolio_telegram(
@@ -309,6 +308,22 @@ try:
 except Exception as exc:
     hr_portfolio_telegram = {"installed": False, "error": f"{type(exc).__name__}: {exc}"}
 print(f"HR_PORTFOLIO_TELEGRAM_INSTALL {hr_portfolio_telegram}", flush=True)
+
+# The user's current routing choice supersedes the November portfolio-only
+# alert policy: ONLY forward HR2, genuinely same-book/manual-placeable standard
+# bet-ready cards (Double/Trixie/Yankee/Heinz) may notify. Portfolio and
+# Quality research continue but their Telegram sender is muted. The outbound
+# Telegram transport separately rejects every source except HR2_BET_READY.
+try:
+    from hr2_telegram_only_patch import install as install_hr2_telegram_only
+    hr2_telegram_only = install_hr2_telegram_only(
+        base.curated.base_app.app,
+        base.curated.base_app.db,
+        base.curated.base_app.web_module.settings,
+    )
+except Exception as exc:
+    hr2_telegram_only = {"installed": False, "error": f"{type(exc).__name__}: {exc}"}
+print(f"HR2_TELEGRAM_ONLY_INSTALL {hr2_telegram_only}", flush=True)
 
 # Read-only same-book candidate queue visibility for chronological Portfolio
 # Shadow and the quality-ranked challenger, using the existing quote cache.

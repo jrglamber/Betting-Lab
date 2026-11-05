@@ -28,6 +28,7 @@ MAX_QUOTE_SPREAD_MINUTES = 5.0
 MAX_DAILY_ALERTS = 8
 MAX_SEND_ATTEMPTS = 2
 _INSTALLED = False
+ROUTING_ENABLED = True  # Superseded in production by standard HR2 bet-ready notifications.
 
 
 def _stamp(value):
@@ -214,6 +215,10 @@ def _record(db, group, signature, status, error=None):
 
 
 def send_due(db, settings, *, now=None):
+    # Preserve Portfolio Shadow research/status/history, but mute its Telegram
+    # producer when the standard HR2-only routing is installed.
+    if not ROUTING_ENABLED:
+        return {"enabled": False, "sent": 0, "reason": "hr2_bet_ready_only"}
     now = now or datetime.now(timezone.utc)
     if now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)
@@ -326,8 +331,10 @@ def status(db, settings):
         created_at,sent_at,last_error
         FROM hr_portfolio_telegram_alerts ORDER BY id DESC LIMIT 20""")
     return {
-        "version": VERSION, "only_notification_source": ALLOWED_SOURCE,
-        "enabled": bool(getattr(settings, "telegram_alerts_enabled", False)),
+        "version": VERSION,
+        "only_notification_source": ALLOWED_SOURCE if ROUTING_ENABLED else "HR2_BET_READY",
+        "routing_active": ROUTING_ENABLED,
+        "enabled": ROUTING_ENABLED and bool(getattr(settings, "telegram_alerts_enabled", False)),
         "credentials_configured": bool(
             getattr(settings, "telegram_bot_token", None) and
             getattr(settings, "telegram_chat_id", None)),
