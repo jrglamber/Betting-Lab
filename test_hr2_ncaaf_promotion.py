@@ -5,6 +5,9 @@ No standalone NCAAF experiment, no historical reassembly and no HR1 change.
 from datetime import datetime, timedelta, timezone
 
 import hit_rate_multiples_lab as hr
+import hit_rate_lane_rotation_patch as rotation
+import multiples_theoretical_queue_patch as theoretical
+from unittest.mock import patch
 
 
 def _selection(sport, odds, *, kind="MULTISPORT", market="h2h"):
@@ -76,3 +79,53 @@ def test_existing_qualifying_multisport_source_enters_normal_hr2_queue():
     assert len(source) == 1
     assert source[0]["experiment_key"] == "HR2"
     assert source[0]["source_lane"] == "NCAAF_H2H_3_00_4_99"
+
+
+def test_runtime_rotated_hr2_policy_lists_ncaaf():
+    # Production applies this wrapper AFTER the base HR2 policy module;
+    # it must not silently overwrite the promoted NCAAF pocket.
+    pockets = rotation._policy()
+    assert "NCAAF H2H 3.00-4.99" in pockets["HR2"]["pockets"]
+    assert "NCAAF H2H 3.00-4.99" not in pockets["HR1"]["pockets"]
+
+
+def test_ncaaf_preprice_eval_is_a_normal_hr2_candidate():
+    class Db:
+        def fetchall(self, *args, **kwargs):
+            return []
+    now = datetime(2026, 11, 6, 12, tzinfo=timezone.utc)
+    events = [
+        {
+            "source_id": 123, "source_created_at": now.isoformat(),
+            "event_id": "ncaaf-a", "sport_key": "americanfootball_ncaaf",
+            "market_key": "h2h", "selection": "Team A",
+            "min_required_odds": 3.6,
+            "commence_time": (now + timedelta(hours=44)).isoformat(),
+        },
+        {
+            "source_id": 124, "source_created_at": now.isoformat(),
+            "event_id": "ncaaf-b", "sport_key": "americanfootball_ncaaf",
+            "market_key": "h2h", "selection": "Team B",
+            "min_required_odds": 5.1,
+            "commence_time": (now + timedelta(hours=44)).isoformat(),
+        },
+    ]
+    with patch.object(theoretical, "_multisport_eval_rows", return_value=events):
+        rows = theoretical._hr_theoretical_rows(Db(), now)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["experiment_key"] == "HR2"
+    assert row["source_lane"] == "NCAAF_H2H_3_00_4_99"
+    assert row["source_table"] == "THEORETICAL_MULTISPORT_H2H"
+    assert row["source_odds"] == 3.6
+    assert row["min_odds"] == 3.6
+    assert row["band_min"] == 3.0 and row["band_max"] == 5.0
+
+
+def test_ncaaf_preprice_uses_offered_quote_only_at_formation():
+    # Pre-price inclusion is NOT a claim that a 3.60 manual price exists.
+    # It only seeds the normal monitored HR2 queue, and the usual minimum,
+    # band, quote-freshness, bookmaker and kickoff filters remain active.
+    assert theoretical._target_price(4.99, 3.0, 5.0) == 4.99
+    assert theoretical._target_price(5.0, 3.0, 5.0) is None
+    assert theoretical._target_price(2.25, 3.0, 5.0) == 3.0
