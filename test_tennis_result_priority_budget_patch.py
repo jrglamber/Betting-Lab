@@ -33,6 +33,7 @@ class ResultPriorityBudgetTests(unittest.TestCase):
                 patch.object(priority.rich, "maintenance", original_maintenance),
                 patch.object(priority.rich, "sync_missing_match_stats", original_stats),
                 patch.object(priority.rich, "_used_today", return_value=29_400),
+                patch.object(priority, "_stats_used_today", return_value=0),
                 patch.object(priority.rich, "DAILY_REQUEST_CAP", 30_000),
             ):
                 priority.install()
