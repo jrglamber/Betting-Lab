@@ -10,11 +10,13 @@ starting a retry so quota/subscription failures are not hammered repeatedly.
 
 import json
 import threading
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
 import tennis_result_pipeline_fix as pipeline
 
-VERSION = "TENNIS_RESULT_RETRY_GUARD_V2_DIAGNOSTIC"
+VERSION = "TENNIS_RESULT_RETRY_GUARD_V3_RECENT_FAILURES"
+QUOTA_BACKOFF_MINUTES = 60
 _INSTALLED = False
 
 
@@ -34,16 +36,41 @@ def _recent_failures(db, limit: int = 20) -> List[Dict[str, Any]]:
         return []
 
 
-def _blocking_provider_state(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
-    recent = rows[:8]
-    statuses = [int(r.get("status_code")) for r in recent if r.get("status_code") is not None]
-    # Repeated 429 means provider-side quota exhaustion. Repeated 401/403 means
-    # auth/subscription access. Neither is helped by immediate retries.
+def _blocking_provider_state(rows: List[Dict[str, Any]], now=None) -> Dict[str, Any]:
+    """Pause on genuinely RECENT provider failures only.
+
+    A streak of historical 429 responses, even from optional match stats,
+    must not indefinitely disable settlement after the quota window resets.
+    We still honour a short conservative backoff for fresh 429/401/403.
+    """
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    window_start = now.astimezone(timezone.utc) - timedelta(minutes=QUOTA_BACKOFF_MINUTES)
+    recent = []
+    for row in rows:
+        try:
+            stamp = datetime.fromisoformat(
+                str(row.get("requested_at") or "").replace("Z", "+00:00")
+            )
+            if stamp.tzinfo is None:
+                stamp = stamp.replace(tzinfo=timezone.utc)
+            if window_start <= stamp.astimezone(timezone.utc) <= now:
+                recent.append(row)
+        except (ValueError, TypeError):
+            continue
+        if len(recent) >= 8:
+            break
+    statuses = [int(r["status_code"]) for r in recent
+                if r.get("status_code") is not None]
     if statuses and all(s == 429 for s in statuses):
-        return {"blocked": True, "reason": "PROVIDER_QUOTA_429", "statuses": statuses}
+        return {"blocked": True, "reason": "PROVIDER_QUOTA_429",
+                "statuses": statuses, "backoff_minutes": QUOTA_BACKOFF_MINUTES}
     if statuses and all(s in {401, 403} for s in statuses):
-        return {"blocked": True, "reason": "PROVIDER_AUTH_OR_PLAN", "statuses": statuses}
-    return {"blocked": False, "reason": None, "statuses": statuses}
+        return {"blocked": True, "reason": "PROVIDER_AUTH_OR_PLAN",
+                "statuses": statuses, "backoff_minutes": QUOTA_BACKOFF_MINUTES}
+    return {"blocked": False, "reason": None, "statuses": statuses,
+            "backoff_minutes": QUOTA_BACKOFF_MINUTES}
 
 
 def install(db) -> Dict[str, Any]:
