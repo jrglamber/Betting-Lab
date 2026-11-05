@@ -34,7 +34,7 @@ def test_canonical_hr2_ncaaf_source_query_is_postgres_safe(tmp_path):
         policy_version TEXT PRIMARY KEY,activated_at TEXT,is_active INTEGER
     )""")
     db.execute("""CREATE TABLE hit_rate_candidates(
-        policy_version TEXT,experiment_key TEXT,status TEXT,first_seen_at TEXT,
+        id INTEGER PRIMARY KEY, policy_version TEXT,experiment_key TEXT,status TEXT,first_seen_at TEXT,
         source_created_at TEXT,event_id TEXT,sport_key TEXT,source_lane TEXT,
         market_key TEXT,selection TEXT,point REAL,commence_time TEXT,
         source_table TEXT,source_id INTEGER,min_odds REAL,source_odds REAL
@@ -43,8 +43,8 @@ def test_canonical_hr2_ncaaf_source_query_is_postgres_safe(tmp_path):
     db.execute("""INSERT INTO hit_rate_policy_versions VALUES(?,?,?)""", (
         "HRM_2026-10-12_V1", now.isoformat(), 1,
     ))
-    db.execute("""INSERT INTO hit_rate_candidates VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
-        "HRM_2026-10-12_V1", "HR2", "QUEUED", now.isoformat(),
+    db.execute("""INSERT INTO hit_rate_candidates VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
+        1, "HRM_2026-10-12_V1", "HR2", "QUEUED", now.isoformat(),
         now.isoformat(), "game-1", "americanfootball_ncaaf",
         "NCAAF_H2H_3_00_4_99", "h2h", "Team A", None,
         (now + timedelta(hours=2)).isoformat(),
