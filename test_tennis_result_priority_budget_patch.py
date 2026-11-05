@@ -40,8 +40,8 @@ class ResultPriorityBudgetTests(unittest.TestCase):
                 self.assertEqual(run["requests"], 100)
                 self.assertEqual(called, [100])
                 self.assertEqual(
-                    priority.rich.sync_missing_match_stats(object(), object(), limit=30)["skipped"],
-                    "optional_match_stats_daily_cap_or_result_reserve",
+                    priority.rich.sync_missing_match_stats(object(), object(), limit=30)["fetched"],
+                    24,
                 )
         finally:
             priority._INSTALLED = old
