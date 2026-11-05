@@ -2,9 +2,9 @@ from __future__ import annotations
 
 """Forward-only, zero-provider-cost HR portfolio shadow.
 
-This is intentionally separate from frozen HR1/HR2 and Live Yankee streams.
-No bookmaker execution, Telegram alerts, quote polling or change to HR policy.
-The first study uses fixed, preregistered rules rather than optimizing to ROI.
+Uses the canonical evolving HR2 candidate pool (including NCAAF H2H 3-4.99).
+No standalone NCAAF feeder, bookmaker execution, extra polling, or alterations
+to historical frozen groups. Compares chronological format allocations.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -75,7 +75,7 @@ def _state(db):
     now = utc_now_iso()
     rules = {
         "policy": VERSION, "forward_only": True, "pool": "UNIFIED",
-        "ncaaf": "NCAAF H2H 3.00<=p<5.00; no minimum or maximum share",
+        "ncaaf": "NCAAF H2H 3.00<=p<5.00 enters via standard HR2; no source quotas",
         "lane_governance": "ELIGIBLE enters shadow; WATCH/PAUSED excluded, old evidence retained",
         "strict_same_book_only": list(MANUAL_BOOKS), "quote_freshness_minutes": 15,
         "max_daily_groups": MAX_GROUPS_PER_DAY, "no_source_quotas": True,
@@ -122,34 +122,6 @@ def _base_candidates(db, now):
         if key in seen:
             continue
         seen.add(key)
-        out.append(c)
-    return out
-
-
-def _ncaaf_candidates(db, now):
-    rows = db.fetchall("""SELECT b.id AS source_id,b.created_at AS source_created_at,
-           b.event_id,e.sport_key,e.league_title AS league,e.commence_time,
-           e.home_team,e.away_team,'h2h' AS market_key,b.selection,
-           NULL AS point,b.min_odds,b.offered_odds AS source_odds
-        FROM multisport_execution_bets b
-        JOIN multisport_events e ON e.event_id=b.event_id
-        WHERE b.status='OPEN' AND e.status='UPCOMING'
-          AND lower(e.sport_key) LIKE ?
-          AND b.offered_odds>=3.0 AND b.offered_odds<5.0
-        ORDER BY b.created_at,b.id LIMIT 300""", ("%ncaaf%",))
-    out = []
-    for r in rows:
-        c = dict(r)
-        if not _upcoming(c, now):
-            continue
-        if float(c.get("min_odds") or 0) <= 1:
-            continue
-        c.update(
-            source_lane="NCAAF_3_TO_4_99_EXPERIMENTAL",
-            source_table="multisport_execution_bets",
-            band_min=3.0, band_max=5.0,
-            first_seen_at=c.get("source_created_at"),
-        )
         out.append(c)
     return out
 
@@ -242,14 +214,14 @@ def _allocations(n):
 def _form(db, now, state):
     start = hr._parse(state["started_at"])
     base = _base_candidates(db, now)
-    ncaaf = _ncaaf_candidates(db, now)
-    base_ids = {_leg_identity(c) for c in base}
-    extra = [c for c in ncaaf if _leg_identity(c) not in base_ids]
-    # One pool: NCAAF can contribute 0, 1, 2, 3 or 4 legs.
-    # Old V1 comparison cohorts are archived and never fed new candidates.
-    eligible = _eligible_lanes(db, base + extra)
+    ncaaf = [c for c in base if
+             str(c.get("source_lane") or "").startswith("NCAAF_")]
+    # All new Portfolio/Quality selections come from the SAME HR2 pool;
+    # never inject a parallel 3.00-4.99 NCAAF candidate outside HR2.
+    # NCAAF may contribute zero, some or every leg.
+    eligible = _eligible_lanes(db, base)
     eligible_candidates = [
-        c for c in base + extra
+        c for c in base
         if str(c.get("source_lane") or "") in eligible
     ]
     # Odds-band qualification can admit both Over and Under 2.5 for the
@@ -263,7 +235,7 @@ def _form(db, now, state):
     by_book = _book_options(db, unified, now, start)
     try:
         from hr_portfolio_queues import capture
-        capture(db, now, base + extra, eligible, by_book,
+        capture(db, now, base, eligible, by_book,
                 conflicting_fixtures=conflicting_fixtures)
     except Exception as exc:
         print(f"HR_PORTFOLIO_QUEUE_SNAPSHOT_ERROR {type(exc).__name__}: "
@@ -319,7 +291,7 @@ def _form(db, now, state):
                 (gid, fmt, share, "OPEN"))
         formed += 1
     return {"formed": formed, "hr2_source_candidates": len(base),
-            "ncaaf_source_candidates": len(ncaaf), "ncaaf_extra_candidates": len(extra),
+            "ncaaf_source_candidates": len(ncaaf), "ncaaf_extra_candidates": 0,
             "eligible_lanes": len(eligible), "unified_candidates": len(unified),
             "conflicting_fixtures_abstained": len(conflicting_fixtures)}
 

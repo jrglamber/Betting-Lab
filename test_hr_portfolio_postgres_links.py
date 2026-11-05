@@ -1,7 +1,7 @@
-"""Regression: portfolio navigation and NCAAF maintenance must be Postgres-safe.
+"""Regression: standard HR2 NCAAF portfolio queries must be Postgres-safe.
 
-A raw percent sign in a psycopg2 SQL string with parameters causes
-IndexError: tuple index out of range even though SQLite accepts it.
+Former parallel NCAAF SELECT used a raw '%' and failed psycopg formatting.
+Use the canonical HR2 queue instead. Old frozen cards remain readable.
 """
 from datetime import datetime, timedelta, timezone
 import hr_portfolio_shadow as shadow
@@ -26,26 +26,34 @@ class CheckedSql:
         return self.db.fetchall(sql, params)
 
 
-def test_ncaaf_source_query_works_with_postgres_style_binding(tmp_path):
+def test_canonical_hr2_ncaaf_source_query_is_postgres_safe(tmp_path):
+    # NCAAF is promoted into HR2 itself; the shadow no longer executes a
+    # separate NCAAF-specific source query.
     db = Database(db_path=str(tmp_path / "portfolio_ncaaf.sqlite"))
-    db.execute("""CREATE TABLE multisport_events(
-        event_id TEXT PRIMARY KEY,sport_key TEXT,league_title TEXT,
-        commence_time TEXT,home_team TEXT,away_team TEXT,status TEXT
+    db.execute("""CREATE TABLE hit_rate_policy_versions(
+        policy_version TEXT PRIMARY KEY,activated_at TEXT,is_active INTEGER
     )""")
-    db.execute("""CREATE TABLE multisport_execution_bets(
-        id INTEGER PRIMARY KEY,created_at TEXT,event_id TEXT,status TEXT,
-        selection TEXT,min_odds REAL,offered_odds REAL
+    db.execute("""CREATE TABLE hit_rate_candidates(
+        id INTEGER PRIMARY KEY, policy_version TEXT,experiment_key TEXT,status TEXT,first_seen_at TEXT,
+        source_created_at TEXT,event_id TEXT,sport_key TEXT,source_lane TEXT,
+        market_key TEXT,selection TEXT,point REAL,commence_time TEXT,
+        source_table TEXT,source_id INTEGER,min_odds REAL,source_odds REAL
     )""")
-    now = datetime(2026, 11, 4, 12, tzinfo=timezone.utc)
-    kickoff = now + timedelta(hours=2)
-    db.execute("""INSERT INTO multisport_events VALUES(?,?,?,?,?,?,?)""",
-               ("game-1", "americanfootball_ncaaf", "NCAAF",
-                kickoff.isoformat(), "Team A", "Team B", "UPCOMING"))
-    db.execute("""INSERT INTO multisport_execution_bets VALUES(?,?,?,?,?,?,?)""",
-               (1, now.isoformat(), "game-1", "OPEN", "Team A", 3.0, 3.5))
-    rows = shadow._ncaaf_candidates(CheckedSql(db), now)
+    now = datetime(2026, 11, 5, 12, tzinfo=timezone.utc)
+    db.execute("""INSERT INTO hit_rate_policy_versions VALUES(?,?,?)""", (
+        "HRM_2026-10-12_V1", now.isoformat(), 1,
+    ))
+    db.execute("""INSERT INTO hit_rate_candidates VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
+        1, "HRM_2026-10-12_V1", "HR2", "QUEUED", now.isoformat(),
+        now.isoformat(), "game-1", "americanfootball_ncaaf",
+        "NCAAF_H2H_3_00_4_99", "h2h", "Team A", None,
+        (now + timedelta(hours=2)).isoformat(),
+        "multisport_execution_bets", 1, 3.0, 3.5,
+    ))
+    rows = shadow._base_candidates(CheckedSql(db), now)
     assert len(rows) == 1
-    assert rows[0]["source_lane"] == "NCAAF_3_TO_4_99_EXPERIMENTAL"
+    assert rows[0]["source_lane"] == "NCAAF_H2H_3_00_4_99"
+
 
 
 def test_portfolio_status_and_ncaaf_count_with_postgres_binding(tmp_path):

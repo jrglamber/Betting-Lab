@@ -63,7 +63,6 @@ def test_portfolio_forms_only_unconflicted_games_and_cache_explains_abstention(m
     watford=leg("d","Watford","Stoke City","Over",2.5,minute=12)
     source=[over,under,oxford,watford]
     monkeypatch.setattr(portfolio,"_base_candidates",lambda db,now: source)
-    monkeypatch.setattr(portfolio,"_ncaaf_candidates",lambda db,now: [])
     def _books(db,candidates,now,start):
         return {
             "williamhill":[(c,quote()) for c in candidates],
