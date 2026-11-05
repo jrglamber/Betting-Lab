@@ -3,8 +3,10 @@ from __future__ import annotations
 """Forward-only Hit-Rate Multiples Lab.
 
 Independent shadow study. HR1 freezes the strict high-hit pockets selected on
-12 Oct 2026; HR2 is the broader challenger. Weekly promotions/relegations use a
-new POLICY_VERSION so old candidates/cards/results remain immutable.
+12 Oct 2026; HR2 is the evolving broader pool. Its NCAAF 3.00-4.99 promotion
+of 5 Nov 2026 is intentionally an in-place policy update: preserve the current
+HR1/HR2 queues and avoid duplicate cards from a second active policy version.
+Past frozen candidates and card prices/outcomes are never reconstructed.
 """
 
 from collections import defaultdict
@@ -59,6 +61,7 @@ POLICY = {
         "pockets": [
             "HR1 pockets", "Football totals 2.00-2.99",
             "Football H2H 2.50-2.99", "Tennis H2H 2.00-2.99",
+            "NCAAF H2H 3.00-4.99",
         ],
     },
 }
@@ -149,6 +152,22 @@ def _activate_policy(db) -> Dict[str, Any]:
             json.dumps(DESIGN_BACKTEST, sort_keys=True),
         ))
     else:
+        # HR2 is an evolving membership pool. Preserve the existing active
+        # candidate/card keys and frozen entry prices; update only the current
+        # displayed policy definition. Old cards never get recalculated.
+        current_policy = json.dumps(POLICY, sort_keys=True)
+        if str(row.get("policy_json") or "") != current_policy:
+            db.execute(
+                "UPDATE hit_rate_policy_versions SET policy_json=? WHERE policy_version=?",
+                (current_policy, POLICY_VERSION),
+            )
+            try:
+                db.record_collector_run(
+                    "HR2_POCKET_PROMOTION", True,
+                    detail="2026-11-05: NCAAF H2H 3.00-4.99 added to HR2 only; prior cards and HR1 unchanged",
+                )
+            except Exception:
+                pass
         db.execute("UPDATE hit_rate_policy_versions SET is_active=CASE WHEN policy_version=? THEN 1 ELSE 0 END", (POLICY_VERSION,))
     return dict(db.fetchone("SELECT * FROM hit_rate_policy_versions WHERE policy_version=?", (POLICY_VERSION,)) or {})
 
@@ -189,6 +208,12 @@ def _qualify(kind: str, row: Mapping[str, Any]) -> Dict[str, Dict[str, Any]]:
             m = {"lane": "MLB_H2H_1_50_1_99", "lo": 1.5, "hi": 2.0}
         if m:
             out["HR1"] = dict(m); out["HR2"] = dict(m)
+        # A genuine HR2 promotion, not a separate portfolio-only NCAAF study.
+        # HR1 stays unchanged. Keep the 3.00 inclusive / 5.00 exclusive band.
+        if "ncaaf" in sport and market == "h2h" and 3.0 <= p < 5.0:
+            out["HR2"] = {
+                "lane": "NCAAF_H2H_3_00_4_99", "lo": 3.0, "hi": 5.0,
+            }
     return out
 
 
