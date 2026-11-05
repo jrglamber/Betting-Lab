@@ -338,10 +338,9 @@ def _form_wrapper(previous_form):
         ) if int(x["id"]) not in before]
         if not new_groups:
             return result
+        # Match exactly the same canonical HR2 pool as the baseline; do
+        # not introduce any portfolio-only NCAAF source to this arm.
         sources = baseline._base_candidates(db, now)
-        ncaaf = baseline._ncaaf_candidates(db, now)
-        ids = {_identity(c) for c in sources}
-        sources += [c for c in ncaaf if _identity(c) not in ids]
         statuses = {
             str(x["source_lane"]): str(x["status"]).upper()
             for x in db.fetchall("SELECT source_lane,status FROM hr_portfolio_lane_policy")
