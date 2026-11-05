@@ -204,11 +204,12 @@ def _maybe_send_connection_test(db: Database, bot_token: str, chat_id: str) -> b
 def _send_telegram(
     bot_token: str, chat_id: str, text: str, *, source: str = ""
 ) -> Dict[str, Any]:
-    # Deployment-wide outbound allowlist: only the chronological HR Portfolio
-    # Shadow can send Telegram. Protects against legacy senders being
-    # accidentally reactivated by another research/worker wrapper.
-    if source != "HR_PORTFOLIO_SHADOW":
-        raise RuntimeError("TELEGRAM_SOURCE_DISABLED: HR_PORTFOLIO_SHADOW_ONLY")
+    # Deployment-wide outbound allowlist. ONLY verified, newly formed
+    # standard HR2 bet-ready cards may use this Telegram transport. Portfolio
+    # Shadow, Quality, HR1, Live Yankee, Heinz legacy, XS1/2, diagnostics and
+    # connection tests are all rejected even if old worker hooks run.
+    if source != "HR2_BET_READY":
+        raise RuntimeError("TELEGRAM_SOURCE_DISABLED: HR2_BET_READY_ONLY")
     endpoint = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     body = parse.urlencode({
         "chat_id": chat_id,
