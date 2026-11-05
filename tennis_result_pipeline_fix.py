@@ -229,6 +229,14 @@ def bridge_cached_results(db, now: Optional[datetime] = None) -> Dict[str, Any]:
                     SELECT 1 FROM tennis_predictive3_predictions p
                     WHERE p.event_id=e.event_id AND p.status='OPEN'
                 )
+                OR EXISTS(
+                    SELECT 1 FROM hit_rate_legs h
+                    JOIN hit_rate_cards card ON card.id=h.card_id
+                    WHERE h.event_id=e.event_id
+                      AND h.source_table='THEORETICAL_TENNIS_H2H'
+                      AND h.result IS NULL
+                      AND card.status!='SETTLED'
+                )
           )
         ORDER BY e.commence_time,e.event_id
         """,
@@ -291,6 +299,17 @@ def bridge_cached_results(db, now: Optional[datetime] = None) -> Dict[str, Any]:
         execution_settled += settle_tennis_event(db, str(event.get("event_id")), str(stored.get("winner")))
         inserted += 1
 
+    # Rich cache may resolve Hit Rate-only events, even without a separate
+    # execution bet or TPRED prediction. Apply the canonical result to their
+    # frozen legs immediately. No additional provider calls.
+    hr_reconciliation = {"touched": 0, "settled": 0}
+    if inserted:
+        try:
+            import hit_rate_multiples_lab as hit_rate
+            hr_reconciliation = hit_rate.settle_cards(db) or hr_reconciliation
+        except Exception as exc:
+            hr_reconciliation = {"error": f"{type(exc).__name__}: {exc}"}
+
     tpred3_settled = int(tpred3.settle_forward_predictions(db) or 0)
     try:
         tpred4_sync = adaptive._tpred4_current_predictions(db)
@@ -307,6 +326,7 @@ def bridge_cached_results(db, now: Optional[datetime] = None) -> Dict[str, Any]:
         "events_considered": len(events),
         "results_inserted": inserted,
         "execution_bets_settled": execution_settled,
+        "hit_rate_reconciliation": hr_reconciliation,
         "tpred3_predictions_settled": tpred3_settled,
         "tpred4_sync": tpred4_sync,
         "tennis_w1_sync": tennis_w1_sync,
