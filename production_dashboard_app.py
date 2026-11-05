@@ -39,7 +39,7 @@ from tennis_predictive_readiness_embed_patch import install as install_tennis_pr
 from verified_jacquet_machac_rescue import run_once as repair_verified_jacquet_machac
 from verified_van_assche_tien_rescue import run_once as repair_verified_van_assche_tien
 
-BUILD_VERSION = "0.19.131"
+BUILD_VERSION = "0.19.132"
 
 # Keep all visible version surfaces aligned with the real production entrypoint.
 base.BUILD_VERSION = BUILD_VERSION
@@ -197,8 +197,10 @@ except Exception as exc:
     multiples_funnel_diagnostic = {"installed": False, "error": f"{type(exc).__name__}: {exc}"}
 print(f"MULTIPLES_FUNNEL_DIAGNOSTIC_INSTALL {multiples_funnel_diagnostic}", flush=True)
 
-# Keep a protected RapidAPI allowance for completed-match results instead of
-# letting optional historical statistics exhaust the shared daily limit.
+# On the 50/day free RapidAPI tier, reserve ALL calls for completed-result
+# refreshes; tennis odds and Hit Rate selection creation use The Odds API.
+# On a larger tier, preserve the existing research budget and result reserve.
+# No changes to underlying tennis selections, staking, or result grading.
 # Install before the result pipeline wraps rich.maintenance so the refresh
 # collector retains direct access to the reserved requests.
 try:
