@@ -32,13 +32,14 @@ from multiples_home_small_systems_patch import install as install_multiples_home
 from live_yankee_credit_pacing_patch import install as install_live_yankee_credit_pacing
 from tennis_result_pipeline_fix import install as install_tennis_result_pipeline_fix
 from tennis_result_retry_guard import install as install_tennis_result_retry_guard
+from tennis_result_priority_budget_patch import install as install_tennis_result_priority_budget
 from tennis_forward_readiness_patch import install as install_tennis_forward_readiness
 from tennis_forward_home_sync_fix import install as install_tennis_forward_home_sync_fix
 from tennis_predictive_readiness_embed_patch import install as install_tennis_predictive_readiness_embed
 from verified_jacquet_machac_rescue import run_once as repair_verified_jacquet_machac
 from verified_van_assche_tien_rescue import run_once as repair_verified_van_assche_tien
 
-BUILD_VERSION = "0.19.130"
+BUILD_VERSION = "0.19.131"
 
 # Keep all visible version surfaces aligned with the real production entrypoint.
 base.BUILD_VERSION = BUILD_VERSION
@@ -195,6 +196,16 @@ try:
 except Exception as exc:
     multiples_funnel_diagnostic = {"installed": False, "error": f"{type(exc).__name__}: {exc}"}
 print(f"MULTIPLES_FUNNEL_DIAGNOSTIC_INSTALL {multiples_funnel_diagnostic}", flush=True)
+
+# Keep a protected RapidAPI allowance for completed-match results instead of
+# letting optional historical statistics exhaust the shared daily limit.
+# Install before the result pipeline wraps rich.maintenance so the refresh
+# collector retains direct access to the reserved requests.
+try:
+    tennis_result_priority_budget = install_tennis_result_priority_budget()
+except Exception as exc:
+    tennis_result_priority_budget = {"installed": False, "error": f"{type(exc).__name__}: {exc}"}
+print(f"TENNIS_RESULT_PRIORITY_BUDGET_INSTALL {tennis_result_priority_budget}", flush=True)
 
 # Repair and keep fresh the result source before readiness health is calculated.
 # This revisits today's/yesterday's rich tennis results every four hours and can
