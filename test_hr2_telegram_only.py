@@ -52,7 +52,8 @@ def _card(db, now, fmt="YANKEE", *, book="williamhill",
             2.75, book, routing.BOOKS.get(book,book),
             (now - timedelta(minutes=quote_age)).isoformat(),
             (now + timedelta(hours=kickoff_hours)).isoformat(),
-            f"Home {i}", f"Away {i}",
+            "Same Home" if same_fixture else f"Home {i}",
+            "Same Away" if same_fixture else f"Away {i}",
         ))
     return card
 
