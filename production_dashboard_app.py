@@ -39,7 +39,7 @@ from tennis_predictive_readiness_embed_patch import install as install_tennis_pr
 from verified_jacquet_machac_rescue import run_once as repair_verified_jacquet_machac
 from verified_van_assche_tien_rescue import run_once as repair_verified_van_assche_tien
 
-BUILD_VERSION = "0.19.133"
+BUILD_VERSION = "0.19.134"
 
 # Keep all visible version surfaces aligned with the real production entrypoint.
 base.BUILD_VERSION = BUILD_VERSION
@@ -268,9 +268,10 @@ except Exception as exc:
     tennis_predictive_readiness_embed = {"installed": False, "error": f"{type(exc).__name__}: {exc}"}
 print(f"TENNIS_PREDICTIVE_READINESS_EMBED_INSTALL {tennis_predictive_readiness_embed}", flush=True)
 
-# Run a clean prospective 3-format portfolio study using existing quoted odds.
-# The underlying HR1/HR2 policy and card ledgers are left unchanged. NCAAF
-# 3.00-4.99 enters only the labelled experimental cohort in this new study.
+# Portfolio Shadow and Quality use the SAME evolving canonical HR2 pool.
+# NCAAF H2H 3.00-4.99 is promoted into ordinary HR2 qualification; no
+# parallel NCAAF-only shadow feeder or separate portfolio source is needed.
+# Existing frozen HR cards, prices and results remain unchanged.
 try:
     from hr_portfolio_shadow import install as install_hr_portfolio_shadow
     hr_portfolio_shadow = install_hr_portfolio_shadow(
@@ -320,6 +321,43 @@ try:
 except Exception as exc:
     hr_portfolio_queues = {"installed": False, "error": f"{type(exc).__name__}: {exc}"}
 print(f"HR_PORTFOLIO_QUEUES_INSTALL {hr_portfolio_queues}", flush=True)
+
+# One cheap, read-only bootstrap health snapshot. Installation success is NOT
+# evidence of recent portfolio groups or quality pairs. Surface the distinction
+# explicitly from the existing Postgres ledger rather than spending more
+# provider requests or adding another dashboard/experiment.
+try:
+    import hr_portfolio_shadow as _hrp_health
+    import hr_rolling_quality_challenger as _hrq_health
+    import hr_portfolio_queues as _hrqueue_health
+    _db = base.curated.base_app.db
+    _p = _hrp_health.status(_db)
+    _q = _hrq_health.scoreboard(_db)
+    _queue = _hrqueue_health.read(_db, view="portfolio", limit=4)
+    _last = _db.fetchone(
+        """SELECT started_at,ok,detail FROM collector_runs
+           WHERE run_type='HR_PORTFOLIO_SHADOW_MAINT'
+           ORDER BY id DESC LIMIT 1"""
+    ) or {}
+    _diag = {
+        "last_portfolio_maintenance": _last.get("started_at"),
+        "last_portfolio_maintenance_ok": _last.get("ok"),
+        "baseline_groups_by_status": _p.get("groups", []),
+        "quality_decisions": _q.get("total_decisions", 0),
+        "quality_pending": _q.get("pending", 0),
+        "quality_paired_settled": _q.get("paired", 0),
+        "quality_skips": _q.get("skipped", {}),
+        "last_quality_maintenance": _q.get("last_maintenance_at"),
+        "last_shared_queue_snapshot": _queue.get("snapshot_at"),
+        "queue_candidates": _queue.get("source_candidates", 0),
+        "queue_quoted": _queue.get("quoted_candidates", 0),
+        "queue_waiting_price": _queue.get("waiting_price_candidates", 0),
+        "queue_conflicting_fixtures": _queue.get("conflicting_fixtures_abstained", 0),
+        "no_additional_api_calls": True,
+    }
+    print(f"HR2_PORTFOLIO_QUALITY_HEALTH {_diag}", flush=True)
+except Exception as exc:
+    print(f"HR2_PORTFOLIO_QUALITY_HEALTH_ERROR {type(exc).__name__}: {exc}", flush=True)
 
 # Read-only matched-pick ROI: each settled multiple is compared against singles
 # formed from the exact same frozen selections and prices, at equal total stake.
