@@ -78,3 +78,22 @@ def test_cross_pocket_duplicate_is_reported_not_double_counted(tmp_path):
     assert r["unique_quoted"] == 1
     assert r["across_pocket_duplicate_appearances"] == 1
     assert len(r["pockets"]) == 1
+
+
+def test_actual_quote_price_bands_not_mixed_together(tmp_path):
+    db = Database(db_path=str(tmp_path / "bands.sqlite"))
+    hr._ensure_schema(db)
+    c1 = _card(db, 1, "YANKEE")
+    _leg(db,c1,1,"f-low","FOOTBALL_TOTALS_1_80_2_99",1.90,"LOSS")
+    _leg(db,c1,2,"f-high","FOOTBALL_TOTALS_1_80_2_99",2.40,"WIN")
+    _leg(db,c1,3,"t-low","TENNIS_H2H_1_80_2_99",1.95,"WIN","tennis_atp")
+    _leg(db,c1,4,"t-high","TENNIS_H2H_1_80_2_99",2.40,"LOSS","tennis_atp")
+
+    out = audit.report(db)
+    slices = {x["band"]: x for x in out["price_band_slices"]}
+    assert slices["Football totals 1.80-1.99"]["singles_roi_pct"] == -100.0
+    assert slices["Football totals 2.00-2.99"]["singles_roi_pct"] == 140.0
+    assert slices["Tennis H2H 1.80-1.99"]["singles_roi_pct"] == 95.0
+    assert slices["Tennis H2H 2.00-2.99"]["singles_roi_pct"] == -100.0
+    assert all(x["unique_quoted"] == 1 for x in slices.values())
+    assert out["unique_settled"] == 4
