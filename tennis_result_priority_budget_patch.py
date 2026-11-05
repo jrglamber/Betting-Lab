@@ -8,7 +8,7 @@ and cap optional historical match-statistics calls to a small daily allowance.
 Neither changes tennis selections, scoring, quota accounting or market polling.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
 
 import tennis_rich_source as rich
@@ -26,9 +26,8 @@ def _free_tier(daily_cap: int) -> bool:
 
 
 def _result_reserve(daily_cap: int) -> int:
-    # On the free tier, all rich-provider capacity is reserved for completed
-    # ATP/WTA result refreshes. Tennis odds and Hit Rate source picks are
-    # collected separately through The Odds API.
+    # Protect forty free requests for completed results, leaving ten for
+    # weekly current rankings and daily upcoming fixture identities.
     return min(int(daily_cap), FREE_RESULT_REQUEST_RESERVE) if _free_tier(daily_cap) else min(
         PAID_RESULT_REQUEST_RESERVE, max(0, int(daily_cap))
     )
@@ -85,18 +84,17 @@ def install() -> Dict[str, Any]:
         now = _today(now)
         used = rich._used_today(db, now)
         if _free_tier(rich.DAILY_REQUEST_CAP):
-            # Preserve the rich-model's current ranking features on the free
-            # tier without spending a single request on the old stats backlog.
-            # Keep four requests available for daily ATP/WTA fixture matching,
-            # and forty for the independent completed-results refresh.
+            # Refresh rankings weekly without restarting the historical
+            # match-statistics backlog; preserve result and fixture budgets.
             rich.install_schema(db)
             state = db.fetchone(
                 "SELECT last_rankings_at FROM tennis_rich_sync_state WHERE singleton_id=1"
             ) or {}
-            if str(state.get("last_rankings_at") or "")[:10] == now.date().isoformat():
+            week_monday = now.date() - timedelta(days=now.weekday())
+            if str(state.get("last_rankings_at") or "")[:10] >= week_monday.isoformat():
                 return {
                     "ok": True, "version": VERSION, "requests": 0,
-                    "reason": "free_rankings_already_current",
+                    "reason": "free_rankings_current_week",
                     "mode": "FREE_RESULTS_TPRED_CONTEXT",
                     "reserved_for_results": _result_reserve(rich.DAILY_REQUEST_CAP),
                     "betting_authority": False,
@@ -108,7 +106,7 @@ def install() -> Dict[str, Any]:
                 - FREE_FIXTURE_DAILY_BUDGET,
             )
             permitted = min(max(0, int(max_requests)), FREE_RANKING_DAILY_BUDGET, budget)
-            if permitted <= 0:
+            if permitted < 4:
                 return {
                     "ok": True, "version": VERSION, "requests": 0,
                     "reason": "free_rankings_budget_unavailable",
@@ -179,7 +177,7 @@ def install() -> Dict[str, Any]:
         "installed": True, "already_installed": False, "version": VERSION,
         "result_reserve": _result_reserve(rich.DAILY_REQUEST_CAP),
         "optional_match_stats_daily_cap": _stats_daily_cap(rich.DAILY_REQUEST_CAP),
-        "mode": ("FREE_RESULTS_ONLY" if _free_tier(rich.DAILY_REQUEST_CAP)
+        "mode": ("FREE_RESULTS_TPRED_CONTEXT" if _free_tier(rich.DAILY_REQUEST_CAP)
                  else "LARGE_PLAN_BUDGETED_RESEARCH"),
         "rich_provider_daily_cap": int(rich.DAILY_REQUEST_CAP),
         "free_rankings_daily_budget": FREE_RANKING_DAILY_BUDGET,
