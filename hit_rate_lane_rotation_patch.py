@@ -123,7 +123,7 @@ def _policy() -> Dict[str, Any]:
         "pockets": [
             "HR1 pockets", "Football totals 2.00-2.99",
             "Football H2H 2.50-2.99 (probation)", "Tennis H2H 2.00-2.99 (probation)",
-            "EuroLeague H2H 3.00-3.99",
+            "EuroLeague H2H 3.00-3.99", "NCAAF H2H 3.00-4.99",
         ],
     }
     return policy

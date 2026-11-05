@@ -251,6 +251,14 @@ def _hr_theoretical_rows(db, now: datetime) -> list[dict[str, Any]]:
             _hr_add(out, row, exp="HR1", lane="EUROLEAGUE_H2H_1_50_2_99", lo=1.5, hi=3.0, source_table="THEORETICAL_MULTISPORT_H2H")
             _hr_add(out, row, exp="HR2", lane="EUROLEAGUE_H2H_1_50_2_99", lo=1.5, hi=3.0, source_table="THEORETICAL_MULTISPORT_H2H")
             _hr_add(out, row, exp="HR2", lane="EUROLEAGUE_H2H_3_00_3_99", lo=3.0, hi=4.0, source_table="THEORETICAL_MULTISPORT_H2H")
+        elif "ncaaf" in sport:
+            # HR2 membership must include the pre-price multisport research
+            # feed, not just already-priced execution shadow bets. A model
+            # minimum below 5.00 queues the candidate; only a genuine
+            # bookmaker quote >= minimum and in [3.00,5.00) can form a card.
+            # This does not add any NCAAF quota or create an HR1 candidate.
+            _hr_add(out, row, exp="HR2", lane="NCAAF_H2H_3_00_4_99",
+                    lo=3.0, hi=5.0, source_table="THEORETICAL_MULTISPORT_H2H")
         elif "nfl" in sport:
             _hr_add(out, row, exp="HR1", lane="NFL_H2H_1_50_2_99", lo=1.5, hi=3.0, source_table="THEORETICAL_MULTISPORT_H2H")
             _hr_add(out, row, exp="HR2", lane="NFL_H2H_1_50_2_99", lo=1.5, hi=3.0, source_table="THEORETICAL_MULTISPORT_H2H")
