@@ -36,8 +36,9 @@ from tennis_forward_readiness_patch import install as install_tennis_forward_rea
 from tennis_forward_home_sync_fix import install as install_tennis_forward_home_sync_fix
 from tennis_predictive_readiness_embed_patch import install as install_tennis_predictive_readiness_embed
 from verified_jacquet_machac_rescue import run_once as repair_verified_jacquet_machac
+from verified_van_assche_tien_rescue import run_once as repair_verified_van_assche_tien
 
-BUILD_VERSION = "0.19.129"
+BUILD_VERSION = "0.19.130"
 
 # Keep all visible version surfaces aligned with the real production entrypoint.
 base.BUILD_VERSION = BUILD_VERSION
@@ -328,6 +329,16 @@ try:
 except Exception as exc:
     verified_tennis_repair = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 print(f"VERIFIED_TENNIS_REPAIR_BOOTSTRAP {verified_tennis_repair}", flush=True)
+
+# The 4 November ATP Paris match must be identified separately from these
+# players' opposite-result 26 October Vienna meeting. Exact date/tour/pair only.
+# A canonical, independently verified result feeds all original HR/tennis ledgers.
+try:
+    verified_van_assche_tien = repair_verified_van_assche_tien(base.curated.base_app.db)
+except Exception as exc:
+    verified_van_assche_tien = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+print(f"VERIFIED_VAN_ASSCHE_TIEN_BOOTSTRAP {verified_van_assche_tien}", flush=True)
+
 
 print(
     "MULTIPLES_BUDGET_REALLOCATION "
