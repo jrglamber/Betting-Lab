@@ -17,11 +17,12 @@ import re
 import secrets
 
 from db import sanitize_sensitive_text, utc_now_iso
+from fastapi import HTTPException, Request
 import telegram_alerts
 
 
 WEBHOOK_PATH = "/api/hr2-telegram/webhook"
-COMMAND = re.compile(r"^/?placed(?:@[A-Za-z0-9_]+)?(?:\\s+|$)", re.IGNORECASE)
+COMMAND = re.compile(r"^/?placed(?:@[A-Za-z0-9_]+)?(?:\s+|$)", re.IGNORECASE)
 BOOKMAKERS = {
     "williamhill": "William Hill", "wh": "William Hill",
     "ladbrokes": "Ladbrokes", "ladbrokesuk": "Ladbrokes",
@@ -206,7 +207,6 @@ def summary(db):
 
 
 def install(app, db, settings):
-    from fastapi import HTTPException, Request
     _schema(db)
 
     @app.post(WEBHOOK_PATH)
