@@ -127,7 +127,7 @@ def test_old_cards_and_non_hr2_cards_are_never_alerted(tmp_path,monkeypatch):
 
 @pytest.mark.parametrize("kwargs,reason", [
     ({"mode":"CROSS_BOOK_SYNTHETIC"},"not_placeable_same_book"),
-    ({"book":"betfred_uk"},"bookmaker_not_supported"),
+    ({"book":"unknown_book"},"bookmaker_not_supported"),
     ({"quote_age":20},"stale_quote"),
     ({"kickoff_hours":0.1},"kickoff_too_close"),
     ({"same_fixture":True},"duplicate_fixture"),
@@ -199,3 +199,58 @@ def test_status_contains_no_secrets(tmp_path):
     assert out["credentials_configured"]
     assert "synthetic-token" not in repr(out)
     assert "synthetic-chat" not in repr(out)
+
+
+@pytest.mark.parametrize("book,display", [
+    ("betfred_uk", "Betfred"),
+    ("boylesports", "BoyleSports"),
+])
+def test_four_book_allowlist_includes_newly_permitted_books(tmp_path, monkeypatch, book, display):
+    db = _db(tmp_path)
+    routing._schema(db); routing._state(db)
+    now = _now()
+    _card(db, now, book=book, name=f"accepted-{book}")
+    sent = _capture(monkeypatch)
+    result = routing.send_due(db, _settings(), now=now)
+    assert result["sent"] == 1
+    assert len(sent) == 1
+    assert f"Bookmaker: {display}" in sent[0][0]
+    assert routing.send_due(db, _settings(), now=now)["sent"] == 0
+
+
+def test_previously_filtered_supported_book_gets_one_historical_recheck(tmp_path, monkeypatch):
+    db = _db(tmp_path)
+    routing._schema(db); routing._state(db)
+    now = _now()
+    card = _card(db, now, book="betfred_uk", name="previously-filtered")
+    routing._record(db, card, "SKIPPED_UNPLACEABLE", error="bookmaker_not_supported")
+    sent = _capture(monkeypatch)
+    later = now + timedelta(minutes=20)  # Frozen bookmaker quotes are stale now.
+    result = routing.send_due(db, _settings(), now=later)
+    assert result["sent"] == 0
+    assert result["recovered_review"] == 1
+    assert len(sent) == 1
+    assert "PREVIOUSLY MISSED / RECHECK ODDS" in sent[0][0]
+    assert "NOT BET READY" in sent[0][0]
+    assert "HISTORICAL" in sent[0][0]
+    assert routing.send_due(db, _settings(), now=later)["recovered_review"] == 0
+    record = db.fetchone(
+        "SELECT status,attempts,signature FROM hr2_telegram_alerts WHERE card_id=?",
+        (card["id"],),
+    )
+    assert record["status"] == "SENT"
+    assert record["attempts"] == 1
+    assert record["signature"]
+
+
+def test_do_not_recover_old_skips_or_past_kickoffs(tmp_path, monkeypatch):
+    db = _db(tmp_path)
+    routing._schema(db); routing._state(db)
+    now = _now()
+    card = _card(db, now, book="boylesports", kickoff_hours=0.2, name="expired-by-next-check")
+    routing._record(db, card, "SKIPPED_UNPLACEABLE", error="bookmaker_not_supported")
+    sent = _capture(monkeypatch)
+    later = now + timedelta(minutes=15)
+    result = routing.send_due(db, _settings(), now=later)
+    assert result["recovered_review"] == 0
+    assert sent == []
