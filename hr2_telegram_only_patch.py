@@ -22,10 +22,11 @@ import telegram_alerts
 import hr2_telegram_placement
 from db import sanitize_sensitive_text, utc_now_iso
 
-VERSION = "HR2_DOUBLE_ONLY_TELEGRAM_V2"
+VERSION = "HR2_DOUBLE_ONLY_TELEGRAM_V3_FOUR_BOOKS_RECOVERY"
 SOURCE = "HR2_BET_READY"
 POLICY_VERSION = "HRM_2026-10-18_V3_THEORETICAL_QUEUE"
-BOOKS = {"williamhill": "William Hill", "ladbrokes_uk": "Ladbrokes"}
+BOOKS = {"williamhill": "William Hill", "ladbrokes_uk": "Ladbrokes",
+         "betfred_uk": "Betfred", "boylesports": "BoyleSports"}
 FORMAT_LINES = {"DOUBLE": (2, 1), "TRIXIE": (3, 4), "YANKEE": (4, 11), "HEINZ": (6, 57)}
 ALERT_FORMATS = ("DOUBLE",)
 QUOTE_MAX_AGE_MINUTES = 15.0
@@ -178,6 +179,78 @@ def _record(db, card, status, *, signature=None, error=None):
     ) or {})
 
 
+
+def _recover_previously_blocked_books(db, now, token, chat):
+    """One-time, clearly labelled review notices for recent bookmaker-filter misses.
+
+    Never claim a historical quote is fresh or reactivate an expired fixture.
+    Uses no bookmaker API calls. Replays no prior SENT/UNCERTAIN alerts.
+    """
+    cutoff = (now - timedelta(hours=48)).isoformat()
+    rows = db.fetchall("""SELECT c.* FROM hit_rate_cards c
+        JOIN hr2_telegram_alerts a ON a.card_id=c.id
+        WHERE c.experiment_key='HR2' AND c.system_type='DOUBLE'
+          AND c.policy_version=? AND c.status='OPEN' AND c.created_at>=?
+          AND a.status='SKIPPED_UNPLACEABLE'
+          AND a.error='bookmaker_not_supported'
+        ORDER BY c.created_at,c.id LIMIT ?""",
+        (POLICY_VERSION, cutoff, MAX_ITEMS_PER_CYCLE),
+    )
+    sent = uncertain = 0
+    for raw in rows:
+        card = dict(raw)
+        legs = [dict(x) for x in db.fetchall(
+            "SELECT * FROM hit_rate_legs WHERE card_id=? ORDER BY leg_order",
+            (int(card["id"]),),
+        )]
+        valid, reason = _valid(card, legs, now)
+        if not valid and reason != "stale_quote":
+            continue
+        if any(
+            (_parse(leg.get("commence_time")) is None or
+             _parse(leg.get("commence_time")) <= now + timedelta(minutes=MIN_LEAD_MINUTES))
+            for leg in legs
+        ):
+            continue
+        sig = _signature(card, legs)
+        already = db.fetchone("""SELECT card_id FROM hr2_telegram_alerts
+            WHERE signature=? AND status IN ('SENT','SENDING','UNCERTAIN')
+              AND card_id<>? LIMIT 1""", (sig, int(card["id"])))
+        if already:
+            continue
+        claimed = db.execute("""UPDATE hr2_telegram_alerts
+            SET status='SENDING',attempts=attempts+1,signature=?
+            WHERE card_id=? AND status='SKIPPED_UNPLACEABLE'
+              AND error='bookmaker_not_supported'""", (sig, int(card["id"])))
+        if not claimed:
+            continue
+        notice = (
+            "⚠️ HR2 DOUBLE — PREVIOUSLY MISSED / RECHECK ODDS\n"
+            "This card was formed earlier but its bookmaker was not allowed by the old alert filter.\n"
+            "The prices below are HISTORICAL, not verified live now. "
+            "Confirm both selections, prices and kickoff before placing anything.\n\n"
+        ) + _message(card, legs).replace(
+            "🟢 HR2 DOUBLE — BET READY", "HR2 DOUBLE — HISTORICAL CARD (NOT BET READY)", 1
+        )
+        try:
+            result = telegram_alerts._send_telegram(token, chat, notice, source=SOURCE)
+            if not result.get("ok"):
+                raise RuntimeError("Telegram recovery delivery not confirmed")
+            db.execute("""UPDATE hr2_telegram_alerts
+                SET status='SENT',sent_at=?,telegram_message_id=?,error=NULL
+                WHERE card_id=? AND status='SENDING'""",
+                (utc_now_iso(), str(result.get("message_id") or ""), int(card["id"])),
+            )
+            print(f"HR2_TELEGRAM_RECOVERED_CARD {int(card['id'])}", flush=True)
+            sent += 1
+        except Exception as exc:
+            db.execute("""UPDATE hr2_telegram_alerts SET status='UNCERTAIN',
+                error=? WHERE card_id=? AND status='SENDING'""",
+                (sanitize_sensitive_text(exc), int(card["id"])),
+            )
+            uncertain += 1
+    return {"sent": sent, "uncertain": uncertain}
+
 def send_due(db, settings, *, now=None):
     now = now or datetime.now(timezone.utc)
     if now.tzinfo is None:
@@ -273,6 +346,7 @@ def send_due(db, settings, *, now=None):
                 sanitize_sensitive_text(exc), int(card["id"]),
             ))
             uncertain += 1
+    recovery = _recover_previously_blocked_books(db, now, token, chat)
     db.execute(
         "UPDATE hr2_telegram_control SET last_check_at=?,last_error=NULL WHERE id=1",
         (utc_now_iso(),),
@@ -280,7 +354,9 @@ def send_due(db, settings, *, now=None):
     return {"enabled": True, "source": SOURCE,
             "eligible": len(eligible), "sent": sent, "uncertain": uncertain,
             "rejected": rejected, "duplicates_suppressed": duplicate,
-            "checked_cards": len(cards)}
+            "checked_cards": len(cards),
+            "recovered_review": recovery["sent"],
+            "recovery_uncertain": recovery["uncertain"]}
 
 
 def status(db, settings):
@@ -331,7 +407,8 @@ def install(app, db, settings):
         formed = _PREVIOUS_FORM(db_obj, now)
         try:
             info = send_due(db_obj, settings, now=now)
-            if info.get("sent") or info.get("uncertain") or info.get("rejected"):
+            if (info.get("sent") or info.get("uncertain") or info.get("rejected")
+                    or info.get("recovered_review") or info.get("recovery_uncertain")):
                 print(f"HR2_TELEGRAM_MAINT {info}", flush=True)
         except Exception as exc:
             error = sanitize_sensitive_text(exc)
@@ -360,6 +437,18 @@ def install(app, db, settings):
         split_exporter.MANUAL_TABLES = tuple(dict.fromkeys(tuple(split_exporter.MANUAL_TABLES) + tables))
     except Exception:
         pass
+    try:
+        diagnostic = db.fetchall("""SELECT c.id AS card_id,
+            c.bookmaker_mix AS frozen_bookmakers, a.status AS alert_status,
+            a.error AS alert_error FROM hit_rate_cards c
+            LEFT JOIN hr2_telegram_alerts a ON a.card_id=c.id
+            WHERE c.experiment_key='HR2' AND c.system_type='DOUBLE'
+            ORDER BY c.id DESC LIMIT 10""")
+        print("HR2_TELEGRAM_RECENT_DOUBLE_DIAGNOSTIC "
+              + repr([dict(x) for x in diagnostic]), flush=True)
+    except Exception as exc:
+        print("HR2_TELEGRAM_DIAGNOSTIC_ERROR "
+              + sanitize_sensitive_text(exc), flush=True)
     _INSTALLED = True
     return {
         "installed": True, "version": VERSION,
