@@ -88,12 +88,15 @@ def _verified(states, need: int):
         quotes = [dict(state["strict"][book]) for state in chosen]
         latest_queue_time = max(_first_seen(candidate) for candidate in candidates)
         card_price = prod(float(quote.get("price") or 0) for quote in quotes)
-        options.append((latest_queue_time, -card_price, book, candidates, quotes))
+        # Preserve price ranking; on a genuine tie prefer the user's most convenient books.
+        rank = {"williamhill": 0, "ladbrokes_uk": 1,
+                "betfred_uk": 2, "boylesports": 3}.get(book, 10)
+        options.append((latest_queue_time, -card_price, rank, book, candidates, quotes))
 
     if not options:
         return None
-    options.sort(key=lambda x: (x[0], x[1], x[2]))
-    _, _, _, candidates, quotes = options[0]
+    options.sort(key=lambda x: (x[0], x[1], x[2], x[3]))
+    _, _, _, _, candidates, quotes = options[0]
     return candidates, quotes, "SAME_BOOK_VERIFIED"
 
 
