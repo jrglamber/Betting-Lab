@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-"""Sole Betting Lab Telegram producer: prospective, manually placeable HR2 cards.
+"""Sole Betting Lab Telegram producer: manually placeable HR2 DOUBLES only.
 
-Covers HR2 Double, Trixie, Yankee, Heinz using the ORIGINAL frozen card/leg
-ledger, not separately assembled shadow portfolio or quality challenger.
+Other HR2 formats continue to form, settle and be researched normally; they
+are not sent to Telegram. Uses the original frozen HR2 card and leg ledger.
 All previous cards are seeded PRE_WIRE on first activation; never replay them.
 No provider calls, bet placement, card edits or new scoring/selection rules.
 """
@@ -19,13 +19,15 @@ import hit_rate_same_book_only_patch as same_book
 import hr_market_integrity as integrity
 import hr_portfolio_telegram as portfolio_tg
 import telegram_alerts
+import hr2_telegram_placement
 from db import sanitize_sensitive_text, utc_now_iso
 
-VERSION = "HR2_BET_READY_TELEGRAM_ONLY_V1"
+VERSION = "HR2_DOUBLE_ONLY_TELEGRAM_V2"
 SOURCE = "HR2_BET_READY"
 POLICY_VERSION = "HRM_2026-10-18_V3_THEORETICAL_QUEUE"
 BOOKS = {"williamhill": "William Hill", "ladbrokes_uk": "Ladbrokes"}
 FORMAT_LINES = {"DOUBLE": (2, 1), "TRIXIE": (3, 4), "YANKEE": (4, 11), "HEINZ": (6, 57)}
+ALERT_FORMATS = ("DOUBLE",)
 QUOTE_MAX_AGE_MINUTES = 15.0
 MIN_LEAD_MINUTES = 10.0
 MAX_ITEMS_PER_CYCLE = 30
@@ -95,6 +97,8 @@ def _valid(card, legs, now):
         return False, "wrong_experiment"
     if fmt not in FORMAT_LINES or len(legs) != FORMAT_LINES[fmt][0]:
         return False, "wrong_leg_count"
+    if fmt not in ALERT_FORMATS:
+        return False, "format_not_notified"
     if str(card.get("status") or "") != "OPEN":
         return False, "not_open"
     if str(card.get("assembly_mode") or "") not in {"SAME_BOOK_VERIFIED", "SAME_BOOK_CONSOLIDATED"}:
@@ -149,6 +153,10 @@ def _message(card, legs):
         "MANUAL bet only. Prices were observed earlier and can move.",
         "Check every selection, market line and price at the named bookmaker before placing.",
         "Research/shadow card — NO bet has been placed automatically.",
+        "",
+        "To log your own bet: REPLY to this message with 'placed'.",
+        "Optional for pilot accuracy: 'placed 10 WilliamHill 3.00 2.75'",
+        "(stake in GBP; bookmaker; actual odds for legs 1 and 2).",
     ])
     return "\n".join(message)
 
@@ -186,7 +194,8 @@ def send_due(db, settings, *, now=None):
 
     cards = db.fetchall("""SELECT c.* FROM hit_rate_cards c
         LEFT JOIN hr2_telegram_alerts a ON a.card_id=c.id
-        WHERE c.experiment_key='HR2' AND c.policy_version=?
+        WHERE c.experiment_key='HR2' AND c.system_type='DOUBLE'
+          AND c.policy_version=?
           AND c.created_at>=? AND a.card_id IS NULL
         ORDER BY c.created_at,c.id LIMIT ?""",
         (POLICY_VERSION, state["activated_at"], MAX_ITEMS_PER_CYCLE),
@@ -283,7 +292,7 @@ def status(db, settings):
         FROM hr2_telegram_alerts ORDER BY id DESC LIMIT 20""")
     return {
         "version": VERSION, "only_notification_source": SOURCE,
-        "allowed_experiment": "HR2", "allowed_formats": list(FORMAT_LINES),
+        "allowed_experiment": "HR2", "allowed_formats": list(ALERT_FORMATS),
         "manual_books": list(BOOKS.values()),
         "enabled": bool(getattr(settings, "telegram_alerts_enabled", False)),
         "credentials_configured": bool(
@@ -295,7 +304,8 @@ def status(db, settings):
         "counts": [dict(x) for x in counts],
         "recent": [dict(x) for x in recent],
         "portfolio_shadow_muted": not portfolio_tg.ROUTING_ENABLED,
-        "no_auto_bets": True, "no_extra_api_calls": True,
+        "no_auto_bets": True, "no_extra_sports_provider_calls": True,
+        "reply_tracking": hr2_telegram_placement.summary(db),
     }
 
 
@@ -337,7 +347,8 @@ def install(app, db, settings):
     def hr2_telegram_status():
         return status(db, settings)
 
-    tables = ("hr2_telegram_control", "hr2_telegram_alerts")
+    placement_install = hr2_telegram_placement.install(app, db, settings)
+    tables = ("hr2_telegram_control", "hr2_telegram_alerts", "hr2_manual_placements")
     try:
         import exporter
         exporter.EXPORT_TABLES = tuple(dict.fromkeys(tuple(exporter.EXPORT_TABLES) + tables))
@@ -354,7 +365,7 @@ def install(app, db, settings):
         "installed": True, "version": VERSION,
         "only_notification_source": SOURCE,
         "allowed_experiment": "HR2",
-        "allowed_formats": list(FORMAT_LINES),
+        "allowed_formats": list(ALERT_FORMATS),
         "manual_books": list(BOOKS.values()),
         "preexisting_cards_suppressed": True,
         "activated_at": state["activated_at"],
@@ -365,4 +376,5 @@ def install(app, db, settings):
         "other_senders_muted": True,
         "provider_calls_added": 0,
         "betting_authority": False,
+        "placement_replies": placement_install,
     }
