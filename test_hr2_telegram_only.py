@@ -27,7 +27,7 @@ def _now():
     return datetime.now(timezone.utc) + timedelta(seconds=3)
 
 
-def _card(db, now, fmt="YANKEE", *, book="williamhill",
+def _card(db, now, fmt="DOUBLE", *, book="williamhill",
           mode="SAME_BOOK_VERIFIED", policy=routing.POLICY_VERSION,
           exp="HR2", quote_age=2, kickoff_hours=4, same_fixture=False,
           market="h2h", point=None, status="OPEN", name=None):
