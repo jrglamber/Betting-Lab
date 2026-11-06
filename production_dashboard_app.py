@@ -39,7 +39,7 @@ from tennis_predictive_readiness_embed_patch import install as install_tennis_pr
 from verified_jacquet_machac_rescue import run_once as repair_verified_jacquet_machac
 from verified_van_assche_tien_rescue import run_once as repair_verified_van_assche_tien
 
-BUILD_VERSION = "0.19.138"
+BUILD_VERSION = "0.19.139"
 
 # Keep all visible version surfaces aligned with the real production entrypoint.
 base.BUILD_VERSION = BUILD_VERSION
