@@ -219,16 +219,16 @@ def _recover_previously_blocked_books(db, now, token, chat):
         if already:
             continue
         claimed = db.execute("""UPDATE hr2_telegram_alerts
-            SET status='SENDING',attempts=attempts+1
+            SET status='SENDING',attempts=attempts+1,signature=?
             WHERE card_id=? AND status='SKIPPED_UNPLACEABLE'
-              AND error='bookmaker_not_supported'""", (int(card["id"]),))
+              AND error='bookmaker_not_supported'""", (sig, int(card["id"])))
         if not claimed:
             continue
         notice = (
-            "⚠️ HR2 DOUBLE — PREVIOUSLY MISSED / RECHECK ODDS\\n"
-            "This card was formed earlier but its bookmaker was not allowed by the old alert filter.\\n"
+            "⚠️ HR2 DOUBLE — PREVIOUSLY MISSED / RECHECK ODDS\n"
+            "This card was formed earlier but its bookmaker was not allowed by the old alert filter.\n"
             "The prices below are HISTORICAL, not verified live now. "
-            "Confirm both selections, prices and kickoff before placing anything.\\n\\n"
+            "Confirm both selections, prices and kickoff before placing anything.\n\n"
         ) + _message(card, legs).replace(
             "🟢 HR2 DOUBLE — BET READY", "HR2 DOUBLE — HISTORICAL CARD (NOT BET READY)", 1
         )
