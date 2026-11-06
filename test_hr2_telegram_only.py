@@ -74,9 +74,7 @@ def test_outbound_rejects_all_sources_except_hr2_before_network():
             telegram_alerts._send_telegram("dummy", "dummy", "test", source=source)
 
 
-@pytest.mark.parametrize("fmt,lines", [
-    ("DOUBLE",1),("TRIXIE",4),("YANKEE",11),("HEINZ",57),
-])
+@pytest.mark.parametrize("fmt,lines", [("DOUBLE",1)])
 def test_hr2_placeable_format_notifies_once(tmp_path,monkeypatch,fmt,lines):
     db=_db(tmp_path)
     routing._schema(db); routing._state(db)
@@ -97,6 +95,17 @@ def test_hr2_placeable_format_notifies_once(tmp_path,monkeypatch,fmt,lines):
         "SELECT status,attempts FROM hr2_telegram_alerts WHERE card_id=?",
         (int(c["id"]),)
     ) == {"status":"SENT","attempts":1}
+
+
+@pytest.mark.parametrize("fmt", ["TRIXIE", "YANKEE", "HEINZ"])
+def test_other_hr2_formats_keep_research_but_never_notify(tmp_path,monkeypatch,fmt):
+    db=_db(tmp_path);routing._schema(db);routing._state(db);now=_now()
+    c=_card(db,now,fmt=fmt,name=f"research-{fmt}")
+    sent=_capture(monkeypatch)
+    result=routing.send_due(db,_settings(),now=now)
+    assert result["sent"]==0 and sent==[]
+    assert db.fetchone("SELECT id,status FROM hit_rate_cards WHERE id=?", (c["id"],))["status"]=="OPEN"
+    assert db.fetchone("SELECT card_id FROM hr2_telegram_alerts WHERE card_id=?", (c["id"],)) is None
 
 
 def test_old_cards_and_non_hr2_cards_are_never_alerted(tmp_path,monkeypatch):
@@ -186,6 +195,7 @@ def test_status_contains_no_secrets(tmp_path):
     db=_db(tmp_path)
     out=routing.status(db,_settings())
     assert out["only_notification_source"]=="HR2_BET_READY"
+    assert out["allowed_formats"]==["DOUBLE"]
     assert out["credentials_configured"]
     assert "synthetic-token" not in repr(out)
     assert "synthetic-chat" not in repr(out)
