@@ -69,7 +69,9 @@ def replay(rows, decision="ACCEPT", sizes=(1, 2, 3, 4), max_wait_hours=24):
                 wins = [float(x["pnl_units"]) > 0 for x in group] if settled else []
                 odds = [float(x["entry_odds"]) for x in group]
                 if not settled:
-                    cards.append(dict(bookmaker=book, ready_at=ready.isoformat(),
+                    # Match the source ledger: 5% deduction on positive net winnings.
+                returned = 1 + (returned - 1) * 0.95 if returned > 1 else returned
+                cards.append(dict(bookmaker=book, ready_at=ready.isoformat(),
                                       event_ids=[x["event_id"] for x in group], status="UNSETTLED",
                                       return_units=None, pnl_units=None))
                     del remaining[:size]
@@ -92,5 +94,5 @@ def replay(rows, decision="ACCEPT", sizes=(1, 2, 3, 4), max_wait_hours=24):
             "roi_pct": round(100 * pnl / len(settled_cards), 2) if settled_cards else None,
             "cards_detail": cards}
     return {"decision": decision, "eligible_distinct_quotes": len(unique),
-            "assumption": "Recorded exchange odds, not verified executable bookmaker prices",
+            "assumption": "Recorded exchange odds with assumed 5% commission on net positive card returns; not verified executable prices",
             "results": results}
