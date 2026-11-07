@@ -22,21 +22,26 @@ def capture(db):
     db.execute("""CREATE TABLE IF NOT EXISTS hr2_forward_schema_migrations (
         migration_key TEXT PRIMARY KEY, applied_at TEXT NOT NULL
     )""")
-    marker = db.fetchone("""SELECT migration_key FROM hr2_forward_schema_migrations
-        WHERE migration_key=?""", ("reservation_backfill_v1",))
-    if not marker:
-        old = db.fetchall("""SELECT snapshot_key,bookmaker_key,candidate_ids_json
-            FROM hr2_forward_pool_snapshots WHERE eligible_yankees>0""")
-        for prior in old:
-            for candidate_id in json.loads(prior["candidate_ids_json"])[:4]:
-                db.execute("""INSERT INTO hr2_forward_reservations
-                    (bookmaker_key,candidate_id,snapshot_key) VALUES(?,?,?)
-                    ON CONFLICT(bookmaker_key,candidate_id) DO NOTHING""",
-                    (prior["bookmaker_key"], int(candidate_id), prior["snapshot_key"]))
-        db.execute("""INSERT INTO hr2_forward_schema_migrations
-            (migration_key,applied_at) VALUES(?,?)
-            ON CONFLICT(migration_key) DO NOTHING""",
-            ("reservation_backfill_v1", datetime.now(timezone.utc).isoformat()))
+    # Database.execute() commits every statement separately. Use one explicit
+    # connection so backfill rows and completion marker commit or roll back together.
+    with db.connection() as conn:
+        cur = conn.cursor()
+        cur.execute(db._sql("""SELECT migration_key FROM hr2_forward_schema_migrations
+            WHERE migration_key=?"""), ("reservation_backfill_v1",))
+        if cur.fetchone() is None:
+            cur.execute("""SELECT snapshot_key,bookmaker_key,candidate_ids_json
+                FROM hr2_forward_pool_snapshots WHERE eligible_yankees>0""")
+            old = cur.fetchall()
+            for snapshot_key, bookmaker_key, ids_json in old:
+                for candidate_id in json.loads(ids_json)[:4]:
+                    cur.execute(db._sql("""INSERT INTO hr2_forward_reservations
+                        (bookmaker_key,candidate_id,snapshot_key) VALUES(?,?,?)
+                        ON CONFLICT(bookmaker_key,candidate_id) DO NOTHING"""),
+                        (bookmaker_key, int(candidate_id), snapshot_key))
+            cur.execute(db._sql("""INSERT INTO hr2_forward_schema_migrations
+                (migration_key,applied_at) VALUES(?,?)
+                ON CONFLICT(migration_key) DO NOTHING"""),
+                ("reservation_backfill_v1", datetime.now(timezone.utc).isoformat()))
     db.execute("""CREATE INDEX IF NOT EXISTS idx_hr2_forward_bookmaker\n        ON hr2_forward_pool_snapshots(bookmaker_key)""")
     observed = datetime.now(timezone.utc)
     now = observed.isoformat()
