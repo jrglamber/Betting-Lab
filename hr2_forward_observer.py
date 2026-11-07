@@ -76,7 +76,7 @@ def capture(db):
              comb(len(legs), 2) if len(legs) >= 2 else 0,
              comb(len(legs), 4) if len(legs) >= 4 else 0))
         recorded += 1
-    return {"priced_same_book_pools": recorded,
+    return {"priced_same_book_pools_attempted": recorded,
             "note": "Non-overlapping four-leg cohorts per bookmaker; separate books can share events."}
 
 def settle(db):
