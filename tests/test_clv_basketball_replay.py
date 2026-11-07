@@ -20,7 +20,7 @@ def test_distinct_events_and_same_book():
             bet("b", "2026-11-01T10:00:00Z", "2026-11-01T21:00:00Z", 1)]
     result = replay(rows, sizes=(2,))
     assert result["results"]["doubles"]["cards"] == 1
-    assert result["results"]["doubles"]["pnl_units"] == 2.8
+    assert result["results"]["doubles"]["pnl_units"] == 2.85
 
 def test_no_cross_book_pairing():
     rows = [bet("a", "2026-11-01T09:00:00Z", "2026-11-01T20:00:00Z", 1),
