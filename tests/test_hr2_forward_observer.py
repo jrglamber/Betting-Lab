@@ -25,7 +25,7 @@ class FakeDB:
     def execute(self, sql, params=()):
         self.writes.append((sql, params))
     def fetchall(self, sql, params=()):
-        if "hr2_forward_pool_snapshots" in sql:
+        if "hr2_forward_reservations" in sql:
             return []
         assert "hit_rate_candidates" in sql
         return self.candidates
@@ -40,8 +40,8 @@ class ObserverTests(unittest.TestCase):
         with patch.dict(sys.modules, {"hit_rate_multiples_lab": mock}):
             result = observer.capture(db)
         self.assertEqual(result["priced_same_book_pools_attempted"], 1)
-        inserts = [params for sql, params in db.writes if "INSERT INTO" in sql]
-        self.assertEqual(len(inserts), 1)
+        inserts = [params for sql, params in db.writes if "INSERT INTO hr2_forward_pool_snapshots" in sql]
+        self.assertEqual(len([x for x in db.writes if "INSERT INTO hr2_forward_pool_snapshots" in x[0]]), 1)
         self.assertEqual(inserts[0][-3:], (4, 6, 1))
         self.assertEqual(inserts[0][3], "williamhill")
         self.assertFalse(any("telegram" in sql.lower() or "UPDATE hit_rate" in sql for sql, _ in db.writes))
@@ -50,8 +50,8 @@ class ObserverTests(unittest.TestCase):
         db = FakeDB()
         original = db.fetchall
         def fetchall(sql, params=()):
-            if "FROM hr2_forward_pool_snapshots" in sql:
-                return [{"candidate_ids_json": "[1,2,3,4]"}]
+            if "FROM hr2_forward_reservations" in sql:
+                return [{"candidate_id": i} for i in (1,2,3,4)]
             return original(sql, params)
         db.fetchall = fetchall
         mock = types.ModuleType("hit_rate_multiples_lab")
