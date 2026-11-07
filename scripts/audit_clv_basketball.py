@@ -34,6 +34,10 @@ def main(path):
         "basketball_accept": replay(clv, "ACCEPT"),
         "basketball_observe": replay(clv, "OBSERVE"),
     }
+    # Avoid dumping thousands of individual bet records to routine CI logs.
+    for name in ("basketball_accept", "basketball_observe"):
+        for outcome in result[name]["results"].values():
+            outcome.pop("cards_detail", None)
     print(json.dumps(result, indent=2, default=str))
 
 
