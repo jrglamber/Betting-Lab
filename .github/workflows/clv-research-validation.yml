@@ -6,6 +6,7 @@ on:
       - 'clv_hr2_shadow_research.py'
       - 'tests/test_clv_basketball_replay.py'
       - 'tests/test_clv_hr2_shadow_research.py'
+      - 'scripts/audit_clv_basketball.py'
       - '.github/workflows/clv-research-validation.yml'
   workflow_dispatch:
 jobs:
@@ -17,7 +18,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Syntax validation
-        run: python -m compileall -q clv_basketball_replay.py clv_hr2_shadow_research.py
+        run: python -m compileall -q clv_basketball_replay.py clv_hr2_shadow_research.py scripts/audit_clv_basketball.py
       - name: Unit tests
         run: |
           python -m pip install pytest
