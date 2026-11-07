@@ -19,32 +19,42 @@ def capture(db):
     candidates = db.fetchall("""SELECT * FROM hit_rate_candidates
         WHERE experiment_key='HR2' AND status='QUEUED'
         ORDER BY first_seen_at,id""")
-    # Source candidates alone cannot establish bookmaker feasibility. Preserve
-    # eligibility as unverified until a priced, same-book quote exists.
-    groups = {}
+    from hit_rate_multiples_lab import _quotes
+    from itertools import combinations
+    # Price each distinct event from the already-collected manual bookmaker quotes.
+    # No odds provider requests and no queue consumption.
+    by_book = {}
     for c in candidates:
-        event = str(c.get("event_id") or "")
-        if not event:
+        if not c.get("event_id"):
             continue
-        group = groups.setdefault(str(c.get("system_type") or "UNKNOWN"), {})
-        if event not in group:
-            group[event] = c
+        for book, quote in _quotes(db, c, datetime.now(timezone.utc), False).items():
+            group = by_book.setdefault(book, {})
+            event = str(c["event_id"])
+            candidate = {"candidate_id": int(c["id"]), "event_id": event,
+                         "market_key": c.get("market_key"), "selection": c.get("selection"),
+                         "point": c.get("point"), "odds": float(quote["price"]),
+                         "quote_captured_at": quote.get("captured_at"),
+                         "first_seen_at": c.get("first_seen_at"),
+                         "commence_time": c.get("commence_time")}
+            if event not in group or candidate["odds"] > group[event]["odds"]:
+                group[event] = candidate
     recorded = 0
-    for source_system, by_event in groups.items():
-        legs = list(by_event.values())
-        ids = [int(x["id"]) for x in legs]
-        # Do not label source odds as executable odds or infer a bookmaker.
-        payload = [{"candidate_id": int(x["id"]), "event_id": x["event_id"],
-                    "market_key": x.get("market_key"), "selection": x.get("selection"),
-                    "point": x.get("point"), "source_odds": x.get("source_odds"),
-                    "first_seen_at": x.get("first_seen_at"),
-                    "commence_time": x.get("commence_time")} for x in legs]
-        key = hashlib.sha256((source_system + "|" + ",".join(map(str, ids))).encode()).hexdigest()
+    for book, event_map in by_book.items():
+        legs = sorted(event_map.values(), key=lambda x: (str(x["first_seen_at"]), x["event_id"]))
+        # Persist each observed priced pool, not just cards that the production
+        # assembler chose. Same total 1u per hypothetical card at replay time.
+        ids = [x["candidate_id"] for x in legs]
+        signature = book + "|" + json.dumps(
+            [(x["candidate_id"], x["odds"], x["quote_captured_at"]) for x in legs])
+        key = hashlib.sha256(signature.encode()).hexdigest()
         db.execute("""INSERT INTO hr2_forward_pool_snapshots(
             snapshot_key,observed_at,experiment_key,bookmaker_key,
             candidate_ids_json,legs_json,eligible_singles,eligible_doubles,eligible_yankees)
             VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(snapshot_key) DO NOTHING""",
-            (key,now,"HR2","UNVERIFIED",json.dumps(ids),json.dumps(payload,default=str),0,0,0))
+            (key, now, "HR2", book, json.dumps(ids),
+             json.dumps(legs, default=str), len(legs),
+             comb(len(legs), 2) if len(legs) >= 2 else 0,
+             comb(len(legs), 4) if len(legs) >= 4 else 0))
         recorded += 1
     return {"snapshot_groups_seen": recorded,
             "note": "Source-only queue snapshots. Bookmaker-feasible replay remains pending priced quote capture."}
