@@ -36,7 +36,7 @@ def replay(rows, decision="ACCEPT", sizes=(1, 2, 3, 4), max_wait_hours=24):
         created, start = dt(r.get("created_at")), dt(r.get("commence_time"))
         if (r.get("evidence_mode") != "FORWARD" or r.get("decision") != decision
                 or not is_basketball(r) or not created or not start or created >= start
-                or r.get("pnl_units") is None or float(r.get("entry_odds") or 0) <= 1
+                or float(r.get("entry_odds") or 0) <= 1
                 or not r.get("bookmaker_key") or not r.get("event_id")):
             continue
         eligible.append(dict(r, _created=created, _start=start))
@@ -65,8 +65,15 @@ def replay(rows, decision="ACCEPT", sizes=(1, 2, 3, 4), max_wait_hours=24):
                         or (ready - group[0]["_created"]).total_seconds() > max_wait_hours * 3600):
                     remaining.pop(0)
                     continue
-                wins = [float(x["pnl_units"]) > 0 for x in group]
+                settled = all(x.get("pnl_units") is not None for x in group)
+                wins = [float(x["pnl_units"]) > 0 for x in group] if settled else []
                 odds = [float(x["entry_odds"]) for x in group]
+                if not settled:
+                    cards.append(dict(bookmaker=book, ready_at=ready.isoformat(),
+                                      event_ids=[x["event_id"] for x in group], status="UNSETTLED",
+                                      return_units=None, pnl_units=None))
+                    del remaining[:size]
+                    continue
                 if size == 4:
                     parts = [prod(odds[i] for i in ix) if all(wins[i] for i in ix) else 0
                              for n in (2, 3, 4) for ix in combinations(range(4), n)]
@@ -78,10 +85,11 @@ def replay(rows, decision="ACCEPT", sizes=(1, 2, 3, 4), max_wait_hours=24):
                                   return_units=round(returned, 6),
                                   pnl_units=round(returned - 1, 6)))
                 del remaining[:size]
-        pnl = sum(c["pnl_units"] for c in cards)
+        settled_cards = [c for c in cards if c["pnl_units"] is not None]
+        pnl = sum(c["pnl_units"] for c in settled_cards)
         results[{1:"singles", 2:"doubles", 3:"trebles", 4:"yankees"}.get(size, str(size))] = {
-            "cards": len(cards), "pnl_units": round(pnl, 4),
-            "roi_pct": round(100 * pnl / len(cards), 2) if cards else None,
+            "cards": len(cards), "settled_cards": len(settled_cards), "pnl_units": round(pnl, 4),
+            "roi_pct": round(100 * pnl / len(settled_cards), 2) if settled_cards else None,
             "cards_detail": cards}
     return {"decision": decision, "eligible_distinct_quotes": len(unique),
             "assumption": "Recorded exchange odds, not verified executable bookmaker prices",
