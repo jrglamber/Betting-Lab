@@ -7,8 +7,6 @@ import hashlib
 import json
 from datetime import datetime, timezone
 from math import comb
-from itertools import combinations
-from math import prod
 
 def capture(db):
     db.execute("""CREATE TABLE IF NOT EXISTS hr2_forward_pool_snapshots (
@@ -54,8 +52,8 @@ def capture(db):
         # Persist each observed priced pool, not just cards that the production
         # assembler chose. Same total 1u per hypothetical card at replay time.
         ids = [x["candidate_id"] for x in legs]
-        # Stable per-minute observations: avoid 60 identical snapshots per hour.
-        signature = now[:16] + "|" + book + "|" + json.dumps(
+        # Identical priced pools are captured once, regardless of polling frequency.
+        signature = book + "|" + json.dumps(
             [(x["candidate_id"], x["odds"], x["quote_captured_at"]) for x in legs])
         key = hashlib.sha256(signature.encode()).hexdigest()
         db.execute("""INSERT INTO hr2_forward_pool_snapshots(
