@@ -17,6 +17,26 @@ def capture(db):
         eligible_yankees INTEGER NOT NULL
     )""")
     db.execute("""CREATE TABLE IF NOT EXISTS hr2_forward_reservations (\n        bookmaker_key TEXT NOT NULL, candidate_id INTEGER NOT NULL,\n        snapshot_key TEXT NOT NULL,\n        PRIMARY KEY(bookmaker_key,candidate_id)\n    )""")
+    # One-time idempotent migration of any snapshots from an older research build.
+    # Avoid repeated full scans once the marker exists.
+    db.execute("""CREATE TABLE IF NOT EXISTS hr2_forward_schema_migrations (
+        migration_key TEXT PRIMARY KEY, applied_at TEXT NOT NULL
+    )""")
+    marker = db.fetchone("""SELECT migration_key FROM hr2_forward_schema_migrations
+        WHERE migration_key=?""", ("reservation_backfill_v1",))
+    if not marker:
+        old = db.fetchall("""SELECT snapshot_key,bookmaker_key,candidate_ids_json
+            FROM hr2_forward_pool_snapshots WHERE eligible_yankees>0""")
+        for prior in old:
+            for candidate_id in json.loads(prior["candidate_ids_json"])[:4]:
+                db.execute("""INSERT INTO hr2_forward_reservations
+                    (bookmaker_key,candidate_id,snapshot_key) VALUES(?,?,?)
+                    ON CONFLICT(bookmaker_key,candidate_id) DO NOTHING""",
+                    (prior["bookmaker_key"], int(candidate_id), prior["snapshot_key"]))
+        db.execute("""INSERT INTO hr2_forward_schema_migrations
+            (migration_key,applied_at) VALUES(?,?)
+            ON CONFLICT(migration_key) DO NOTHING""",
+            ("reservation_backfill_v1", datetime.now(timezone.utc).isoformat()))
     db.execute("""CREATE INDEX IF NOT EXISTS idx_hr2_forward_bookmaker\n        ON hr2_forward_pool_snapshots(bookmaker_key)""")
     observed = datetime.now(timezone.utc)
     now = observed.isoformat()
