@@ -16,6 +16,7 @@ def capture(db):
         eligible_singles INTEGER NOT NULL, eligible_doubles INTEGER NOT NULL,
         eligible_yankees INTEGER NOT NULL
     )""")
+    db.execute("""CREATE INDEX IF NOT EXISTS idx_hr2_forward_bookmaker\n        ON hr2_forward_pool_snapshots(bookmaker_key)""")
     observed = datetime.now(timezone.utc)
     now = observed.isoformat()
     candidates = db.fetchall("""SELECT * FROM hit_rate_candidates
@@ -92,6 +93,7 @@ def settle(db):
         bookmaker_key TEXT NOT NULL, candidate_ids_json TEXT NOT NULL,
         comparison_json TEXT NOT NULL
     )""")
+    db.execute("""CREATE INDEX IF NOT EXISTS idx_hr2_forward_observed\n        ON hr2_forward_pool_snapshots(observed_at)""")
     snapshots = db.fetchall("""SELECT s.snapshot_key,s.bookmaker_key,s.legs_json
         FROM hr2_forward_pool_snapshots s
         LEFT JOIN hr2_forward_matched_results r ON r.snapshot_key=s.snapshot_key
