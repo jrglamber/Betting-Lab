@@ -606,8 +606,20 @@ def run_maintenance(db, collector, settings, now: Optional[datetime] = None) -> 
         out = {"ok": True, "version": VERSION, "policy_version": POLICY_VERSION,
                "expired": _expire(db, now), "ingested": _ingest(db, now)}
         out["quotes"] = _refresh(db, collector, settings, now)
+        # Observe eligible queues BEFORE production consumes candidates.
+        try:
+            from hr2_forward_observer import capture as capture_hr2_forward
+            out["hr2_forward_capture"] = capture_hr2_forward(db)
+        except Exception as observer_exc:
+            out["hr2_forward_capture"] = {"ok": False, "error": sanitize_sensitive_text(observer_exc)}
         out["formed"] = _form(db, now)
         out["settlement"] = settle_cards(db)
+        # Isolated research observer: never interrupt formation, settlement, or alerts.
+        try:
+            from hr2_forward_observer import settle as settle_hr2_forward
+            out["hr2_forward_settlement"] = settle_hr2_forward(db)
+        except Exception as observer_exc:
+            out["hr2_forward_observer"] = {"ok": False, "error": sanitize_sensitive_text(observer_exc)}
         out["scoreboard"] = scoreboard(db)
         db.record_collector_run("HIT_RATE_MULTIPLES_MAINT", True,
                                 detail=json.dumps(out, sort_keys=True, default=str))

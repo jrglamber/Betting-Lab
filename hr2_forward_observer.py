@@ -1,0 +1,161 @@
+"""Forward-only, read-only HR2 cohort snapshots (no provider calls or alerts).
+
+Designed to run within existing HR2 maintenance. Writes to separate research
+tables only; never consumes queue items or modifies Telegram delivery.
+"""
+import hashlib
+import json
+from datetime import datetime, timezone
+from math import comb
+
+def capture(db):
+    db.execute("""CREATE TABLE IF NOT EXISTS hr2_forward_pool_snapshots (
+        snapshot_key TEXT PRIMARY KEY, observed_at TEXT NOT NULL,
+        experiment_key TEXT NOT NULL, bookmaker_key TEXT NOT NULL,
+        candidate_ids_json TEXT NOT NULL, legs_json TEXT NOT NULL,
+        eligible_singles INTEGER NOT NULL, eligible_doubles INTEGER NOT NULL,
+        eligible_yankees INTEGER NOT NULL
+    )""")
+    db.execute("""CREATE TABLE IF NOT EXISTS hr2_forward_reservations (\n        bookmaker_key TEXT NOT NULL, candidate_id INTEGER NOT NULL,\n        snapshot_key TEXT NOT NULL,\n        PRIMARY KEY(bookmaker_key,candidate_id)\n    )""")
+    # One-time idempotent migration of any snapshots from an older research build.
+    # Avoid repeated full scans once the marker exists.
+    db.execute("""CREATE TABLE IF NOT EXISTS hr2_forward_schema_migrations (
+        migration_key TEXT PRIMARY KEY, applied_at TEXT NOT NULL
+    )""")
+    # Database.execute() commits every statement separately. Use one explicit
+    # connection so backfill rows and completion marker commit or roll back together.
+    with db.connection() as conn:
+        cur = conn.cursor()
+        cur.execute(db._sql("""SELECT migration_key FROM hr2_forward_schema_migrations
+            WHERE migration_key=?"""), ("reservation_backfill_v1",))
+        if cur.fetchone() is None:
+            cur.execute("""SELECT snapshot_key,bookmaker_key,candidate_ids_json
+                FROM hr2_forward_pool_snapshots WHERE eligible_yankees>0""")
+            old = cur.fetchall()
+            for snapshot_key, bookmaker_key, ids_json in old:
+                for candidate_id in json.loads(ids_json)[:4]:
+                    cur.execute(db._sql("""INSERT INTO hr2_forward_reservations
+                        (bookmaker_key,candidate_id,snapshot_key) VALUES(?,?,?)
+                        ON CONFLICT(bookmaker_key,candidate_id) DO NOTHING"""),
+                        (bookmaker_key, int(candidate_id), snapshot_key))
+            cur.execute(db._sql("""INSERT INTO hr2_forward_schema_migrations
+                (migration_key,applied_at) VALUES(?,?)
+                ON CONFLICT(migration_key) DO NOTHING"""),
+                ("reservation_backfill_v1", datetime.now(timezone.utc).isoformat()))
+    db.execute("""CREATE INDEX IF NOT EXISTS idx_hr2_forward_bookmaker\n        ON hr2_forward_pool_snapshots(bookmaker_key)""")
+    observed = datetime.now(timezone.utc)
+    now = observed.isoformat()
+    candidates = db.fetchall("""SELECT * FROM hit_rate_candidates
+        WHERE experiment_key='HR2' AND status='QUEUED'
+        ORDER BY first_seen_at,id LIMIT 200""")
+    from hit_rate_multiples_lab import _quotes
+    # Price each distinct event from the already-collected manual bookmaker quotes.
+    # No odds provider requests and no queue consumption.
+    by_book = {}
+    for c in candidates:
+        if not c.get("event_id"):
+            continue
+        start = c.get("commence_time")
+        try:
+            start_at = datetime.fromisoformat(str(start).replace("Z", "+00:00"))
+            if start_at.tzinfo is None or start_at <= observed:
+                continue
+        except (ValueError, TypeError):
+            continue
+        for book, quote in _quotes(db, c, observed, False).items():
+            group = by_book.setdefault(book, {})
+            event = str(c["event_id"])
+            candidate = {"candidate_id": int(c["id"]), "event_id": event,
+                         "market_key": c.get("market_key"), "selection": c.get("selection"),
+                         "point": c.get("point"), "odds": float(quote["price"]),
+                         "quote_captured_at": quote.get("captured_at"),
+                         "first_seen_at": c.get("first_seen_at"),
+                         "commence_time": c.get("commence_time")}
+            if event not in group or candidate["odds"] > group[event]["odds"]:
+                group[event] = candidate
+    recorded = 0
+    for book, event_map in by_book.items():
+        legs = sorted(event_map.values(), key=lambda x: (str(x["first_seen_at"]), x["event_id"]))[:24]
+        # A single, deterministic four-leg research cohort per bookmaker;
+        # suppress overlapping snapshots of already-reserved candidates.
+        reserved_rows = db.fetchall("""SELECT candidate_id FROM hr2_forward_reservations
+            WHERE bookmaker_key=?""", (book,))
+        reserved = {int(row["candidate_id"]) for row in reserved_rows}
+        eligible = [x for x in legs if x["candidate_id"] not in reserved]
+        if len(eligible) < 4:
+            continue
+        legs = eligible[:4]
+        # Persist each observed priced pool, not just cards that the production
+        # assembler chose. Same total 1u per hypothetical card at replay time.
+        ids = [x["candidate_id"] for x in legs]
+        # Reserve one non-overlapping four-event cohort per bookmaker.
+        signature = book + "|" + json.dumps(
+            [(x["candidate_id"], x["odds"], x["quote_captured_at"]) for x in legs])
+        key = hashlib.sha256(signature.encode()).hexdigest()
+        db.execute("""INSERT INTO hr2_forward_pool_snapshots(
+            snapshot_key,observed_at,experiment_key,bookmaker_key,
+            candidate_ids_json,legs_json,eligible_singles,eligible_doubles,eligible_yankees)
+            VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(snapshot_key) DO NOTHING""",
+            (key, now, "HR2", book, json.dumps(ids),
+             json.dumps(legs, default=str), len(legs),
+             comb(len(legs), 2) if len(legs) >= 2 else 0,
+             comb(len(legs), 4) if len(legs) >= 4 else 0))
+        for candidate_id in ids:
+            db.execute("""INSERT INTO hr2_forward_reservations
+                (bookmaker_key,candidate_id,snapshot_key) VALUES(?,?,?)
+                ON CONFLICT(bookmaker_key,candidate_id) DO NOTHING""",
+                (book,candidate_id,key))
+        recorded += 1
+    return {"priced_same_book_pools_attempted": recorded,
+            "note": "Non-overlapping four-leg cohorts per bookmaker; separate books can share events."}
+
+def settle(db):
+    """Settle only the first four distinct events of each frozen priced pool.
+
+    Historical source outcomes are read using the same authoritative resolver
+    as existing HR2 cards. Incomplete pools remain pending; no live writes.
+    """
+    from hit_rate_multiples_lab import _source_result
+    from hr2_matched_settlement import compare_four
+    db.execute("""CREATE TABLE IF NOT EXISTS hr2_forward_matched_results (
+        snapshot_key TEXT PRIMARY KEY, settled_at TEXT NOT NULL,
+        bookmaker_key TEXT NOT NULL, candidate_ids_json TEXT NOT NULL,
+        comparison_json TEXT NOT NULL
+    )""")
+    db.execute("""CREATE INDEX IF NOT EXISTS idx_hr2_forward_observed\n        ON hr2_forward_pool_snapshots(observed_at)""")
+    snapshots = db.fetchall("""SELECT s.snapshot_key,s.bookmaker_key,s.legs_json
+        FROM hr2_forward_pool_snapshots s
+        LEFT JOIN hr2_forward_matched_results r ON r.snapshot_key=s.snapshot_key
+        WHERE s.eligible_yankees>0 AND r.snapshot_key IS NULL
+        ORDER BY s.observed_at DESC LIMIT 250""")
+    completed = 0
+    for snapshot in snapshots:
+        key = snapshot["snapshot_key"]
+        if db.fetchone("SELECT snapshot_key FROM hr2_forward_matched_results WHERE snapshot_key=?", (key,)):
+            continue
+        legs = json.loads(snapshot["legs_json"])[:4]
+        if len(legs) != 4:
+            continue
+        settled_legs = []
+        for leg in legs:
+            candidate = db.fetchone("SELECT source_table,source_id FROM hit_rate_candidates WHERE id=?",
+                                   (int(leg["candidate_id"]),))
+            if not candidate:
+                break
+            result = _source_result(db, candidate)
+            if result is None:
+                break
+            settled_legs.append({**leg, "bookmaker_key": snapshot["bookmaker_key"],
+                                 "result": result})
+        if len(settled_legs) != 4:
+            continue
+        comparison = compare_four(settled_legs)
+        db.execute("""INSERT INTO hr2_forward_matched_results
+            (snapshot_key,settled_at,bookmaker_key,candidate_ids_json,comparison_json)
+            VALUES(?,?,?,?,?) ON CONFLICT(snapshot_key) DO NOTHING""",
+            (key, datetime.now(timezone.utc).isoformat(), snapshot["bookmaker_key"],
+             json.dumps([x["candidate_id"] for x in settled_legs]),
+             json.dumps(comparison)))
+        completed += 1
+    return {"new_matched_settlements": completed,
+            "caution": "Overlapping snapshots are correlated; do not sum their P&L as independent bets."}

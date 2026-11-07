@@ -1,0 +1,22 @@
+name: HR2 research regression
+on:
+  push:
+    branches:
+      - research/hr2-forward-observer-20261107
+  pull_request:
+    paths:
+      - 'hr2_forward_observer.py'
+      - 'hr2_matched_settlement.py'
+      - 'tests/test_hr2_forward_observer.py'
+      - 'tests/test_hr2_matched_settlement.py'
+jobs:
+  isolated-tests:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m unittest discover -s tests -p 'test_hr2_*.py' -v
