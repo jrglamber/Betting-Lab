@@ -25,6 +25,8 @@ class FakeDB:
     def execute(self, sql, params=()):
         self.writes.append((sql, params))
     def fetchall(self, sql, params=()):
+        if "hr2_forward_pool_snapshots" in sql:
+            return []
         assert "hit_rate_candidates" in sql
         return self.candidates
 
