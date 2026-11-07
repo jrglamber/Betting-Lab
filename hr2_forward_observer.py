@@ -7,7 +7,6 @@ import hashlib
 import json
 from datetime import datetime, timezone
 from math import comb
-from itertools import combinations
 
 def capture(db):
     db.execute("""CREATE TABLE IF NOT EXISTS hr2_forward_pool_snapshots (
@@ -50,10 +49,21 @@ def capture(db):
     recorded = 0
     for book, event_map in by_book.items():
         legs = sorted(event_map.values(), key=lambda x: (str(x["first_seen_at"]), x["event_id"]))[:24]
+        # A single, deterministic four-leg research cohort per bookmaker;
+        # suppress overlapping snapshots of already-reserved candidates.
+        previous = db.fetchall("""SELECT candidate_ids_json FROM hr2_forward_pool_snapshots
+            WHERE bookmaker_key=? AND eligible_yankees>0""", (book,))
+        reserved = set()
+        for p in previous:
+            reserved.update(json.loads(p["candidate_ids_json"])[:4])
+        eligible = [x for x in legs if x["candidate_id"] not in reserved]
+        if len(eligible) < 4:
+            continue
+        legs = eligible[:4]
         # Persist each observed priced pool, not just cards that the production
         # assembler chose. Same total 1u per hypothetical card at replay time.
         ids = [x["candidate_id"] for x in legs]
-        # Identical priced pools are captured once, regardless of polling frequency.
+        # Reserve one non-overlapping four-event cohort per bookmaker.
         signature = book + "|" + json.dumps(
             [(x["candidate_id"], x["odds"], x["quote_captured_at"]) for x in legs])
         key = hashlib.sha256(signature.encode()).hexdigest()
@@ -67,7 +77,7 @@ def capture(db):
              comb(len(legs), 4) if len(legs) >= 4 else 0))
         recorded += 1
     return {"priced_same_book_pools": recorded,
-            "note": "Forward quote capture only; settlement replay pending."}
+            "note": "Non-overlapping four-leg cohorts per bookmaker; separate books can share events."}
 
 def settle(db):
     """Settle only the first four distinct events of each frozen priced pool.
