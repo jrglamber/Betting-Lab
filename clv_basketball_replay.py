@@ -84,14 +84,26 @@ def replay(rows, decision="ACCEPT", sizes=(1, 2, 3, 4), max_wait_hours=24):
                 returned = 1 + (returned - 1) * 0.95 if returned > 1 else returned
                 cards.append(dict(bookmaker=book, ready_at=ready.isoformat(),
                                   event_ids=[x["event_id"] for x in group],
+                                  status="SETTLED",
                                   return_units=round(returned, 6),
                                   pnl_units=round(returned - 1, 6)))
                 del remaining[:size]
         settled_cards = [c for c in cards if c["pnl_units"] is not None]
         pnl = sum(c["pnl_units"] for c in settled_cards)
+        by_week = defaultdict(list)
+        by_exchange = defaultdict(list)
+        for card in settled_cards:
+            week = dt(card["ready_at"]).date().isocalendar()
+            by_week[f"{week.year}-W{week.week:02d}"].append(card["pnl_units"])
+            by_exchange[card["bookmaker"]].append(card["pnl_units"])
+        def breakdown(groups):
+            return {name: {"bets": len(values), "pnl_units": round(sum(values), 4),
+                           "roi_pct": round(100 * sum(values) / len(values), 2)}
+                    for name, values in sorted(groups.items()}
         results[{1:"singles", 2:"doubles", 3:"trebles", 4:"yankees"}.get(size, str(size))] = {
             "cards": len(cards), "settled_cards": len(settled_cards), "pnl_units": round(pnl, 4),
             "roi_pct": round(100 * pnl / len(settled_cards), 2) if settled_cards else None,
+            "by_week": breakdown(by_week), "by_exchange": breakdown(by_exchange),
             "cards_detail": cards}
     return {"decision": decision, "eligible_distinct_quotes": len(unique),
             "assumption": "Recorded exchange odds with assumed 5% commission on net positive card returns; not verified executable prices",
