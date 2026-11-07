@@ -99,7 +99,7 @@ def replay(rows, decision="ACCEPT", sizes=(1, 2, 3, 4), max_wait_hours=24):
         def breakdown(groups):
             return {name: {"bets": len(values), "pnl_units": round(sum(values), 4),
                            "roi_pct": round(100 * sum(values) / len(values), 2)}
-                    for name, values in sorted(groups.items()}
+                    for name, values in sorted(groups.items())}
         results[{1:"singles", 2:"doubles", 3:"trebles", 4:"yankees"}.get(size, str(size))] = {
             "cards": len(cards), "settled_cards": len(settled_cards), "pnl_units": round(pnl, 4),
             "roi_pct": round(100 * pnl / len(settled_cards), 2) if settled_cards else None,
