@@ -78,7 +78,7 @@ def hr2(z):
     output = {}
     for fmt in ("DOUBLE", "YANKEE", "TRIXIE", "HEINZ"):
         selected = [c for c in cards if c.get("system_type") == fmt and c.get("status") == "SETTLED"]
-        verified = [c for c in selected if c.get("assembly_mode") == "SAME_BOOK_VERIFIED"]
+        verified = [c for c in selected if c.get("assembly_mode") in ("SAME_BOOK_VERIFIED", "SAME_BOOK")]
         def aggregate(items):
             actual = [number(c.get("pnl_units")) for c in items]
             synthetic = [card_profit(by_card[c["id"]], fmt) for c in items]
