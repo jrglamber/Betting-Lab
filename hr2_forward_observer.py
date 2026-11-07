@@ -6,6 +6,7 @@ tables only; never consumes queue items or modifies Telegram delivery.
 import hashlib
 import json
 from datetime import datetime, timezone
+from math import comb
 
 def capture(db):
     db.execute("""CREATE TABLE IF NOT EXISTS hr2_forward_pool_snapshots (
@@ -20,14 +21,14 @@ def capture(db):
         WHERE experiment_key='HR2' AND status='QUEUED'
         ORDER BY first_seen_at,id""")
     from hit_rate_multiples_lab import _quotes
-    from itertools import combinations
     # Price each distinct event from the already-collected manual bookmaker quotes.
     # No odds provider requests and no queue consumption.
     by_book = {}
+    observed = datetime.now(timezone.utc)
     for c in candidates:
         if not c.get("event_id"):
             continue
-        for book, quote in _quotes(db, c, datetime.now(timezone.utc), False).items():
+        for book, quote in _quotes(db, c, observed, False).items():
             group = by_book.setdefault(book, {})
             event = str(c["event_id"])
             candidate = {"candidate_id": int(c["id"]), "event_id": event,
@@ -56,5 +57,5 @@ def capture(db):
              comb(len(legs), 2) if len(legs) >= 2 else 0,
              comb(len(legs), 4) if len(legs) >= 4 else 0))
         recorded += 1
-    return {"snapshot_groups_seen": recorded,
-            "note": "Source-only queue snapshots. Bookmaker-feasible replay remains pending priced quote capture."}
+    return {"priced_same_book_pools": recorded,
+            "note": "Forward quote capture only; settlement replay pending."}
