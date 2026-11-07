@@ -54,7 +54,7 @@ def capture(db):
         # suppress overlapping snapshots of already-reserved candidates.
         previous = db.fetchall("""SELECT candidate_ids_json FROM hr2_forward_pool_snapshots
             WHERE bookmaker_key=? AND eligible_yankees>0
-            ORDER BY observed_at DESC LIMIT 1000""", (book,))
+            ORDER BY observed_at DESC""", (book,))
         reserved = set()
         for p in previous:
             reserved.update(json.loads(p["candidate_ids_json"])[:4])
