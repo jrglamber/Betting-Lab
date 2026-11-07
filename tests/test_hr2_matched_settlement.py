@@ -11,7 +11,7 @@ class MatchedSettlementTests(unittest.TestCase):
         x = compare_four(self.legs(["WIN"] * 4))
         self.assertAlmostEqual(x["SINGLES"]["return_units"], 2)
         self.assertAlmostEqual(x["DOUBLES"]["return_units"], 4)
-        self.assertAlmostEqual(x["YANKEE"]["return_units"], 52 / 11)
+        self.assertAlmostEqual(x["YANKEE"]["return_units"], 72 / 11)
         self.assertEqual(x["YANKEE"]["bets"], 11)
 
     def test_all_losses(self):
