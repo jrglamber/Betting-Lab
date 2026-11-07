@@ -16,6 +16,7 @@ def capture(db):
         eligible_singles INTEGER NOT NULL, eligible_doubles INTEGER NOT NULL,
         eligible_yankees INTEGER NOT NULL
     )""")
+    db.execute("""CREATE TABLE IF NOT EXISTS hr2_forward_reservations (\n        bookmaker_key TEXT NOT NULL, candidate_id INTEGER NOT NULL,\n        snapshot_key TEXT NOT NULL,\n        PRIMARY KEY(bookmaker_key,candidate_id)\n    )""")
     db.execute("""CREATE INDEX IF NOT EXISTS idx_hr2_forward_bookmaker\n        ON hr2_forward_pool_snapshots(bookmaker_key)""")
     observed = datetime.now(timezone.utc)
     now = observed.isoformat()
@@ -52,12 +53,9 @@ def capture(db):
         legs = sorted(event_map.values(), key=lambda x: (str(x["first_seen_at"]), x["event_id"]))[:24]
         # A single, deterministic four-leg research cohort per bookmaker;
         # suppress overlapping snapshots of already-reserved candidates.
-        previous = db.fetchall("""SELECT candidate_ids_json FROM hr2_forward_pool_snapshots
-            WHERE bookmaker_key=? AND eligible_yankees>0
-            ORDER BY observed_at DESC""", (book,))
-        reserved = set()
-        for p in previous:
-            reserved.update(json.loads(p["candidate_ids_json"])[:4])
+        reserved_rows = db.fetchall("""SELECT candidate_id FROM hr2_forward_reservations
+            WHERE bookmaker_key=?""", (book,))
+        reserved = {int(row["candidate_id"]) for row in reserved_rows}
         eligible = [x for x in legs if x["candidate_id"] not in reserved]
         if len(eligible) < 4:
             continue
@@ -77,6 +75,11 @@ def capture(db):
              json.dumps(legs, default=str), len(legs),
              comb(len(legs), 2) if len(legs) >= 2 else 0,
              comb(len(legs), 4) if len(legs) >= 4 else 0))
+        for candidate_id in ids:
+            db.execute("""INSERT INTO hr2_forward_reservations
+                (bookmaker_key,candidate_id,snapshot_key) VALUES(?,?,?)
+                ON CONFLICT(bookmaker_key,candidate_id) DO NOTHING""",
+                (book,candidate_id,key))
         recorded += 1
     return {"priced_same_book_pools_attempted": recorded,
             "note": "Non-overlapping four-leg cohorts per bookmaker; separate books can share events."}
