@@ -7,6 +7,7 @@ import hashlib
 import json
 from datetime import datetime, timezone
 from math import comb
+from itertools import combinations
 
 def capture(db):
     db.execute("""CREATE TABLE IF NOT EXISTS hr2_forward_pool_snapshots (
@@ -67,3 +68,51 @@ def capture(db):
         recorded += 1
     return {"priced_same_book_pools": recorded,
             "note": "Forward quote capture only; settlement replay pending."}
+
+def settle(db):
+    """Settle only the first four distinct events of each frozen priced pool.
+
+    Historical source outcomes are read using the same authoritative resolver
+    as existing HR2 cards. Incomplete pools remain pending; no live writes.
+    """
+    from hit_rate_multiples_lab import _source_result
+    from hr2_matched_settlement import compare_four
+    db.execute("""CREATE TABLE IF NOT EXISTS hr2_forward_matched_results (
+        snapshot_key TEXT PRIMARY KEY, settled_at TEXT NOT NULL,
+        bookmaker_key TEXT NOT NULL, candidate_ids_json TEXT NOT NULL,
+        comparison_json TEXT NOT NULL
+    )""")
+    snapshots = db.fetchall("""SELECT snapshot_key,bookmaker_key,legs_json
+        FROM hr2_forward_pool_snapshots WHERE eligible_yankees>0
+        ORDER BY observed_at LIMIT 250""")
+    completed = 0
+    for snapshot in snapshots:
+        key = snapshot["snapshot_key"]
+        if db.fetchone("SELECT snapshot_key FROM hr2_forward_matched_results WHERE snapshot_key=?", (key,)):
+            continue
+        legs = json.loads(snapshot["legs_json"])[:4]
+        if len(legs) != 4:
+            continue
+        settled_legs = []
+        for leg in legs:
+            candidate = db.fetchone("SELECT source_table,source_id FROM hit_rate_candidates WHERE id=?",
+                                   (int(leg["candidate_id"]),))
+            if not candidate:
+                break
+            result = _source_result(db, candidate)
+            if result is None:
+                break
+            settled_legs.append({**leg, "bookmaker_key": snapshot["bookmaker_key"],
+                                 "result": result})
+        if len(settled_legs) != 4:
+            continue
+        comparison = compare_four(settled_legs)
+        db.execute("""INSERT INTO hr2_forward_matched_results
+            (snapshot_key,settled_at,bookmaker_key,candidate_ids_json,comparison_json)
+            VALUES(?,?,?,?,?) ON CONFLICT(snapshot_key) DO NOTHING""",
+            (key, datetime.now(timezone.utc).isoformat(), snapshot["bookmaker_key"],
+             json.dumps([x["candidate_id"] for x in settled_legs]),
+             json.dumps(comparison)))
+        completed += 1
+    return {"new_matched_settlements": completed,
+            "caution": "Overlapping snapshots are correlated; do not sum their P&L as independent bets."}
