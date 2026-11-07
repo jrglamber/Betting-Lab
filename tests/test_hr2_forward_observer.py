@@ -24,6 +24,10 @@ class FakeDB:
         ]
     def execute(self, sql, params=()):
         self.writes.append((sql, params))
+    def fetchone(self, sql, params=()):
+        if "hr2_forward_schema_migrations" in sql:
+            return {"migration_key": "reservation_backfill_v1"}
+        return None
     def fetchall(self, sql, params=()):
         if "hr2_forward_reservations" in sql:
             return []
