@@ -2,10 +2,11 @@ from __future__ import annotations
 
 """Prioritise HR quote refreshes and protect the late-day quote reserve.
 
-The normal HR quote allowance remains 2,500 credits/day. The hard ceiling remains
-3,000 credits/day, but the final 500 credits are now a protected reserve: they
-cannot be spent on ordinary backlog and are exposed only to events belonging to
-a stream that was recently within one same-book leg of a complete card.
+Monday–Thursday (UTC): normal HR quote allowance 2,500 credits/day with a
+protected final 500-credit reserve, up to a hard ceiling of 3,000.
+Friday–Sunday (UTC): 5,000 credits/day for HR quote polling, available to
+ordinary due targets without removing existing pacing/backoff safeguards.
+The weekend limit is an upper bound, not a daily spend target.
 
 The reserve uses quotes already stored in ``live_yankee_quotes``. That table is
 shared with Live Yankee, so overlapping quotes collected by either lane continue
@@ -27,16 +28,19 @@ import hit_rate_daily_boost_patch as hr_daily_boost
 import hit_rate_multiples_lab as hr
 import live_yankee_feed as ly
 import multiples_budget_balance_patch as budget_balance
+import multiples_credit_efficiency_patch as efficiency
 import multiples_today_headroom_patch as legacy_headroom
 import provider_cost_control_patch as provider_cost
 
-VERSION = "HR_JIT_QUOTE_PRIORITY_2026_11_02_V3_PROTECTED_RESERVE"
+VERSION = "HR_JIT_QUOTE_PRIORITY_2026_11_07_V4_WEEKEND_5000"
 NEAR_CARD_PRIORITY_MINUTES = 180.0
 URGENT_KICKOFF_MINUTES = 90.0
 MID_KICKOFF_MINUTES = 240.0
 
 BASE_DAILY_CREDITS = 2_500
 BURST_DAILY_CREDITS = 3_000
+WEEKEND_DAILY_CREDITS = 5_000
+WEEKEND_DAYS_UTC = frozenset((4, 5, 6))  # Friday, Saturday, Sunday
 PROTECTED_RESERVE_CREDITS = BURST_DAILY_CREDITS - BASE_DAILY_CREDITS
 RESERVE_RECENT_QUOTE_MINUTES = 60.0
 RESERVE_DISCOVERY_EVENTS_PER_STREAM = 2
@@ -133,9 +137,38 @@ def _burst_allowed(db, now: datetime, reserve_target_count: int) -> tuple[bool, 
     return projection + PROTECTED_RESERVE_CREDITS <= PROVIDER_MONTHLY_ALLOWANCE, projection
 
 
-def _burst_hard_cap(_now=None) -> int:
-    """Ceiling only; protected target gating decides whether the final 500 is usable."""
-    return BURST_DAILY_CREDITS
+def _weekend_utc(now=None) -> bool:
+    """The Odds API spending ledger resets at 00:00 UTC."""
+    return _utc(now).weekday() in WEEKEND_DAYS_UTC
+
+
+def _effective_base_cap(now=None) -> int:
+    return WEEKEND_DAILY_CREDITS if _weekend_utc(now) else BASE_DAILY_CREDITS
+
+
+def _burst_hard_cap(now=None) -> int:
+    """Collector hard cap: 5,000 Fri–Sun UTC; 3,000 Mon–Thu UTC."""
+    return WEEKEND_DAILY_CREDITS if _weekend_utc(now) else BURST_DAILY_CREDITS
+
+
+def _sync_runtime_caps(now=None) -> int:
+    """Synchronise historic wrappers before due targets and collector checks.
+
+    Old target wrappers have their own caps and may otherwise suppress weekend
+    events before the final HR priority layer ever sees them.
+    """
+    hard = _burst_hard_cap(now)
+    hr.DAILY_REFRESH_CREDIT_BUDGET = hard
+    credit_policy.HIT_RATE_DAILY_CREDITS = hard
+    efficiency.HIT_RATE_DAILY_CREDITS = hard
+    hr_daily_boost.NORMAL_DAILY_CAP = hard
+    hr_daily_boost.BOOST_DAILY_CAP = hard
+    hr_daily_boost._effective_cap = _burst_hard_cap
+    legacy_headroom.NORMAL_HIT_RATE_CAP = hard
+    legacy_headroom.BOOST_HIT_RATE_CAP = hard
+    budget_balance.HIT_RATE_DAILY_CREDITS = hard
+    provider_cost.HR_DAILY_CREDIT_CEILING = hard
+    return hard
 
 
 def _valid_quotes_for_window(db, candidate: Mapping[str, Any], now: datetime, window_minutes: float):
@@ -347,28 +380,24 @@ def install() -> Dict[str, Any]:
 
     _ORIGINAL_TARGETS = hr._targets
 
-    # Open the retired wrappers' hard ceilings to 3,000 so they cannot suppress
-    # the due list before this patch applies the protected reserve gate. Their
-    # normal soft pacing remains 2,500.
-    hr.DAILY_REFRESH_CREDIT_BUDGET = BURST_DAILY_CREDITS
-    hr_daily_boost.NORMAL_DAILY_CAP = BASE_DAILY_CREDITS
-    hr_daily_boost.BOOST_DAILY_CAP = BURST_DAILY_CREDITS
-    hr_daily_boost._effective_cap = _burst_hard_cap
-    legacy_headroom.NORMAL_HIT_RATE_CAP = BURST_DAILY_CREDITS
-    legacy_headroom.BOOST_HIT_RATE_CAP = BURST_DAILY_CREDITS
-    budget_balance.HIT_RATE_DAILY_CREDITS = BURST_DAILY_CREDITS
-    provider_cost.HR_DAILY_CREDIT_CEILING = BURST_DAILY_CREDITS
+    # Match the legacy wrapper caps to today's UTC spending window.
+    # This refreshes again on every target pass when the day changes.
+    _sync_runtime_caps(_utc())
 
     def prioritised_targets(db, now=None):
         stamp = _utc(now)
+        _sync_runtime_caps(stamp)
         targets = list(_ORIGINAL_TARGETS(db, stamp))
 
         try:
             spent = int(hr._credits_today(db, stamp))
         except Exception:
-            spent = BASE_DAILY_CREDITS
+            spent = _effective_base_cap(stamp)
 
-        if spent >= BASE_DAILY_CREDITS:
+        if spent >= _burst_hard_cap(stamp):
+            return []
+
+        if spent >= _effective_base_cap(stamp):
             reserve_plan = _protected_reserve_plan(db, stamp)
             targets = [
                 target for target in targets
@@ -412,7 +441,12 @@ def install() -> Dict[str, Any]:
         "max_refresh_events_per_cycle": int(hr.MAX_REFRESH_EVENTS_PER_CYCLE),
         "base_daily_credit_cap": BASE_DAILY_CREDITS,
         "busy_day_credit_ceiling": BURST_DAILY_CREDITS,
+        "weekend_utc_days": ["Friday", "Saturday", "Sunday"],
+        "weekend_daily_credit_cap": WEEKEND_DAILY_CREDITS,
+        "effective_today_base_cap": _effective_base_cap(),
+        "effective_today_hard_cap": _burst_hard_cap(),
         "protected_reserve_credits": PROTECTED_RESERVE_CREDITS,
+        "weekend_protected_reserve_credits": 0,
         "reserve_recent_quote_minutes": RESERVE_RECENT_QUOTE_MINUTES,
         "reserve_discovery_events_per_stream": RESERVE_DISCOVERY_EVENTS_PER_STREAM,
         "provider_monthly_allowance": PROVIDER_MONTHLY_ALLOWANCE,
