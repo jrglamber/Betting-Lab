@@ -7,6 +7,8 @@ import hashlib
 import json
 from datetime import datetime, timezone
 from math import comb
+from itertools import combinations
+from math import prod
 
 def capture(db):
     db.execute("""CREATE TABLE IF NOT EXISTS hr2_forward_pool_snapshots (
@@ -16,7 +18,8 @@ def capture(db):
         eligible_singles INTEGER NOT NULL, eligible_doubles INTEGER NOT NULL,
         eligible_yankees INTEGER NOT NULL
     )""")
-    now = datetime.now(timezone.utc).isoformat()
+    observed = datetime.now(timezone.utc)
+    now = observed.isoformat()
     candidates = db.fetchall("""SELECT * FROM hit_rate_candidates
         WHERE experiment_key='HR2' AND status='QUEUED'
         ORDER BY first_seen_at,id""")
@@ -24,9 +27,15 @@ def capture(db):
     # Price each distinct event from the already-collected manual bookmaker quotes.
     # No odds provider requests and no queue consumption.
     by_book = {}
-    observed = datetime.now(timezone.utc)
     for c in candidates:
         if not c.get("event_id"):
+            continue
+        start = c.get("commence_time")
+        try:
+            start_at = datetime.fromisoformat(str(start).replace("Z", "+00:00"))
+            if start_at.tzinfo is None or start_at <= observed:
+                continue
+        except (ValueError, TypeError):
             continue
         for book, quote in _quotes(db, c, observed, False).items():
             group = by_book.setdefault(book, {})
@@ -41,11 +50,12 @@ def capture(db):
                 group[event] = candidate
     recorded = 0
     for book, event_map in by_book.items():
-        legs = sorted(event_map.values(), key=lambda x: (str(x["first_seen_at"]), x["event_id"]))
+        legs = sorted(event_map.values(), key=lambda x: (str(x["first_seen_at"]), x["event_id"]))[:24]
         # Persist each observed priced pool, not just cards that the production
         # assembler chose. Same total 1u per hypothetical card at replay time.
         ids = [x["candidate_id"] for x in legs]
-        signature = book + "|" + json.dumps(
+        # Stable per-minute observations: avoid 60 identical snapshots per hour.
+        signature = now[:16] + "|" + book + "|" + json.dumps(
             [(x["candidate_id"], x["odds"], x["quote_captured_at"]) for x in legs])
         key = hashlib.sha256(signature.encode()).hexdigest()
         db.execute("""INSERT INTO hr2_forward_pool_snapshots(
