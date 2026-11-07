@@ -69,9 +69,7 @@ def replay(rows, decision="ACCEPT", sizes=(1, 2, 3, 4), max_wait_hours=24):
                 wins = [float(x["pnl_units"]) > 0 for x in group] if settled else []
                 odds = [float(x["entry_odds"]) for x in group]
                 if not settled:
-                    # Match the source ledger: 5% deduction on positive net winnings.
-                returned = 1 + (returned - 1) * 0.95 if returned > 1 else returned
-                cards.append(dict(bookmaker=book, ready_at=ready.isoformat(),
+                    cards.append(dict(bookmaker=book, ready_at=ready.isoformat(),
                                       event_ids=[x["event_id"] for x in group], status="UNSETTLED",
                                       return_units=None, pnl_units=None))
                     del remaining[:size]
@@ -82,6 +80,8 @@ def replay(rows, decision="ACCEPT", sizes=(1, 2, 3, 4), max_wait_hours=24):
                     returned = sum(parts) / 11
                 else:
                     returned = prod(odds) if all(wins) else 0
+                # Assumed exchange commission: charge only positive net winnings.
+                returned = 1 + (returned - 1) * 0.95 if returned > 1 else returned
                 cards.append(dict(bookmaker=book, ready_at=ready.isoformat(),
                                   event_ids=[x["event_id"] for x in group],
                                   return_units=round(returned, 6),
