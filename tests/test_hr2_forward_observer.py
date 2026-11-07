@@ -3,6 +3,7 @@ import unittest
 from unittest.mock import patch
 import sys
 import types
+from datetime import datetime, timedelta, timezone
 
 import hr2_forward_observer as observer
 
@@ -10,15 +11,16 @@ import hr2_forward_observer as observer
 class FakeDB:
     def __init__(self):
         self.writes = []
+        future = (datetime.now(timezone.utc) + timedelta(days=2)).isoformat()
         self.candidates = [
             dict(id=1, event_id="a", market_key="h2h", selection="A",
-                 first_seen_at="2026-11-07T12:00:00Z", commence_time="2026-11-07T18:00:00Z"),
+                 first_seen_at="2026-11-07T12:00:00Z", commence_time=future),
             dict(id=2, event_id="b", market_key="h2h", selection="B",
-                 first_seen_at="2026-11-07T12:01:00Z", commence_time="2026-11-07T19:00:00Z"),
+                 first_seen_at="2026-11-07T12:01:00Z", commence_time=future),
             dict(id=3, event_id="c", market_key="h2h", selection="C",
-                 first_seen_at="2026-11-07T12:02:00Z", commence_time="2026-11-07T20:00:00Z"),
+                 first_seen_at="2026-11-07T12:02:00Z", commence_time=future),
             dict(id=4, event_id="d", market_key="h2h", selection="D",
-                 first_seen_at="2026-11-07T12:03:00Z", commence_time="2026-11-07T21:00:00Z"),
+                 first_seen_at="2026-11-07T12:03:00Z", commence_time=future),
         ]
     def execute(self, sql, params=()):
         self.writes.append((sql, params))
