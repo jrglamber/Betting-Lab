@@ -1,6 +1,6 @@
 """Forward-only, read-only HR2 cohort snapshots (no provider calls or alerts).
 
-Designed to run after existing HR2 maintenance. Writes to separate research
+Designed to run within existing HR2 maintenance. Writes to separate research
 tables only; never consumes queue items or modifies Telegram delivery.
 """
 import hashlib
@@ -20,7 +20,7 @@ def capture(db):
     now = observed.isoformat()
     candidates = db.fetchall("""SELECT * FROM hit_rate_candidates
         WHERE experiment_key='HR2' AND status='QUEUED'
-        ORDER BY first_seen_at,id""")
+        ORDER BY first_seen_at,id LIMIT 200""")
     from hit_rate_multiples_lab import _quotes
     # Price each distinct event from the already-collected manual bookmaker quotes.
     # No odds provider requests and no queue consumption.
