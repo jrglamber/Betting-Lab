@@ -82,9 +82,11 @@ def settle(db):
         bookmaker_key TEXT NOT NULL, candidate_ids_json TEXT NOT NULL,
         comparison_json TEXT NOT NULL
     )""")
-    snapshots = db.fetchall("""SELECT snapshot_key,bookmaker_key,legs_json
-        FROM hr2_forward_pool_snapshots WHERE eligible_yankees>0
-        ORDER BY observed_at LIMIT 250""")
+    snapshots = db.fetchall("""SELECT s.snapshot_key,s.bookmaker_key,s.legs_json
+        FROM hr2_forward_pool_snapshots s
+        LEFT JOIN hr2_forward_matched_results r ON r.snapshot_key=s.snapshot_key
+        WHERE s.eligible_yankees>0 AND r.snapshot_key IS NULL
+        ORDER BY s.observed_at DESC LIMIT 250""")
     completed = 0
     for snapshot in snapshots:
         key = snapshot["snapshot_key"]
