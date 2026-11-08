@@ -19,7 +19,7 @@ def dt(value):
 
 
 def is_basketball(row):
-    return str(row.get("sport_key") or "").upper() == "BASKETBALL"
+    return str(row.get("sport_key") or "").upper().startswith("BASKETBALL")
 
 
 def replay(rows, decision="ACCEPT", sizes=(1, 2, 3, 4), max_wait_hours=24):
