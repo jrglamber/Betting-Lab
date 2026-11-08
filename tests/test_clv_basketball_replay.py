@@ -46,3 +46,8 @@ def test_same_event_cannot_be_double_counted():
     rows = [bet("a", "2026-11-02T09:00:00Z", "2026-11-02T20:00:00Z", 1),
             bet("a", "2026-11-02T10:00:00Z", "2026-11-02T20:00:00Z", 1)]
     assert replay(rows, sizes=(2,))["results"]["doubles"]["cards"] == 0
+
+def test_league_specific_basketball_sport_keys_are_included():
+    rows = [bet("nba1", "2026-11-02T09:00:00Z", "2026-11-02T20:00:00Z", 1)]
+    rows[0]["sport_key"] = "basketball_nba"
+    assert replay(rows, sizes=(1,))["results"]["singles"]["settled_cards"] == 1
