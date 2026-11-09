@@ -483,6 +483,18 @@ def run_maintenance(db, now=None):
     st = _state(db)
     formed = _form(db, now, st)
     settled = _settle(db)
+    try:
+        from hr2_relaxed_double_research import settle as settle_relaxed_doubles
+        relaxed_settlement = settle_relaxed_doubles(db, now)
+        db.record_collector_run(
+            "HR2_RELAXED_DOUBLE_SETTLEMENT", True,
+            detail=json.dumps(relaxed_settlement, sort_keys=True),
+        )
+    except Exception as exc:
+        db.record_collector_run(
+            "HR2_RELAXED_DOUBLE_SETTLEMENT", False,
+            detail=sanitize_sensitive_text(exc),
+        )
     payload = {"version": VERSION, **formed, **settled}
     db.record_collector_run("HR_PORTFOLIO_SHADOW_MAINT", True, detail=json.dumps(payload))
     return payload
