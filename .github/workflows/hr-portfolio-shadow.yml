@@ -3,6 +3,7 @@ name: HR portfolio shadow checks
 on:
   pull_request:
     paths:
+      - "hit_rate_trixie_patch.py"
       - "hr_portfolio_shadow.py"
       - "hr2_relaxed_double_research.py"
       - "test_hr2_relaxed_double_research.py"
