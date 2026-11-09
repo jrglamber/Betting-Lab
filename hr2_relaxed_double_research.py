@@ -106,7 +106,7 @@ def observe(db, candidates, now, max_candidates=30):
         observed_at TEXT NOT NULL, variant TEXT NOT NULL,
         candidate_ids_json TEXT NOT NULL, candidate_sources_json TEXT NOT NULL, bookmaker_key TEXT NOT NULL,
         combined_odds REAL NOT NULL, break_even_hit_rate REAL NOT NULL,
-        quote_spread_minutes REAL NOT NULL, status TEXT NOT NULL
+        quote_spread_minutes REAL NOT NULL, status TEXT NOT NULL,\n        settled_at TEXT, pnl_units REAL, leg_results_json TEXT
     )""")
     # Restrict to the prospective, actionable HR2 pool, without modifying it.
     pool = list(candidates)[:max_candidates]
@@ -146,3 +146,40 @@ def observe(db, candidates, now, max_candidates=30):
             ))
             counts[variant+"_new"] += 1
     return counts
+
+def settle(db, now=None, max_rows=100):
+    """Settle prospective doubles from authoritative source results only."""
+    import json
+    import hit_rate_multiples_lab as hr
+    now = _stamp(now or datetime.now(timezone.utc))
+    rows = db.fetchall(
+        "SELECT * FROM hr2_relaxed_double_observations "
+        "WHERE status='AWAITING_SETTLEMENT' ORDER BY id LIMIT ?",
+        (max_rows,),
+    )
+    settled = 0
+    for row in rows:
+        try:
+            sources = json.loads(row["candidate_sources_json"])
+            if len(sources) != 2:
+                continue
+            results = [hr._source_result(db, source) for source in sources]
+            normalized = [hr._result(x) for x in results]
+            if any(x is None for x in normalized):
+                continue
+            if any(x in ("VOID", "PUSH") for x in normalized):
+                # A void leg changes effective double odds; exclude from
+                # comparable double ROI rather than silently treat as a loss.
+                status, pnl = "VOID", None
+            else:
+                status = "SETTLED"
+                pnl = float(row["combined_odds"])-1 if all(x == "WIN" for x in normalized) else -1.0
+            db.execute(
+                "UPDATE hr2_relaxed_double_observations SET "
+                "status=?, settled_at=?, pnl_units=?, leg_results_json=? WHERE id=?",
+                (status, now.isoformat(), pnl, json.dumps(normalized), row["id"]),
+            )
+            settled += 1
+        except (KeyError, TypeError, ValueError):
+            continue
+    return {"settled_or_voided": settled}
