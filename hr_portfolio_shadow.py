@@ -232,6 +232,23 @@ def _form(db, now, state):
                if integrity.fixture_key(c) not in conflicting_fixtures]
     # Cache the same queue and bookmaker quotes for the two read-only UIs.
     # This must never alter formation or trigger additional provider polling.
+    # Research-only relaxed quote comparator. No extra provider calls or alerts.
+    try:
+        from hr2_relaxed_double_research import observe as observe_relaxed_doubles
+        observer_candidates = [
+            {**candidate, "fixture_key": str(integrity.fixture_key(candidate))}
+            for candidate in unified
+        ]
+        relaxed_result = observe_relaxed_doubles(db, observer_candidates, now)
+        db.record_collector_run(
+            "HR2_RELAXED_DOUBLE_RESEARCH", True,
+            detail=json.dumps(relaxed_result, sort_keys=True),
+        )
+    except Exception as exc:
+        db.record_collector_run(
+            "HR2_RELAXED_DOUBLE_RESEARCH", False,
+            detail=sanitize_sensitive_text(exc),
+        )
     by_book = _book_options(db, unified, now, start)
     try:
         from hr_portfolio_queues import capture
