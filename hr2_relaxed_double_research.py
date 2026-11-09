@@ -135,14 +135,25 @@ def observe(db, candidates, now, max_candidates=30):
             )
             if existing:
                 continue
+            source_by_id = {str(x.get("id")): x for x in pool}
+            sources = []
+            for candidate_id in match["candidate_ids"]:
+                source = source_by_id.get(str(candidate_id))
+                if not source or not source.get("source_table") or source.get("source_id") is None:
+                    break
+                sources.append({"source_table": source["source_table"],
+                                "source_id": source["source_id"]})
+            if len(sources) != 2:
+                continue
             db.execute("""INSERT INTO hr2_relaxed_double_observations (
                 observation_key, observed_at, variant, candidate_ids_json,
-                bookmaker_key, combined_odds, break_even_hit_rate,
-                quote_spread_minutes, status
+                candidate_sources_json, bookmaker_key, combined_odds,
+                break_even_hit_rate, quote_spread_minutes, status
             ) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(observation_key) DO NOTHING""", (
                 key, now.isoformat(), variant, json.dumps(match["candidate_ids"]),
-                match["bookmaker"], match["decimal_odds"], match["break_even_hit_rate"],
-                match["quote_spread_minutes"], "AWAITING_SETTLEMENT",
+                json.dumps(sources), match["bookmaker"], match["decimal_odds"],
+                match["break_even_hit_rate"], match["quote_spread_minutes"],
+                "AWAITING_SETTLEMENT",
             ))
             counts[variant+"_new"] += 1
     return counts
