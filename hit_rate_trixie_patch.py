@@ -136,7 +136,7 @@ def _comparison_table(score):
         pnl = float(m.get("pnl_units") or 0) * float(hr.REFERENCE_STAKE_GBP)
         roi = m.get("roi_pct")
         roi_text = "—" if roi is None or not settled else f"{float(roi):+.1f}%"
-        role = "Challenger" if system in SMALL_SYSTEMS else "Existing HR2"
+        role = "HR2 format"
         rows.append(
             f"<tr><td>{system.title()}</td><td>{role}</td>"
             f"<td>{int(m.get('cards') or 0)}</td><td>{settled}</td>"
@@ -146,7 +146,7 @@ def _comparison_table(score):
     if not rows:
         return "<p class='muted'>No HR2 format results recorded yet.</p>"
     return (
-        "<div style='overflow-x:auto'><table><thead><tr>"
+        "<div style='overflow-x:auto;-webkit-overflow-scrolling:touch'><table style='min-width:650px'><thead><tr>"
         "<th>HR2 format</th><th>Type</th><th>Formed</th>"
         "<th>Settled</th><th>Profitable</th><th>P&amp;L*</th><th>ROI</th>"
         "</tr></thead><tbody>" + "".join(rows) + "</tbody></table></div>"
@@ -155,6 +155,24 @@ def _comparison_table(score):
         "The challengers started later; compare settled sample sizes before ROI.</div>"
     )
 
+
+def _quote_policy_table(db):
+    try:
+        rows = db.fetchall("SELECT variant, COUNT(*) AS n, SUM(CASE WHEN status='SETTLED' THEN 1 ELSE 0 END) AS settled, SUM(CASE WHEN status='SETTLED' AND pnl_units>0 THEN 1 ELSE 0 END) AS won, SUM(CASE WHEN status='SETTLED' THEN pnl_units ELSE 0 END) AS pnl FROM hr2_relaxed_double_observations GROUP BY variant")
+    except Exception:
+        rows = []
+    metrics = {str(row['variant']): row for row in rows}
+    body = []
+    for key, label in (('strict', 'Normal rules'), ('relaxed', 'Relaxed rules')):
+        m = metrics.get(key) or {}
+        n, settled, won = (int(m.get(k) or 0) for k in ('n', 'settled', 'won'))
+        pnl = float(m.get('pnl') or 0)
+        roi = f'{pnl/settled*100:+.1f}%' if settled else '—'
+        body.append(f'<tr><td>{label}</td><td>{n}</td><td>{settled}</td><td>{won}</td><td>£{pnl*10:+,.2f}</td><td>{roi}</td></tr>')
+    return ("<h3>HR2 doubles: normal versus relaxed quote rules <span class='pill'>RESEARCH ONLY</span></h3>"
+            "<div class='muted'>Normal: quotes up to 15 minutes old, maximum 5-minute quote spread, full minimum price. Relaxed: 30 minutes, 20-minute spread, 95% minimum price. Same bookmaker and candidates; hypothetical only.</div>"
+            "<div style='max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch'><table style='min-width:560px'><thead><tr><th>Policy</th><th>Observed</th><th>Settled</th><th>Won</th><th>P&amp;L*</th><th>ROI</th></tr></thead><tbody>"
+            + ''.join(body) + "</tbody></table></div><div class='muted'>*£10 hypothetical stake per settled observation. Observations may overlap; do not sum profits. No rows yet means no qualifying observations recorded.</div>")
 
 def _page(web_module) -> str:
     """Add the HR2 Trixie and Double challengers to the HR dashboard."""
@@ -188,7 +206,7 @@ def _page(web_module) -> str:
                 "Double cards are backfilled, existing Yankee/Heinz cards are untouched, and neither "
                 "challenger is sent as a Telegram bet-ready alert. In the main stream table, the legacy "
                 "'3+ wins' column is not meaningful for Double; use 'All legs' and ROI for that lane.</div>"
-                + _comparison_table(score) + "</div>"
+                + _comparison_table(score) + _quote_policy_table(web_module.db) + "</div>"
             )
             html = html.replace(panel_marker, panel + panel_marker, 1)
 
