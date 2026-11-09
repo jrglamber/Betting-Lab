@@ -40,7 +40,7 @@ def _eligible(candidate, quote, now, max_age, min_retention):
     if not point_matches:
         return False
     book = str(quote.get("bookmaker_key") or "")
-    if not book:
+    if book not in ("williamhill", "ladbrokes_uk"):
         return False
     try:
         ts = _stamp(quote["captured_at"])
@@ -54,7 +54,7 @@ def _eligible(candidate, quote, now, max_age, min_retention):
     age = (now-ts).total_seconds()/60
     if age < 0 or age > max_age or ts < first:
         return False
-    if not (lower*min_retention <= price < upper):
+    if not (lower <= price < upper):
         return False
     return price >= minimum*min_retention
 
