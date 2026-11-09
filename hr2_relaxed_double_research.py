@@ -44,7 +44,7 @@ def _eligible(candidate, quote, now, max_age, min_retention):
         return False
     try:
         ts = _stamp(quote["captured_at"])
-        first = _stamp(candidate.get("first_seen_at") or candidate["source_created_at"])
+        first = _stamp(candidate.get("first_seen_at") or candidate.get("source_created_at"))
         price = float(quote["price"])
         minimum = float(candidate["min_odds"])
         lower = float(candidate["band_min"])
