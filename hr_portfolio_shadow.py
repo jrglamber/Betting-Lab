@@ -232,6 +232,18 @@ def _form(db, now, state):
                if integrity.fixture_key(c) not in conflicting_fixtures]
     # Cache the same queue and bookmaker quotes for the two read-only UIs.
     # This must never alter formation or trigger additional provider polling.
+    # Shadow observer must never interrupt baseline formation, including
+    # minimal test databases without the quote or collector tables.
+    try:
+        from hr2_relaxed_double_research import observe as observe_relaxed_doubles
+        observer_candidates = [
+            {**candidate, "fixture_key": str(integrity.fixture_key(candidate))}
+            for candidate in unified
+        ]
+        observe_relaxed_doubles(db, observer_candidates, now)
+    except Exception as exc:
+        print(f"HR2_RELAXED_DOUBLE_RESEARCH_ERROR {type(exc).__name__}: "
+              f"{sanitize_sensitive_text(exc)}", flush=True)
     by_book = _book_options(db, unified, now, start)
     try:
         from hr_portfolio_queues import capture
@@ -466,6 +478,12 @@ def run_maintenance(db, now=None):
     st = _state(db)
     formed = _form(db, now, st)
     settled = _settle(db)
+    try:
+        from hr2_relaxed_double_research import settle as settle_relaxed_doubles
+        settle_relaxed_doubles(db, now)
+    except Exception as exc:
+        print(f"HR2_RELAXED_DOUBLE_SETTLEMENT_ERROR {type(exc).__name__}: "
+              f"{sanitize_sensitive_text(exc)}", flush=True)
     payload = {"version": VERSION, **formed, **settled}
     db.record_collector_run("HR_PORTFOLIO_SHADOW_MAINT", True, detail=json.dumps(payload))
     return payload
@@ -503,7 +521,7 @@ def install(app, db):
         return HTMLResponse(render_portfolio(status(db), queue=read_queue(db, view="portfolio")))
 
     # Keep status/results in both weekly and manual export bundles.
-    tables = ("hr_portfolio_state", "hr_portfolio_groups",
+    tables = ("hr2_relaxed_double_observations", "hr_portfolio_state", "hr_portfolio_groups",
               "hr_portfolio_legs", "hr_portfolio_formats", "hr_portfolio_lane_policy")
     try:
         import exporter
