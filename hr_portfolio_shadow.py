@@ -520,7 +520,7 @@ def install(app, db):
         return HTMLResponse(render_portfolio(status(db), queue=read_queue(db, view="portfolio")))
 
     # Keep status/results in both weekly and manual export bundles.
-    tables = ("hr_portfolio_state", "hr_portfolio_groups",
+    tables = ("hr2_relaxed_double_observations", "hr_portfolio_state", "hr_portfolio_groups",
               "hr_portfolio_legs", "hr_portfolio_formats", "hr_portfolio_lane_policy")
     try:
         import exporter
