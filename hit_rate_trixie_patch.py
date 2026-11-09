@@ -124,6 +124,38 @@ def _stream_row(metrics: Dict[str, Any], system: str) -> str:
     )
 
 
+def _comparison_table(score):
+    """Show existing HR2 formats beside forward-only small-system challengers."""
+    streams = (score.get("streams") or {}).get("HR2") or {}
+    rows = []
+    for system in ("YANKEE", "HEINZ", "TRIXIE", "DOUBLE"):
+        m = streams.get(system) or {}
+        if not m:
+            continue
+        settled = int(m.get("settled") or 0)
+        pnl = float(m.get("pnl_units") or 0) * float(hr.REFERENCE_STAKE_GBP)
+        roi = m.get("roi_pct")
+        roi_text = "—" if roi is None or not settled else f"{float(roi):+.1f}%"
+        role = "Challenger" if system in SMALL_SYSTEMS else "Existing HR2"
+        rows.append(
+            f"<tr><td>{system.title()}</td><td>{role}</td>"
+            f"<td>{int(m.get('cards') or 0)}</td><td>{settled}</td>"
+            f"<td>{int(m.get('profitable') or 0)}</td>"
+            f"<td>£{pnl:+,.2f}</td><td>{roi_text}</td></tr>"
+        )
+    if not rows:
+        return "<p class='muted'>No HR2 format results recorded yet.</p>"
+    return (
+        "<div style='overflow-x:auto'><table><thead><tr>"
+        "<th>HR2 format</th><th>Type</th><th>Formed</th>"
+        "<th>Settled</th><th>Profitable</th><th>P&amp;L*</th><th>ROI</th>"
+        "</tr></thead><tbody>" + "".join(rows) + "</tbody></table></div>"
+        "<div class='muted'>*Hypothetical £10 total stake per card. "
+        "Formats may share selections: do not add their profits together. "
+        "The challengers started later; compare settled sample sizes before ROI.</div>"
+    )
+
+
 def _page(web_module) -> str:
     """Add the HR2 Trixie and Double challengers to the HR dashboard."""
     html = _ORIGINAL_PAGE(web_module)
@@ -155,7 +187,8 @@ def _page(web_module) -> str:
                 "<div class='muted'>Forward evidence starts from deployment. No historical Trixie or "
                 "Double cards are backfilled, existing Yankee/Heinz cards are untouched, and neither "
                 "challenger is sent as a Telegram bet-ready alert. In the main stream table, the legacy "
-                "'3+ wins' column is not meaningful for Double; use 'All legs' and ROI for that lane.</div></div>"
+                "'3+ wins' column is not meaningful for Double; use 'All legs' and ROI for that lane.</div>"
+                + _comparison_table(score) + "</div>"
             )
             html = html.replace(panel_marker, panel + panel_marker, 1)
 
