@@ -87,3 +87,55 @@ def compare_doubles(candidates, quotes, now):
                         "hypothetical_only": True,
                     })
     return output
+
+def observe(db, candidates, now, max_candidates=80):
+    """Persist prospective matched pairs from existing stored quotes only."""
+    import hashlib
+    import json
+    now = _stamp(now)
+    id_type = "BIGSERIAL PRIMARY KEY" if db.is_postgres else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    db.execute(f"""CREATE TABLE IF NOT EXISTS hr2_relaxed_double_observations (
+        id {id_type}, observation_key TEXT NOT NULL UNIQUE,
+        observed_at TEXT NOT NULL, variant TEXT NOT NULL,
+        candidate_ids_json TEXT NOT NULL, bookmaker_key TEXT NOT NULL,
+        combined_odds REAL NOT NULL, break_even_hit_rate REAL NOT NULL,
+        quote_spread_minutes REAL NOT NULL, status TEXT NOT NULL
+    )""")
+    # Restrict to the prospective, actionable HR2 pool, without modifying it.
+    pool = list(candidates)[:max_candidates]
+    if len(pool) < 2:
+        return {"strict_new": 0, "relaxed_new": 0, "reason": "insufficient_candidates"}
+    ids = [str(c.get("event_id") or "") for c in pool if c.get("event_id")]
+    if not ids:
+        return {"strict_new": 0, "relaxed_new": 0, "reason": "no_event_ids"}
+    placeholders = ",".join("?" for _ in ids)
+    raw = db.fetchall(
+        "SELECT * FROM live_yankee_quotes WHERE event_id IN (" + placeholders +
+        ") AND captured_at>=? ORDER BY captured_at DESC LIMIT 3000",
+        tuple(ids) + ((now-timedelta(minutes=RELAXED_AGE_MIN)).isoformat(),)
+    )
+    quotes = [dict(row) for row in raw]
+    result = compare_doubles(pool, quotes, now)
+    counts = {"strict_new": 0, "relaxed_new": 0}
+    for variant, matches in result.items():
+        for match in matches:
+            # One forward observation per ordered pair, book and variant;
+            # avoid repeatedly counting identical quotes on each maintenance.
+            key_source = [variant, match["candidate_ids"], match["bookmaker"]]
+            key = hashlib.sha256(json.dumps(key_source, sort_keys=True).encode()).hexdigest()
+            existing = db.fetchone(
+                "SELECT id FROM hr2_relaxed_double_observations WHERE observation_key=?", (key,)
+            )
+            if existing:
+                continue
+            db.execute("""INSERT INTO hr2_relaxed_double_observations (
+                observation_key, observed_at, variant, candidate_ids_json,
+                bookmaker_key, combined_odds, break_even_hit_rate,
+                quote_spread_minutes, status
+            ) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(observation_key) DO NOTHING""", (
+                key, now.isoformat(), variant, json.dumps(match["candidate_ids"]),
+                match["bookmaker"], match["decimal_odds"], match["break_even_hit_rate"],
+                match["quote_spread_minutes"], "AWAITING_SETTLEMENT",
+            ))
+            counts[variant+"_new"] += 1
+    return counts
