@@ -30,14 +30,21 @@ def _eligible(candidate, quote, now, max_age, min_retention):
     if any(str(candidate.get(k) or "") != str(quote.get(k) or "")
            for k in ("event_id", "market_key", "selection")):
         return False
-    if candidate.get("point") != quote.get("point"):
+    try:
+        point_matches = (candidate.get("point") is None and quote.get("point") is None) or (
+            candidate.get("point") is not None and quote.get("point") is not None
+            and abs(float(candidate["point"])-float(quote["point"])) < 1e-9
+        )
+    except (TypeError, ValueError):
+        return False
+    if not point_matches:
         return False
     book = str(quote.get("bookmaker_key") or "")
     if not book:
         return False
     try:
         ts = _stamp(quote["captured_at"])
-        first = _stamp(candidate["first_seen_at"])
+        first = _stamp(candidate.get("first_seen_at") or candidate["source_created_at"])
         price = float(quote["price"])
         minimum = float(candidate["min_odds"])
         lower = float(candidate["band_min"])
@@ -47,7 +54,7 @@ def _eligible(candidate, quote, now, max_age, min_retention):
     age = (now-ts).total_seconds()/60
     if age < 0 or age > max_age or ts < first:
         return False
-    if not (lower <= price < upper):
+    if not (lower*min_retention <= price < upper):
         return False
     return price >= minimum*min_retention
 
@@ -97,7 +104,7 @@ def observe(db, candidates, now, max_candidates=30):
     db.execute(f"""CREATE TABLE IF NOT EXISTS hr2_relaxed_double_observations (
         id {id_type}, observation_key TEXT NOT NULL UNIQUE,
         observed_at TEXT NOT NULL, variant TEXT NOT NULL,
-        candidate_ids_json TEXT NOT NULL, bookmaker_key TEXT NOT NULL,
+        candidate_ids_json TEXT NOT NULL, candidate_sources_json TEXT NOT NULL, bookmaker_key TEXT NOT NULL,
         combined_odds REAL NOT NULL, break_even_hit_rate REAL NOT NULL,
         quote_spread_minutes REAL NOT NULL, status TEXT NOT NULL
     )""")
@@ -132,7 +139,7 @@ def observe(db, candidates, now, max_candidates=30):
                 observation_key, observed_at, variant, candidate_ids_json,
                 bookmaker_key, combined_odds, break_even_hit_rate,
                 quote_spread_minutes, status
-            ) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(observation_key) DO NOTHING""", (
+            ) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(observation_key) DO NOTHING""", (
                 key, now.isoformat(), variant, json.dumps(match["candidate_ids"]),
                 match["bookmaker"], match["decimal_odds"], match["break_even_hit_rate"],
                 match["quote_spread_minutes"], "AWAITING_SETTLEMENT",
