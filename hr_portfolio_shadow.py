@@ -232,23 +232,18 @@ def _form(db, now, state):
                if integrity.fixture_key(c) not in conflicting_fixtures]
     # Cache the same queue and bookmaker quotes for the two read-only UIs.
     # This must never alter formation or trigger additional provider polling.
-    # Research-only relaxed quote comparator. No extra provider calls or alerts.
+    # Shadow observer must never interrupt baseline formation, including
+    # minimal test databases without the quote or collector tables.
     try:
         from hr2_relaxed_double_research import observe as observe_relaxed_doubles
         observer_candidates = [
             {**candidate, "fixture_key": str(integrity.fixture_key(candidate))}
             for candidate in unified
         ]
-        relaxed_result = observe_relaxed_doubles(db, observer_candidates, now)
-        db.record_collector_run(
-            "HR2_RELAXED_DOUBLE_RESEARCH", True,
-            detail=json.dumps(relaxed_result, sort_keys=True),
-        )
+        observe_relaxed_doubles(db, observer_candidates, now)
     except Exception as exc:
-        db.record_collector_run(
-            "HR2_RELAXED_DOUBLE_RESEARCH", False,
-            detail=sanitize_sensitive_text(exc),
-        )
+        print(f"HR2_RELAXED_DOUBLE_RESEARCH_ERROR {type(exc).__name__}: "
+              f"{sanitize_sensitive_text(exc)}", flush=True)
     by_book = _book_options(db, unified, now, start)
     try:
         from hr_portfolio_queues import capture
@@ -495,6 +490,75 @@ def run_maintenance(db, now=None):
             "HR2_RELAXED_DOUBLE_SETTLEMENT", False,
             detail=sanitize_sensitive_text(exc),
         )
+    payload = {"version": VERSION, **formed, **settled}
+    db.record_collector_run("HR_PORTFOLIO_SHADOW_MAINT", True, detail=json.dumps(payload))
+    return payload
+
+
+def install(app, db):
+    global _INSTALLED
+    if _INSTALLED:
+        return {"installed": True, "already_installed": True, "version": VERSION}
+    previous = hr.run_maintenance
+
+    def with_portfolio(*args, **kwargs):
+        result = previous(*args, **kwargs)
+        try:
+            run_maintenance(args[0] if args else db, now=kwargs.get("now"))
+        except Exception as exc:
+            error = sanitize_sensitive_text(exc)
+            try:
+                db.record_collector_run("HR_PORTFOLIO_SHADOW_MAINT", False, detail=error)
+            except Exception:
+                pass
+            print(f"HR_PORTFOLIO_SHADOW_ERROR {type(exc).__name__}: {error}", flush=True)
+        return result
+
+    hr.run_maintenance = with_portfolio
+
+    @app.get("/api/hr-portfolio-shadow/status")
+    def portfolio_status():
+        return status(db)
+
+    @app.get("/hr-portfolio-shadow", response_class=HTMLResponse)
+    def portfolio_page():
+        from hr_portfolio_presentation import render_portfolio
+        from hr_portfolio_queues import read as read_queue
+        return HTMLResponse(render_portfolio(status(db), queue=read_queue(db, view="portfolio")))
+
+    # Keep status/results in both weekly and manual export bundles.
+    tables = ("hr2_relaxed_double_observations", "hr_portfolio_state", "hr_portfolio_groups",
+              "hr_portfolio_legs", "hr_portfolio_formats", "hr_portfolio_lane_policy")
+    try:
+        import exporter
+        exporter.EXPORT_TABLES = tuple(dict.fromkeys(tuple(exporter.EXPORT_TABLES) + tables))
+    except Exception as exc:
+        print(f"HR_PORTFOLIO_FULL_EXPORT_ERROR {type(exc).__name__}: {exc}", flush=True)
+    try:
+        import split_exporter
+        split_exporter.WEEKLY_TABLES = tuple(dict.fromkeys(tuple(split_exporter.WEEKLY_TABLES) + tables))
+        split_exporter.MANUAL_TABLES = tuple(dict.fromkeys(tuple(split_exporter.MANUAL_TABLES) + tables))
+    except Exception as exc:
+        print(f"HR_PORTFOLIO_SPLIT_EXPORT_ERROR {type(exc).__name__}: {exc}", flush=True)
+
+    # Keep navigation at the top of the existing HR Lab, not below its
+    # accumulated cards. Share the same destination with the challenger.
+    previous_page = hr._page
+
+    def page_with_link(web_module):
+        from hr_portfolio_presentation import main_hr_quicklinks
+        return main_hr_quicklinks(previous_page(web_module))
+
+    hr._page = page_with_link
+    _INSTALLED = True
+    return {"installed": True, "version": VERSION, "forward_only": True,
+            "ncaaf_pool": "unified no sport quotas", "extra_paid_api_calls": 0,
+            "execution_authority": False, "tables": tables}    try:
+        from hr2_relaxed_double_research import settle as settle_relaxed_doubles
+        settle_relaxed_doubles(db, now)
+    except Exception as exc:
+        print(f"HR2_RELAXED_DOUBLE_SETTLEMENT_ERROR {type(exc).__name__}: "
+              f"{sanitize_sensitive_text(exc)}", flush=True)
     payload = {"version": VERSION, **formed, **settled}
     db.record_collector_run("HR_PORTFOLIO_SHADOW_MAINT", True, detail=json.dumps(payload))
     return payload
