@@ -88,7 +88,7 @@ def compare_doubles(candidates, quotes, now):
                     })
     return output
 
-def observe(db, candidates, now, max_candidates=80):
+def observe(db, candidates, now, max_candidates=30):
     """Persist prospective matched pairs from existing stored quotes only."""
     import hashlib
     import json
@@ -111,7 +111,7 @@ def observe(db, candidates, now, max_candidates=80):
     placeholders = ",".join("?" for _ in ids)
     raw = db.fetchall(
         "SELECT * FROM live_yankee_quotes WHERE event_id IN (" + placeholders +
-        ") AND captured_at>=? ORDER BY captured_at DESC LIMIT 3000",
+        ") AND captured_at>=? ORDER BY captured_at DESC LIMIT 1000",
         tuple(ids) + ((now-timedelta(minutes=RELAXED_AGE_MIN)).isoformat(),)
     )
     quotes = [dict(row) for row in raw]
