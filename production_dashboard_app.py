@@ -39,7 +39,7 @@ from tennis_predictive_readiness_embed_patch import install as install_tennis_pr
 from verified_jacquet_machac_rescue import run_once as repair_verified_jacquet_machac
 from verified_van_assche_tien_rescue import run_once as repair_verified_van_assche_tien
 
-BUILD_VERSION = "0.19.140"
+BUILD_VERSION = "0.19.141"
 
 # Keep all visible version surfaces aligned with the real production entrypoint.
 base.BUILD_VERSION = BUILD_VERSION
@@ -138,6 +138,17 @@ try:
 except Exception as exc:
     hit_rate_jit_priority = {"installed": False, "error": f"{type(exc).__name__}: {exc}"}
 print(f"HIT_RATE_JIT_PRIORITY_INSTALL {hit_rate_jit_priority}", flush=True)
+
+# Explain sudden zero-quote days without changing HR2 rules or provider spend.
+# Read-only one-time snapshot of the frozen queue, kickoff window, and target gates.
+try:
+    import json as _hr_quote_json
+    from hr_quote_eligibility_audit import snapshot as _hr_quote_eligibility_snapshot
+    _eligibility = _hr_quote_eligibility_snapshot(base.curated.base_app.db)
+    print("HR_QUOTE_ELIGIBILITY_AUDIT "
+          + _hr_quote_json.dumps(_eligibility, sort_keys=True), flush=True)
+except Exception as exc:
+    print(f"HR_QUOTE_ELIGIBILITY_AUDIT_ERROR {type(exc).__name__}: {exc}", flush=True)
 
 try:
     hit_rate_price_tolerance_ladder = install_hit_rate_price_tolerance_ladder(base.curated.base_app.db)
