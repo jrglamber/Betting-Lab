@@ -612,8 +612,26 @@ def run_maintenance(db, collector, settings, now: Optional[datetime] = None) -> 
             out["hr2_forward_capture"] = capture_hr2_forward(db)
         except Exception as observer_exc:
             out["hr2_forward_capture"] = {"ok": False, "error": sanitize_sensitive_text(observer_exc)}
+        # Prospective HR2 quote-rule comparison, captured before normal formation
+        # consumes the queue. Research-only: no effect on cards or Telegram.
+        try:
+            from hr2_relaxed_double_research import observe as observe_hr2_quotes
+            quote_pool = [dict(row) for row in db.fetchall(
+                "SELECT * FROM hit_rate_candidates WHERE experiment_key='HR2' "
+                "AND system_type='DOUBLE' AND status='QUEUED' "
+                "AND policy_version=? ORDER BY first_seen_at,id LIMIT 30",
+                (POLICY_VERSION,),
+            )]
+            out["hr2_double_quote_observer"] = observe_hr2_quotes(db, quote_pool, now)
+        except Exception as quote_exc:
+            out["hr2_double_quote_observer"] = {"ok": False, "error": sanitize_sensitive_text(quote_exc)}
         out["formed"] = _form(db, now)
         out["settlement"] = settle_cards(db)
+        try:
+            from hr2_relaxed_double_research import settle as settle_hr2_quotes
+            out["hr2_double_quote_settlement"] = settle_hr2_quotes(db, now)
+        except Exception as quote_exc:
+            out["hr2_double_quote_settlement"] = {"ok": False, "error": sanitize_sensitive_text(quote_exc)}
         # Isolated research observer: never interrupt formation, settlement, or alerts.
         try:
             from hr2_forward_observer import settle as settle_hr2_forward
