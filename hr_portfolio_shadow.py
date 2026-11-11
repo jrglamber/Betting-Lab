@@ -487,6 +487,7 @@ def run_maintenance(db, now=None):
               f"{sanitize_sensitive_text(exc)}", flush=True)
     payload = {"version": VERSION, **formed, **settled}
     db.record_collector_run("HR_PORTFOLIO_SHADOW_MAINT", True, detail=json.dumps(payload))
+    print("HR_PORTFOLIO_SHADOW_MAINT " + json.dumps(payload, sort_keys=True), flush=True)
     return payload
 
 
