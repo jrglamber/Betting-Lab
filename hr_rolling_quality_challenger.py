@@ -435,6 +435,7 @@ def _run_wrapper(previous_run):
                 print(f"HR_QUALITY_SETTLED paired_groups={count}", flush=True)
             db.execute("UPDATE hr_quality_state SET last_maintenance_at=? WHERE id=1",
                        (utc_now_iso(),))
+            print("HR_QUALITY_MAINT " + json.dumps({"settled_pairs": count, "baseline_formed": result.get("formed", 0) if isinstance(result, dict) else None, "at": utc_now_iso()}, sort_keys=True), flush=True)
         except Exception as exc:
             error = sanitize_sensitive_text(exc)
             print(f"HR_QUALITY_SETTLE_ERROR {type(exc).__name__}: {error}", flush=True)
