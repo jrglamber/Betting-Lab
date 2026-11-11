@@ -507,7 +507,8 @@ def install(app, db):
                 db.record_collector_run("HR_PORTFOLIO_SHADOW_MAINT", False, detail=error)
             except Exception:
                 pass
-            print(f"HR_PORTFOLIO_SHADOW_ERROR {type(exc).__name__}: {error}\n"\n                  f"{sanitize_sensitive_text(traceback.format_exc())}", flush=True)
+            print(f"HR_PORTFOLIO_SHADOW_ERROR {type(exc).__name__}: {error}\n"
+                  f"{sanitize_sensitive_text(traceback.format_exc())}", flush=True)
         return result
 
     hr.run_maintenance = with_portfolio
