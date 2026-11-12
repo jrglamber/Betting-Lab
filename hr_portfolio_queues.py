@@ -143,9 +143,6 @@ def _build_rows(candidates, eligible_lanes, by_book, now, *, conflicting_fixture
         if not lane_ok:
             excluded += 1
             choices = [(None, None, "WATCH_OR_PAUSED")]
-        elif integrity.fixture_key(c) in conflicting_fixtures:
-            waiting += 1
-            choices = [(None, None, "DIRECT_OPPOSITION_ABSTAIN")]
         elif not integrity.market_actionable(c):
             waiting += 1
             choices = [(None, None, "MISSING_MARKET_LINE")]
