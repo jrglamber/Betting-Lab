@@ -21,7 +21,7 @@ import hit_rate_multiples_lab as hr
 import hr_market_integrity as integrity
 from db import sanitize_sensitive_text, utc_now_iso
 
-VERSION = "HR_PORTFOLIO_FORWARD_2026_11_04_V2"
+VERSION = "HR_PORTFOLIO_FORWARD_2026_11_12_V3"
 MANUAL_BOOKS = ("williamhill", "ladbrokes_uk")
 TOTAL_STAKE_GBP = 10.0
 MAX_GROUPS_PER_DAY = 8
@@ -72,6 +72,13 @@ def _schema(db):
 def _state(db):
     row = db.fetchone("SELECT * FROM hr_portfolio_state WHERE id=2")
     if row:
+        if row["policy_version"] != VERSION:
+            rules = json.loads(row["rules_json"])
+            rules.update({"policy": VERSION,
+                          "fixture_conflict_policy": "retain alternatives; FIFO selects one per fixture"})
+            db.execute("UPDATE hr_portfolio_state SET policy_version=?,rules_json=? WHERE id=2",
+                       (VERSION, json.dumps(rules, sort_keys=True)))
+            row = db.fetchone("SELECT * FROM hr_portfolio_state WHERE id=2")
         return dict(row)
     now = utc_now_iso()
     rules = {
@@ -81,6 +88,7 @@ def _state(db):
         "strict_same_book_only": list(MANUAL_BOOKS), "quote_freshness_minutes": 15,
         "max_daily_groups": MAX_GROUPS_PER_DAY, "no_source_quotas": True,
         "max_quote_spread_minutes": 5, "one_leg_per_event": True,
+        "fixture_conflict_policy": "retain alternatives; FIFO selects one per fixture",
         "no_additional_quote_polls": True, "no_bet_authority": True,
         "subsets": "first 2/3/4 qualifying frozen legs, as available",
         "four_leg_portfolio_allocation": {"DOUBLE": 0.5, "TRIXIE": 0.3, "YANKEE": 0.2},
@@ -225,12 +233,12 @@ def _form(db, now, state):
         c for c in base
         if str(c.get("source_lane") or "") in eligible
     ]
-    # Odds-band qualification can admit both Over and Under 2.5 for the
-    # same match. These are NOT two proven edges; abstain from the entire
-    # conflicting fixture until a validated directional choice exists.
+    # Retain *all* qualified market choices, including directly opposing ones.
+    # _pick_unique selects at most one option per underlying fixture at a
+    # given bookmaker; rejecting the entire fixture starves chronological bets.
+    # Conflict detection remains research-only and visible in queue diagnostics.
     conflicting_fixtures = integrity.conflicted_fixture_keys(eligible_candidates)
-    unified = [c for c in eligible_candidates
-               if integrity.fixture_key(c) not in conflicting_fixtures]
+    unified = eligible_candidates
     # Cache the same queue and bookmaker quotes for the two read-only UIs.
     # This must never alter formation or trigger additional provider polling.
     # Shadow observer must never interrupt baseline formation, including
@@ -306,7 +314,8 @@ def _form(db, now, state):
     return {"formed": formed, "hr2_source_candidates": len(base),
             "ncaaf_source_candidates": len(ncaaf), "ncaaf_extra_candidates": 0,
             "eligible_lanes": len(eligible), "unified_candidates": len(unified),
-            "conflicting_fixtures_abstained": len(conflicting_fixtures)}
+            "competing_fixtures_observed": len(conflicting_fixtures),
+            "conflicting_fixtures_abstained": 0}
 
 
 def _return_for(format_name, legs):
@@ -456,7 +465,7 @@ def status(db):
     return {
         "version": VERSION, "research_only": True, "no_provider_calls": True,
         "pool": "UNIFIED", "no_ncaaf_minimum_or_maximum": True,
-        "selection_policy": "FIFO baseline; model-ranked optimiser is not validated",
+        "selection_policy": "FIFO: retain opposing event options but freeze at most one per fixture; quality ranker research-only",
         "started_at": st.get("started_at"), "bookmakers": list(MANUAL_BOOKS),
         "daily_group_cap": MAX_GROUPS_PER_DAY,
         "groups": [dict(x) for x in groups], "formats": format_rows,
