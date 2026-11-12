@@ -158,6 +158,127 @@ def main_hr_quicklinks(html: str) -> str:
 
 
 
+def main_hr_strategy_comparison(db) -> str:
+    """Read-only, on-page comparison of forward FIFO versus quality ranking.
+
+    These portfolio research arms are paired to the same fixtures. They are NOT
+    the standard HR2 Double stream that sends the user's Telegram notifications.
+    Missing/unsettled outcomes stay blank, not misleading 0% returns.
+    """
+    try:
+        from hr_rolling_quality_challenger import scoreboard as quality_scoreboard
+        from hr_portfolio_queues import read as read_queue
+        from hit_rate_multiples_lab import scoreboard as hr_scoreboard
+
+        quality = quality_scoreboard(db)
+        queue = read_queue(db, view="portfolio", limit=4)
+        standard = ((hr_scoreboard(db).get("streams") or {}).get("HR2") or {}).get("DOUBLE") or {}
+    except Exception as exc:
+        # A dashboard cannot be allowed to stop maintenance or other HR panels.
+        # Show a distinct unavailable state rather than displaying zero metrics.
+        import logging
+        logging.getLogger(__name__).warning(
+            "HR2 main comparison data unavailable: %s", type(exc).__name__)
+        return panel(
+            "HR2 strategy comparison",
+            note="RESEARCH · FORWARD ONLY",
+            contents="<div class='muted'>Comparison temporarily unavailable. "
+                     "The existing HR2 betting and research streams are unaffected.</div>",
+        )
+
+    paired = quality.get("matched_doubles") or {}
+    baseline = paired.get("baseline") or {}
+    challenger = paired.get("quality") or {}
+    observed = queue.get("snapshot_at")
+    n = int(baseline.get("settled") or 0)
+    rank_n = int(challenger.get("settled") or 0)
+    paired_ready = n > 0 and n == rank_n
+
+    def pc(value, *, signed=False):
+        return _num(value, 1, suffix="%", signed=signed) if value is not None else "—"
+
+    def dd(value):
+        return _num(value, 2, suffix="u") if paired_ready else "—"
+
+    def value(key, data):
+        return pc(data.get(key)) if paired_ready else "—"
+
+    def tr(label, left, right):
+        return f"<tr><th scope='row'>{_t(label)}</th><td>{_t(left)}</td><td>{_t(right)}</td></tr>"
+
+    rows = [
+        tr("Research groups formed",
+           _int(quality.get("baseline_groups_formed")),
+           _int(quality.get("quality_groups_formed"))),
+        tr("Matched doubles settled", _int(n), _int(rank_n)),
+        tr("Double win rate", value("hit_rate_pct", baseline),
+           value("hit_rate_pct", challenger)),
+        tr("Double ROI", value("roi_pct", baseline), value("roi_pct", challenger)),
+        tr("Maximum drawdown", dd(baseline.get("max_drawdown_units")),
+           dd(challenger.get("max_drawdown_units"))),
+    ]
+    formed = quality.get("baseline_groups_formed")
+    compared = quality.get("quality_groups_formed")
+    coverage = ("—" if not formed or compared is None else
+                f"{100 * int(compared) / int(formed):.1f}%")
+    standard_cards = standard.get("cards")
+    standard_label = _int(standard_cards) if standard_cards is not None else "—"
+    observed_label = (_int(queue.get("competing_fixtures_observed"))
+                      if observed else "—")
+    changed_label = _int(quality.get("ranked_displaced_legs"))
+    note = (
+        "Awaiting newly settled matched doubles; no ranking advantage can be "
+        "established yet." if not paired_ready else
+        "The two research columns use the same frozen fixtures, bookmaker, "
+        "decision and stake. Outcomes remain correlated across groups."
+    )
+    return (
+        "<section class='panel' id='hr2-strategy-comparison'>"
+        "<h2>HR2 strategy comparison <span class='pill'>RESEARCH · FORWARD ONLY</span></h2>"
+        "<div class='summary'>Chronological first-available selection versus "
+        "price-quality ranking <strong>within the same fixture</strong>. "
+        "Retained opposing options are alternatives, never extra legs.</div>"
+        "<div class='table-wrap' style='max-width:100%;overflow-x:auto;"
+        "-webkit-overflow-scrolling:touch'><table style='min-width:480px'>"
+        "<thead><tr><th scope='col'>Metric</th>"
+        "<th scope='col'>FIFO Portfolio Shadow</th>"
+        "<th scope='col'>Quality Challenger</th></tr></thead><tbody>" +
+        "".join(rows) + "</tbody></table></div>"
+        "<div class='grid' style='margin-top:12px'>" +
+        card("Competing fixtures now", observed_label,
+             "Latest cached queue snapshot; not fixtures excluded") +
+        card("Selections changed", changed_label,
+             _int(quality.get("ranked_changed_groups")) + " affected comparison groups") +
+        card("Comparison coverage", coverage,
+             "Ranked research groups / FIFO groups") +
+        "</div>"
+        "<div class='muted' style='margin-top:12px'>" + _t(note) +
+        " Current standard HR2 Double cards: <strong>" + _t(standard_label) +
+        "</strong> (separate stream; Telegram uses those standard HR2 bets, "
+        "not these paired portfolio selections). "
+        "Price-quality is a heuristic, not a calibrated win probability. "
+        "Snapshot: " + _t(queue.get("snapshot_at") or "not yet available") +
+        ". <a href='/hr-portfolio-shadow'>Portfolio detail</a> · "
+        "<a href='/hr-quality-challenger'>Ranking detail</a>.</div>"
+        "</section>"
+    )
+
+
+def main_hr_comparison_panel(html: str, db) -> str:
+    """Insert once, below HR overview metrics and before older research panels."""
+    if "id='hr2-strategy-comparison'" in html:
+        return html
+    panel_html = main_hr_strategy_comparison(db)
+    marker = "<div class='section-grid'>"
+    if marker in html:
+        return html.replace(marker, panel_html + "\n" + marker, 1)
+    # Some legacy dashboard layouts do not have the section-grid wrapper.
+    fallback = "<div class='panel'><h2>Frozen design backtest</h2>"
+    if fallback in html:
+        return html.replace(fallback, panel_html + "\n" + fallback, 1)
+    return html.replace("</body>", panel_html + "</body>", 1)
+
+
 def queue_panels(snapshot: dict[str, Any] | None, *, view: str) -> str:
     """Same shared snapshot: chronological on Portfolio, ranked on Challenger."""
     if snapshot is None:
