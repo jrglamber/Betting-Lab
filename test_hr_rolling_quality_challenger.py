@@ -157,22 +157,30 @@ def test_quality_pair_changes_selection_but_keeps_same_book_stake_and_time(tmp_p
         _entry("E1", "FOOTBALL", made, now+timedelta(hours=1), ts, 2.0),
         _entry("E2", "FOOTBALL", made+timedelta(seconds=1), now+timedelta(hours=1), ts, 2.0),
     ]
-    better = _entry("E3", "NCAAF_3_TO_4_99_EXPERIMENTAL",
-                    made+timedelta(seconds=2), now+timedelta(hours=1), ts, 3.45, 3.0)
+    # An alternative outcome for E1, emitted under a different provider event ID.
+    # Higher quote premium must change the choice, not replace the fixture.
+    better = _entry("E3", "FOOTBALL",
+                    made+timedelta(seconds=2), now+timedelta(hours=1), ts, 2.30, 2.0)
+    better[0]["home_team"] = "E1"
+    better[0]["away_team"] = "Away"
+    better[0]["selection"] = "E1 opponent"
     g = _baseline_group(db, now, base_entries)
     options = {"williamhill": base_entries+[better]}
     assert q._pair(db, g, options, now-timedelta(minutes=1), now) == "formed"
     frozen = db.fetchall("SELECT * FROM hr_quality_legs WHERE baseline_group_id=? ORDER BY leg_order",
                          (g["id"],))
     assert len(frozen) == 2
-    assert set(x["event_id"] for x in frozen) != {"E1", "E2"}
+    assert {x["event_id"] for x in frozen} == {"E3", "E2"}
+    assert {x["home_team"] for x in frozen} == {"E1", "E2"}
     assert all(x["bookmaker_key"] == "williamhill" for x in frozen)
     assert all(x["quote_captured_at"] == ts.isoformat() for x in frozen)
     assert db.fetchone("SELECT COUNT(*) AS n FROM hr_quality_candidate_audit")["n"] == 3
     pair = db.fetchone("SELECT * FROM hr_quality_pairs")
     assert pair["candidate_count"] == 3
     assert pair["overlap_count"] == 1
-    assert pair["quality_ncaaf_count"] == 1
+    assert pair["quality_ncaaf_count"] == 0
+    audit = db.fetchall("SELECT components_json FROM hr_quality_candidate_audit")
+    assert any('"same_fixture_eligible_options": 2' in r["components_json"] for r in audit)
     assert isclose(sum(float(x["allocation_pct"]) for x in db.fetchall(
         "SELECT allocation_pct FROM hr_quality_formats")), 1.0)
 
@@ -234,3 +242,24 @@ def test_quality_settlement_waits_for_baseline_accounting(tmp_path):
     db.execute("UPDATE hr_quality_legs SET result='WIN'")
     assert q._settle(db) == 0
     assert db.fetchone("SELECT status FROM hr_quality_pairs")["status"] == "OPEN"
+
+
+def test_fixture_ranking_never_swaps_in_unrelated_event():
+    now = _time()
+    ts = now-timedelta(seconds=10)
+    made = now-timedelta(minutes=3)
+    e1 = _entry("E1","FOOTBALL",made,now+timedelta(hours=2),ts,2.0)
+    e2 = _entry("E2","FOOTBALL",made,now+timedelta(hours=2),ts,2.0)
+    e3 = _entry("E3","FOOTBALL",made,now+timedelta(hours=2),ts,3.0)
+    ranked = q._rank_pool([e1,e2,e3],{"williamhill":[e1,e2,e3]},now,
+                          now-timedelta(minutes=5),now,now-timedelta(minutes=10))
+    picks = q._select_same_fixtures(ranked,[e1[0],e2[0]])
+    assert [x["candidate"]["event_id"] for x in picks] == ["E1","E2"]
+
+
+def test_quality_score_is_not_claimed_as_predictive_probability():
+    now=_time()
+    first = _entry("E1","FOOTBALL",now-timedelta(minutes=1),
+                   now+timedelta(hours=1),now-timedelta(seconds=5),2.1)
+    score=q._price_score(*first,now,1)
+    assert "score" in score and "predicted_win_probability" not in score
