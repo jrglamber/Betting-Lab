@@ -24,7 +24,7 @@ import hr_portfolio_shadow as baseline
 import hr_market_integrity as integrity
 from db import sanitize_sensitive_text, utc_now_iso
 
-VERSION = "HR_ROLLING_QUALITY_CHALLENGER_V1"
+VERSION = "HR_ROLLING_QUALITY_CHALLENGER_V2"
 QUOTE_WINDOW_MINUTES = 5.0
 MAX_SNAPSHOT_CANDIDATES = 25
 _INSTALLED = False
@@ -81,12 +81,22 @@ def _schema(db):
 def _state(db):
     current = db.fetchone("SELECT * FROM hr_quality_state WHERE id=1")
     if current:
+        if current["version"] != VERSION:
+            rules = json.loads(current["rules_json"])
+            rules.update({"version": VERSION, "matched_baseline": baseline.VERSION,
+                          "match_baseline_fixture_set": True,
+                          "competing_options": "rank one same-book alternative per fixture"})
+            db.execute("UPDATE hr_quality_state SET version=?,rules_json=? WHERE id=1",
+                       (VERSION, json.dumps(rules, sort_keys=True)))
+            current = db.fetchone("SELECT * FROM hr_quality_state WHERE id=1")
         return current
     rules = {
         "version": VERSION, "matched_baseline": baseline.VERSION,
         "only_new_baseline_decisions": True,
         "quote_window_minutes": QUOTE_WINDOW_MINUTES,
         "same_bookmaker": True, "same_leg_count": True,
+        "match_baseline_fixture_set": True,
+        "competing_options": "rank one same-book alternative per fixture",
         "same_reference_stake_gbp": baseline.TOTAL_STAKE_GBP,
         "same_format_allocations": True, "no_ncaaf_quota": True,
         "no_live_authority": True, "additional_api_calls": 0,
@@ -203,6 +213,27 @@ def _select(ranked, count):
     return chosen if len(chosen) == count else []
 
 
+def _select_same_fixtures(ranked, baseline_legs):
+    """Rank competing options within each frozen baseline fixture.
+
+    Fixing the fixture set isolates the effect of market-choice ranking from
+    fixture discovery. Alternatives remain in the audit; no multiple contains
+    two legs from the same real match, even across differing provider IDs.
+    """
+    best_by_fixture = {}
+    for item in ranked:
+        fixture = integrity.fixture_key(item["candidate"])
+        best_by_fixture.setdefault(fixture, item)  # globally ranked high to low
+    chosen, used = [], set()
+    for leg in baseline_legs:
+        fixture = integrity.fixture_key(leg)
+        if fixture in used or fixture not in best_by_fixture:
+            return []
+        chosen.append(best_by_fixture[fixture])
+        used.add(fixture)
+    return chosen
+
+
 def _skip(db, group, reason, baseline_ncaaf=0):
     db.execute("""INSERT INTO hr_quality_pairs(
         baseline_group_id,decision_at,bookmaker_key,baseline_policy_version,
@@ -258,10 +289,17 @@ def _pair(db, group, options, challenger_start, now):
         if not matched:
             _skip(db, group, "BASELINE_QUOTE_NOT_IN_SAME_SNAPSHOT", base_ncaaf)
             return "skipped"
-    selected = _select(ranked, count)
-    if not selected:
-        _skip(db, group, "INSUFFICIENT_DISTINCT_EVENTS", base_ncaaf)
+    selected = _select_same_fixtures(ranked, prior)
+    if len(selected) != count:
+        _skip(db, group, "MISSING_MATCHED_FIXTURE_OPTION", base_ncaaf)
         return "skipped"
+    fixture_counts = {}
+    for item in ranked:
+        key = integrity.fixture_key(item["candidate"])
+        fixture_counts[key] = fixture_counts.get(key, 0) + 1
+    for item in ranked:
+        item["detail"]["same_fixture_eligible_options"] = fixture_counts[
+            integrity.fixture_key(item["candidate"])]
 
     baseline_keys = {_identity(x) for x in prior}
     selected_keys = {_identity(x["candidate"]) for x in selected}
@@ -347,11 +385,8 @@ def _form_wrapper(previous_form):
         }
         eligible = [c for c in sources
                     if statuses.get(str(c.get("source_lane") or "")) == "ELIGIBLE"]
-        # Match baseline's pre-event safety abstention exactly: a ranked
-        # contender must not reintroduce a fixture whose eligible source
-        # contains directly opposed choices for the same market/point.
-        conflicts = integrity.conflicted_fixture_keys(eligible)
-        eligible = [c for c in eligible if integrity.fixture_key(c) not in conflicts]
+        # Keep every quoted alternative in the common HR2 source pool.
+        # Each paired decision ranks within the baseline's frozen fixtures.
         options = baseline._book_options(db, eligible, now, _dt(state["started_at"]))
         formed = skipped = 0
         for g in new_groups:
