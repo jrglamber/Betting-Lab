@@ -233,7 +233,7 @@ def _build_rows(candidates, eligible_lanes, by_book, now, *, conflicting_fixture
         stamps = [hr._parse(q.get("captured_at")) for _, q in picks]
         coherent = (len(picks) >= 2 and all(stamps) and
                     (max(stamps)-min(stamps)) <= timedelta(minutes=QUOTE_SPREAD_MINUTES))
-        events = {str(c.get("event_id") or "") for c, _ in full_book_pairs}
+        events = {integrity.fixture_key(c) for c, _ in full_book_pairs}
         per_book[book] = {
             "label": BOOK_LABELS[book], "quoted_selections": len(full_book_pairs),
             "distinct_events": len(events), "baseline_ready": bool(coherent),
@@ -255,12 +255,13 @@ def _build_rows(candidates, eligible_lanes, by_book, now, *, conflicting_fixture
             str(c.get("source_lane") or "") in eligible_lanes
             and not integrity.market_actionable(c) for c in full_universe
         ),
-        "conflicting_fixtures_abstained": len(conflicting_fixtures),
-        "conflicting_candidate_options": sum(
+        "competing_fixtures_observed": len(conflicting_fixtures),
+        "competing_candidate_options": sum(
             integrity.fixture_key(c) in conflicting_fixtures
             and str(c.get("source_lane") or "") in eligible_lanes
             for c in full_universe
         ),
+        "conflicting_fixtures_abstained": 0,
         "visible_candidates": len(universe),
         "priced_visible_candidates": priced,
         "waiting_visible_candidates": waiting,
@@ -311,8 +312,9 @@ def capture(db, now, candidates, eligible_lanes, by_book, *,
         "raw_source_rows": metrics["raw_source_rows"],
         "merged_source_rows": metrics["merged_source_rows"],
         "missing_line_candidates": metrics["missing_line_candidates"],
-        "conflicting_fixtures_abstained": metrics["conflicting_fixtures_abstained"],
-        "conflicting_candidate_options": metrics["conflicting_candidate_options"],
+        "conflicting_fixtures_abstained": 0,
+        "competing_fixtures_observed": metrics["competing_fixtures_observed"],
+        "competing_candidate_options": metrics["competing_candidate_options"],
     }
     db.execute("""INSERT INTO hr_portfolio_queue_state(
         id,snapshot_at,version,source_candidates,eligible_candidates,
@@ -380,10 +382,11 @@ def read(db, *, view="portfolio", limit=DISPLAY_LIMIT):
         "snapshot_at": st["snapshot_at"], "version": VERSION,
         "duplicate_raw_rows_collapsed": int(diagnostics.get("merged_source_rows") or 0),
         "missing_line_candidates": int(diagnostics.get("missing_line_candidates") or 0),
-        "conflicting_fixtures_abstained": int(
-            diagnostics.get("conflicting_fixtures_abstained") or 0),
-        "conflicting_candidate_options": int(
-            diagnostics.get("conflicting_candidate_options") or 0),
+        "conflicting_fixtures_abstained": 0,
+        "competing_fixtures_observed": int(
+            diagnostics.get("competing_fixtures_observed") or 0),
+        "competing_candidate_options": int(
+            diagnostics.get("competing_candidate_options") or 0),
         "status": "SNAPSHOT",
         "source_candidates": int(st["source_candidates"]),
         "eligible_candidates": int(st["eligible_candidates"]),
