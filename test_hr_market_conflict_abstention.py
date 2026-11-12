@@ -1,7 +1,7 @@
-"""Direct same-line market-opposition abstention, forward only.
+"""Forward-only HR fixture competition without blanket abstention.
 
-Do not mistake two odds-band candidates on the same fixture for two
-independently validated choices. Nonconflicting alternate lines remain.
+Opposing options remain separate research candidates, but only one leg per
+actual fixture can be frozen into a multiple.
 """
 from datetime import datetime, timedelta, timezone
 from db import Database
@@ -53,7 +53,7 @@ def test_missing_totals_line_is_blocked_independently_not_counted_as_conflict():
     assert not integrity.market_actionable(over)
 
 
-def test_portfolio_forms_only_unconflicted_games_and_cache_explains_abstention(monkeypatch,tmp_path):
+def test_portfolio_keeps_competing_fixture_and_cache_explains_alternatives(monkeypatch,tmp_path):
     db=Database(db_path=str(tmp_path/"conflicted.sqlite"))
     portfolio._schema(db)
     state=portfolio._state(db)
@@ -71,21 +71,45 @@ def test_portfolio_forms_only_unconflicted_games_and_cache_explains_abstention(m
     monkeypatch.setattr(portfolio,"_book_options",_books)
     result=portfolio._form(db,NOW,state)
     assert result["formed"]==1
-    assert result["conflicting_fixtures_abstained"]==1
+    assert result["competing_fixtures_observed"]==1
+    assert result["conflicting_fixtures_abstained"]==0
     groups=db.fetchall("SELECT id,selection_count FROM hr_portfolio_groups")
-    assert len(groups)==1 and groups[0]["selection_count"]==2
+    assert len(groups)==1 and groups[0]["selection_count"]==3
     frozen=db.fetchall("SELECT event_id,home_team FROM hr_portfolio_legs ORDER BY leg_order")
-    assert {x["home_team"] for x in frozen}=={"Oxford United","Watford"}
+    assert {x["home_team"] for x in frozen}=={"Cardiff City","Oxford United","Watford"}
+    assert len([x for x in frozen if x["home_team"]=="Cardiff City"])==1
     q=queues.read(db,view="portfolio")
-    assert q["conflicting_fixtures_abstained"]==1
-    assert q["conflicting_candidate_options"]==2
-    statuses={x["event_id"]:x["queue_status"] for x in q["waiting_rows"]}
-    assert statuses["a"]=="DIRECT_OPPOSITION_ABSTAIN"
-    assert statuses["b"]=="DIRECT_OPPOSITION_ABSTAIN"
+    assert q["competing_fixtures_observed"]==1
+    assert q["competing_candidate_options"]==2
+    assert q["bookmakers"]["williamhill"]["distinct_events"]==3
+    statuses={x["event_id"]:x["queue_status"] for x in q["rows"]}
+    assert statuses["a"]=="FRESH_BOOK_QUOTE"
+    assert statuses["b"]=="FRESH_BOOK_QUOTE"
     page=ui.render_portfolio({
         "portfolio":[],"formats":[],"lane_metrics":[],"lane_policy":[],
         "latest_groups":[],"recent_ncaaf_mix":{},
     },queue=q)
-    assert "Conflicted fixtures blocked" in page
-    assert "PORTFOLIO ABSTAINS" in page
+    assert "Fixtures with opposing options" in page
+    assert "PORTFOLIO ABSTAINS" not in page
     assert "Over 2.5" in page and "Under 2.5" in page
+
+
+def test_conflicted_fixture_no_longer_starves_two_leg_double(monkeypatch,tmp_path):
+    db=Database(db_path=str(tmp_path/"two-fixtures.sqlite"))
+    portfolio._schema(db)
+    state=portfolio._state(db)
+    over=leg("a","Cardiff City","West Ham United","Over",2.5)
+    under=leg("b","Cardiff City","West Ham United","Under",2.5)
+    oxford=leg("c","Oxford United","Reading","Over",2.5,minute=13)
+    monkeypatch.setattr(portfolio,"_base_candidates",lambda db,now: [over,under,oxford])
+    monkeypatch.setattr(portfolio,"_book_options",lambda db,candidates,now,start: {
+        "williamhill":[(c,quote()) for c in candidates],
+        "ladbrokes_uk":[],
+    })
+    result=portfolio._form(db,NOW,state)
+    assert result["formed"]==1
+    assert result["competing_fixtures_observed"]==1
+    legs=db.fetchall("SELECT home_team,selection FROM hr_portfolio_legs ORDER BY leg_order")
+    assert len(legs)==2
+    assert {r["home_team"] for r in legs}=={"Cardiff City","Oxford United"}
+    assert len([r for r in legs if r["home_team"]=="Cardiff City"])==1

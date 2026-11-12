@@ -24,7 +24,7 @@ import hr_portfolio_shadow as baseline
 import hr_market_integrity as integrity
 from db import sanitize_sensitive_text, utc_now_iso
 
-VERSION = "HR_ROLLING_QUALITY_CHALLENGER_V1"
+VERSION = "HR_ROLLING_QUALITY_CHALLENGER_V2"
 QUOTE_WINDOW_MINUTES = 5.0
 MAX_SNAPSHOT_CANDIDATES = 25
 _INSTALLED = False
@@ -81,12 +81,22 @@ def _schema(db):
 def _state(db):
     current = db.fetchone("SELECT * FROM hr_quality_state WHERE id=1")
     if current:
+        if current["version"] != VERSION:
+            rules = json.loads(current["rules_json"])
+            rules.update({"version": VERSION, "matched_baseline": baseline.VERSION,
+                          "match_baseline_fixture_set": True,
+                          "competing_options": "rank one same-book alternative per fixture"})
+            db.execute("UPDATE hr_quality_state SET version=?,rules_json=? WHERE id=1",
+                       (VERSION, json.dumps(rules, sort_keys=True)))
+            current = db.fetchone("SELECT * FROM hr_quality_state WHERE id=1")
         return current
     rules = {
         "version": VERSION, "matched_baseline": baseline.VERSION,
         "only_new_baseline_decisions": True,
         "quote_window_minutes": QUOTE_WINDOW_MINUTES,
         "same_bookmaker": True, "same_leg_count": True,
+        "match_baseline_fixture_set": True,
+        "competing_options": "rank one same-book alternative per fixture",
         "same_reference_stake_gbp": baseline.TOTAL_STAKE_GBP,
         "same_format_allocations": True, "no_ncaaf_quota": True,
         "no_live_authority": True, "additional_api_calls": 0,
@@ -203,6 +213,27 @@ def _select(ranked, count):
     return chosen if len(chosen) == count else []
 
 
+def _select_same_fixtures(ranked, baseline_legs):
+    """Rank competing options within each frozen baseline fixture.
+
+    Fixing the fixture set isolates the effect of market-choice ranking from
+    fixture discovery. Alternatives remain in the audit; no multiple contains
+    two legs from the same real match, even across differing provider IDs.
+    """
+    best_by_fixture = {}
+    for item in ranked:
+        fixture = integrity.fixture_key(item["candidate"])
+        best_by_fixture.setdefault(fixture, item)  # globally ranked high to low
+    chosen, used = [], set()
+    for leg in baseline_legs:
+        fixture = integrity.fixture_key(leg)
+        if fixture in used or fixture not in best_by_fixture:
+            return []
+        chosen.append(best_by_fixture[fixture])
+        used.add(fixture)
+    return chosen
+
+
 def _skip(db, group, reason, baseline_ncaaf=0):
     db.execute("""INSERT INTO hr_quality_pairs(
         baseline_group_id,decision_at,bookmaker_key,baseline_policy_version,
@@ -258,10 +289,17 @@ def _pair(db, group, options, challenger_start, now):
         if not matched:
             _skip(db, group, "BASELINE_QUOTE_NOT_IN_SAME_SNAPSHOT", base_ncaaf)
             return "skipped"
-    selected = _select(ranked, count)
-    if not selected:
-        _skip(db, group, "INSUFFICIENT_DISTINCT_EVENTS", base_ncaaf)
+    selected = _select_same_fixtures(ranked, prior)
+    if len(selected) != count:
+        _skip(db, group, "MISSING_MATCHED_FIXTURE_OPTION", base_ncaaf)
         return "skipped"
+    fixture_counts = {}
+    for item in ranked:
+        key = integrity.fixture_key(item["candidate"])
+        fixture_counts[key] = fixture_counts.get(key, 0) + 1
+    for item in ranked:
+        item["detail"]["same_fixture_eligible_options"] = fixture_counts[
+            integrity.fixture_key(item["candidate"])]
 
     baseline_keys = {_identity(x) for x in prior}
     selected_keys = {_identity(x["candidate"]) for x in selected}
@@ -347,11 +385,8 @@ def _form_wrapper(previous_form):
         }
         eligible = [c for c in sources
                     if statuses.get(str(c.get("source_lane") or "")) == "ELIGIBLE"]
-        # Match baseline's pre-event safety abstention exactly: a ranked
-        # contender must not reintroduce a fixture whose eligible source
-        # contains directly opposed choices for the same market/point.
-        conflicts = integrity.conflicted_fixture_keys(eligible)
-        eligible = [c for c in eligible if integrity.fixture_key(c) not in conflicts]
+        # Keep every quoted alternative in the common HR2 source pool.
+        # Each paired decision ranks within the baseline's frozen fixtures.
         options = baseline._book_options(db, eligible, now, _dt(state["started_at"]))
         formed = skipped = 0
         for g in new_groups:
@@ -450,8 +485,11 @@ def _run_wrapper(previous_run):
 def scoreboard(db):
     _schema(db)
     state = db.fetchone("SELECT * FROM hr_quality_state WHERE id=1") or {}
+    # Keep pre-change ranking evidence archived, but never mix policy V1
+    # with the new fixture-matched V2 experiment in performance statistics.
     pairs = [dict(x) for x in db.fetchall(
-        "SELECT * FROM hr_quality_pairs ORDER BY baseline_group_id"
+        "SELECT * FROM hr_quality_pairs WHERE version=? ORDER BY baseline_group_id",
+        (VERSION,),
     )]
     done = [p for p in pairs if p["status"] == "SETTLED"]
     skipped = {}
@@ -462,16 +500,18 @@ def scoreboard(db):
     b_total = sum(float(x["baseline_pnl_units"]) for x in done)
     q_total = sum(float(x["quality_pnl_units"]) for x in done)
     delta = q_total-b_total
-    format_rows = db.fetchall("""SELECT format,COUNT(*) AS settled,
-        SUM(pnl_units) AS quality_pnl_units FROM hr_quality_formats
-        WHERE status='SETTLED' GROUP BY format ORDER BY format""")
+    format_rows = db.fetchall("""SELECT q.format,COUNT(*) AS settled,
+        SUM(q.pnl_units) AS quality_pnl_units FROM hr_quality_formats q
+        JOIN hr_quality_pairs p ON p.baseline_group_id=q.baseline_group_id
+        WHERE q.status='SETTLED' AND p.version=?
+        GROUP BY q.format ORDER BY q.format""", (VERSION,))
     base_by_format = {}
     for row in db.fetchall("""SELECT b.format,COUNT(*) AS settled,
         SUM(b.pnl_units) AS baseline_pnl_units
         FROM hr_quality_pairs p JOIN hr_portfolio_formats b
           ON p.baseline_group_id=b.group_id
-        WHERE p.status='SETTLED' AND b.status='SETTLED'
-        GROUP BY b.format ORDER BY b.format"""):
+        WHERE p.status='SETTLED' AND b.status='SETTLED' AND p.version=?
+        GROUP BY b.format ORDER BY b.format""", (VERSION,)):
         base_by_format[str(row["format"])] = dict(row)
     formats = []
     for row in format_rows:
@@ -487,9 +527,52 @@ def scoreboard(db):
         p.bookmaker_key,p.legs_n,p.candidate_count,p.overlap_count,
         p.baseline_ncaaf_count,p.quality_ncaaf_count,p.status,
         p.baseline_pnl_units,p.quality_pnl_units,p.delta_pnl_units,p.skip_reason
-        FROM hr_quality_pairs p ORDER BY p.baseline_group_id DESC LIMIT 25""")
+        FROM hr_quality_pairs p WHERE p.version=?
+        ORDER BY p.baseline_group_id DESC LIMIT 25""", (VERSION,))
+    matched_doubles = [dict(r) for r in db.fetchall("""
+        SELECT p.baseline_group_id,b.pnl_units AS baseline_pnl,
+               q.pnl_units AS quality_pnl
+        FROM hr_quality_pairs p
+        JOIN hr_portfolio_formats b ON b.group_id=p.baseline_group_id
+        JOIN hr_quality_formats q ON q.baseline_group_id=p.baseline_group_id
+        WHERE p.version=? AND p.status='SETTLED'
+          AND b.format='DOUBLE' AND q.format='DOUBLE'
+          AND b.status='SETTLED' AND q.status='SETTLED'
+        ORDER BY p.baseline_group_id""", (VERSION,))]
+
+    def double_stats(field):
+        values = [float(r[field]) for r in matched_doubles]
+        running = peak = drawdown = 0.0
+        for pnl in values:
+            running += pnl
+            peak = max(peak, running)
+            drawdown = max(drawdown, peak-running)
+        n = len(values)
+        return {
+            "settled": n,
+            "wins": sum(pnl > 1e-10 for pnl in values),
+            "hit_rate_pct": round(100*sum(pnl > 1e-10 for pnl in values)/n, 3) if n else None,
+            "roi_pct": round(100*sum(values)/n, 3) if n else None,
+            "max_drawdown_units": round(drawdown, 4),
+        }
+
+    baseline_groups = (db.fetchone(
+        "SELECT COUNT(*) AS n FROM hr_portfolio_groups WHERE policy_version=?",
+        (baseline.VERSION,),
+    ) or {}).get("n") or 0
+    paired_decisions = [p for p in pairs if p["status"] != "SKIPPED"]
     return {
         "version": VERSION, "research_only": True, "no_provider_calls": True,
+        "baseline_groups_formed": int(baseline_groups),
+        "quality_groups_formed": len(paired_decisions),
+        "ranked_changed_groups": sum(
+            int(p["overlap_count"]) < int(p["legs_n"]) for p in paired_decisions),
+        "ranked_displaced_legs": sum(
+            max(0, int(p["legs_n"])-int(p["overlap_count"])) for p in paired_decisions),
+        "matched_doubles": {
+            "baseline": double_stats("baseline_pnl"),
+            "quality": double_stats("quality_pnl"),
+        },
         "started_at": state.get("started_at"),
         "last_maintenance_at": state.get("last_maintenance_at"),
         "scoring_rules": json.loads(state.get("rules_json") or "{}"),
