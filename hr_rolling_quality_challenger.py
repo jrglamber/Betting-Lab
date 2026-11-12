@@ -485,8 +485,11 @@ def _run_wrapper(previous_run):
 def scoreboard(db):
     _schema(db)
     state = db.fetchone("SELECT * FROM hr_quality_state WHERE id=1") or {}
+    # Keep pre-change ranking evidence archived, but never mix policy V1
+    # with the new fixture-matched V2 experiment in performance statistics.
     pairs = [dict(x) for x in db.fetchall(
-        "SELECT * FROM hr_quality_pairs ORDER BY baseline_group_id"
+        "SELECT * FROM hr_quality_pairs WHERE version=? ORDER BY baseline_group_id",
+        (VERSION,),
     )]
     done = [p for p in pairs if p["status"] == "SETTLED"]
     skipped = {}
@@ -497,16 +500,18 @@ def scoreboard(db):
     b_total = sum(float(x["baseline_pnl_units"]) for x in done)
     q_total = sum(float(x["quality_pnl_units"]) for x in done)
     delta = q_total-b_total
-    format_rows = db.fetchall("""SELECT format,COUNT(*) AS settled,
-        SUM(pnl_units) AS quality_pnl_units FROM hr_quality_formats
-        WHERE status='SETTLED' GROUP BY format ORDER BY format""")
+    format_rows = db.fetchall("""SELECT q.format,COUNT(*) AS settled,
+        SUM(q.pnl_units) AS quality_pnl_units FROM hr_quality_formats q
+        JOIN hr_quality_pairs p ON p.baseline_group_id=q.baseline_group_id
+        WHERE q.status='SETTLED' AND p.version=?
+        GROUP BY q.format ORDER BY q.format""", (VERSION,))
     base_by_format = {}
     for row in db.fetchall("""SELECT b.format,COUNT(*) AS settled,
         SUM(b.pnl_units) AS baseline_pnl_units
         FROM hr_quality_pairs p JOIN hr_portfolio_formats b
           ON p.baseline_group_id=b.group_id
-        WHERE p.status='SETTLED' AND b.status='SETTLED'
-        GROUP BY b.format ORDER BY b.format"""):
+        WHERE p.status='SETTLED' AND b.status='SETTLED' AND p.version=?
+        GROUP BY b.format ORDER BY b.format""", (VERSION,)):
         base_by_format[str(row["format"])] = dict(row)
     formats = []
     for row in format_rows:
@@ -522,9 +527,52 @@ def scoreboard(db):
         p.bookmaker_key,p.legs_n,p.candidate_count,p.overlap_count,
         p.baseline_ncaaf_count,p.quality_ncaaf_count,p.status,
         p.baseline_pnl_units,p.quality_pnl_units,p.delta_pnl_units,p.skip_reason
-        FROM hr_quality_pairs p ORDER BY p.baseline_group_id DESC LIMIT 25""")
+        FROM hr_quality_pairs p WHERE p.version=?
+        ORDER BY p.baseline_group_id DESC LIMIT 25""", (VERSION,))
+    matched_doubles = [dict(r) for r in db.fetchall("""
+        SELECT p.baseline_group_id,b.pnl_units AS baseline_pnl,
+               q.pnl_units AS quality_pnl
+        FROM hr_quality_pairs p
+        JOIN hr_portfolio_formats b ON b.group_id=p.baseline_group_id
+        JOIN hr_quality_formats q ON q.baseline_group_id=p.baseline_group_id
+        WHERE p.version=? AND p.status='SETTLED'
+          AND b.format='DOUBLE' AND q.format='DOUBLE'
+          AND b.status='SETTLED' AND q.status='SETTLED'
+        ORDER BY p.baseline_group_id""", (VERSION,))]
+
+    def double_stats(field):
+        values = [float(r[field]) for r in matched_doubles]
+        running = peak = drawdown = 0.0
+        for pnl in values:
+            running += pnl
+            peak = max(peak, running)
+            drawdown = max(drawdown, peak-running)
+        n = len(values)
+        return {
+            "settled": n,
+            "wins": sum(pnl > 1e-10 for pnl in values),
+            "hit_rate_pct": round(100*sum(pnl > 1e-10 for pnl in values)/n, 3) if n else None,
+            "roi_pct": round(100*sum(values)/n, 3) if n else None,
+            "max_drawdown_units": round(drawdown, 4),
+        }
+
+    baseline_groups = (db.fetchone(
+        "SELECT COUNT(*) AS n FROM hr_portfolio_groups WHERE policy_version=?",
+        (baseline.VERSION,),
+    ) or {}).get("n") or 0
+    paired_decisions = [p for p in pairs if p["status"] != "SKIPPED"]
     return {
         "version": VERSION, "research_only": True, "no_provider_calls": True,
+        "baseline_groups_formed": int(baseline_groups),
+        "quality_groups_formed": len(paired_decisions),
+        "ranked_changed_groups": sum(
+            int(p["overlap_count"]) < int(p["legs_n"]) for p in paired_decisions),
+        "ranked_displaced_legs": sum(
+            max(0, int(p["legs_n"])-int(p["overlap_count"])) for p in paired_decisions),
+        "matched_doubles": {
+            "baseline": double_stats("baseline_pnl"),
+            "quality": double_stats("quality_pnl"),
+        },
         "started_at": state.get("started_at"),
         "last_maintenance_at": state.get("last_maintenance_at"),
         "scoring_rules": json.loads(state.get("rules_json") or "{}"),
