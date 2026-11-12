@@ -105,3 +105,86 @@ def test_priority_watch_not_injected_into_homepage_but_audit_preserved():
     assert "/research-priorities" in code
     assert "oe.ensure_watch_cohorts = _ensure_watch" in code
     assert "_patch_exports()" in code
+
+
+def test_main_hr_comparison_is_mounted_near_top_and_shows_real_matched_data(monkeypatch):
+    import hr_rolling_quality_challenger as challenger
+    import hr_portfolio_queues as queues
+    import hit_rate_multiples_lab as hr
+
+    monkeypatch.setattr(challenger, "scoreboard", lambda db: {
+        "baseline_groups_formed": 8, "quality_groups_formed": 6,
+        "ranked_displaced_legs": 3, "ranked_changed_groups": 2,
+        "matched_doubles": {
+            "baseline": {"settled": 4, "hit_rate_pct": 50.0, "roi_pct": -7.5,
+                         "max_drawdown_units": 2.5},
+            "quality": {"settled": 4, "hit_rate_pct": 75.0, "roi_pct": 18.0,
+                        "max_drawdown_units": 1.0},
+        },
+    })
+    monkeypatch.setattr(queues, "read", lambda db, **kwargs: {
+        "snapshot_at": "2026-11-12T10:00:00+00:00",
+        "competing_fixtures_observed": 5,
+    })
+    monkeypatch.setattr(hr, "scoreboard", lambda db: {
+        "streams": {"HR2": {"DOUBLE": {"cards": 22}}},
+    })
+    page = (
+        "<body><h1>Hit-Rate Multiples Lab</h1><div class='sub'>Intro</div>"
+        "<div class='grid'>Key metrics</div>"
+        "<div class='section-grid'>Policies</div>"
+        "<div class='panel'><h2>Frozen design backtest</h2></div></body>"
+    )
+    updated = ui.main_hr_comparison_panel(page, object())
+    assert updated.index("Key metrics") < updated.index("HR2 strategy comparison")
+    assert updated.index("HR2 strategy comparison") < updated.index("Policies")
+    assert "FIFO Portfolio Shadow" in updated
+    assert "Quality Challenger" in updated
+    assert "50.0%" in updated and "75.0%" in updated
+    assert "-7.5%" in updated and "18.0%" in updated
+    assert "2.50u" in updated and "1.00u" in updated
+    assert "Competing fixtures now" in updated and ">5</div>" in updated
+    assert "Selections changed" in updated and ">3</div>" in updated
+    assert "75.0%" in updated
+    assert "standard HR2 Double cards: <strong>22</strong>" in updated
+    assert "not these paired portfolio selections" in updated
+    assert "id='hr2-strategy-comparison'" in updated
+    assert ui.main_hr_comparison_panel(updated, object()) == updated
+
+
+def test_main_hr_comparison_shows_no_fake_results_when_unsettled(monkeypatch):
+    import hr_rolling_quality_challenger as challenger
+    import hr_portfolio_queues as queues
+    import hit_rate_multiples_lab as hr
+
+    monkeypatch.setattr(challenger, "scoreboard", lambda db: {
+        "baseline_groups_formed": 2, "quality_groups_formed": 0,
+        "ranked_displaced_legs": 0, "ranked_changed_groups": 0,
+        "matched_doubles": {
+            "baseline": {"settled": 0, "hit_rate_pct": None, "roi_pct": None},
+            "quality": {"settled": 0, "hit_rate_pct": None, "roi_pct": None},
+        },
+    })
+    monkeypatch.setattr(queues, "read", lambda db, **kwargs: {
+        "snapshot_at": None,
+    })
+    monkeypatch.setattr(hr, "scoreboard", lambda db: {
+        "streams": {"HR2": {"DOUBLE": {"cards": 0}}},
+    })
+    panel = ui.main_hr_strategy_comparison(object())
+    assert "Awaiting newly settled matched doubles" in panel
+    assert "not yet available" in panel
+    assert "<td>—</td><td>—</td>" in panel
+    assert "0.0%" in panel  # Only comparison formation coverage is genuinely zero.
+
+
+def test_main_hr_comparison_failure_does_not_break_hr_page(monkeypatch):
+    import hr_rolling_quality_challenger as challenger
+
+    def fail(db):
+        raise RuntimeError("test unavailable")
+    monkeypatch.setattr(challenger, "scoreboard", fail)
+    page = "<body><div class='section-grid'>Other HR sections</div></body>"
+    updated = ui.main_hr_comparison_panel(page, object())
+    assert "Comparison temporarily unavailable" in updated
+    assert "Other HR sections" in updated
