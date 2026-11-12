@@ -283,7 +283,9 @@ def queue_panels(snapshot: dict[str, Any] | None, *, view: str) -> str:
         "options for the same match are <strong>alternatives</strong>, not "
         "independent legs. Identical options from duplicate feeds are merged. "
         "<strong>Opposing predictions</strong> at the same market and line "
-        "trigger a portfolio abstention until direction has independent evidence."
+        "remain visible and eligible; each strategy selects only one option "
+        "per fixture. The quality ranking measures quote execution, not "
+        "a validated probability of winning."
         "</div>"
         "<div class='grid lab-metrics'>" +
         card("Duplicate source rows hidden",
@@ -292,9 +294,12 @@ def queue_panels(snapshot: dict[str, Any] | None, *, view: str) -> str:
         card("Missing market lines",
              _int(snapshot.get("missing_line_candidates", 0)),
              "Not permitted into new portfolio cards") +
-        card("Conflicted fixtures blocked",
-             _int(snapshot.get("conflicting_fixtures_abstained", 0)),
-             "No new portfolio cards or alerts from these fixtures") +
+        card("Fixtures with opposing options",
+             _int(snapshot.get("competing_fixtures_observed", 0)),
+             "Alternatives retained, not blocked") +
+        card("Selections in those fixtures",
+             _int(snapshot.get("competing_candidate_options", 0)),
+             "One per fixture can enter any multiple") +
         "</div>"
     )
 
@@ -342,8 +347,6 @@ def queue_panels(snapshot: dict[str, Any] | None, *, view: str) -> str:
         states = {r.get("queue_status") for r in g["options"]}
         if states == {"WATCH_OR_PAUSED"}:
             return "WATCH/PAUSED source"
-        if "DIRECT_OPPOSITION_ABSTAIN" in states:
-            return "Opposing same-market/line candidates — PORTFOLIO ABSTAINS"
         if "MISSING_MARKET_LINE" in states:
             return "Missing totals/handicap line — NOT actionable"
         return "Waiting for valid fresh bookmaker price"
@@ -484,8 +487,8 @@ def render_quality(s: dict[str, Any], queue: dict[str, Any] | None = None) -> st
     body = page_open(
         "Rolling Quality Challenger", active="hr-quality-challenger",
         heading="Rolling Quality Challenger",
-        sub="A matched forward test of choosing the strongest currently available "
-            "price-quality signals against the chronological first-available baseline.",
+        sub="A forward test of ranking alternative selections within the same "
+            "fixtures as the chronological first-available baseline.",
     )
     body += (
         "<div class='grid lab-metrics'>" +
@@ -502,11 +505,42 @@ def render_quality(s: dict[str, Any], queue: dict[str, Any] | None = None) -> st
         "</div>"
         "<div class='lab-summary'><strong>Fair comparison:</strong> same bookmaker, quote "
         "window, decision time, number of legs and £10 total stake. "
-        "<strong>Initial experimental rank:</strong> 55% price premium above frozen "
+        "<strong>Matched underlying fixtures:</strong> compare alternate market picks "
+        "for the same games, not unrelated games. "
+        "<strong>Experimental quote rank:</strong> 55% price premium above frozen "
         "minimum · 35% quote freshness · 10% bookmaker availability. "
         "This is a heuristic, not a calibrated win-probability or EV model.</div>"
     )
     body += queue_panels(queue, view="quality")
+    doubles = s.get("matched_doubles") or {}
+    chrono_double = doubles.get("baseline") or {}
+    ranked_double = doubles.get("quality") or {}
+    def pct(value):
+        return _num(value, 1, suffix="%") if value is not None else "—"
+    body += panel(
+        "Matched double comparison",
+        note="Only settled, same-bookmaker, same-fixture decisions; 1u per double",
+        contents="<div class='grid lab-metrics'>" +
+        card("Baseline / ranked formed",
+             f"{_int(s.get('baseline_groups_formed'))} / {_int(s.get('quality_groups_formed'))}",
+             "Research groups; quality skips must be audited") +
+        card("Doubles settled",
+             _int(chrono_double.get("settled")),
+             "Both sides of the paired decision") +
+        card("Baseline / ranked hit rate",
+             pct(chrono_double.get("hit_rate_pct")) + " / " +
+             pct(ranked_double.get("hit_rate_pct"))) +
+        card("Baseline / ranked ROI",
+             pct(chrono_double.get("roi_pct")) + " / " +
+             pct(ranked_double.get("roi_pct"))) +
+        card("Baseline / ranked max DD",
+             _num(chrono_double.get("max_drawdown_units"), 2, suffix="u") + " / " +
+             _num(ranked_double.get("max_drawdown_units"), 2, suffix="u")) +
+        card("Different selections chosen",
+             _int(s.get("ranked_displaced_legs")),
+             _int(s.get("ranked_changed_groups")) + " affected groups") +
+        "</div>",
+    )
     body += panel(
         "Paired decision health",
         note="No retrospective re-selection",
