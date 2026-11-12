@@ -552,8 +552,11 @@ def install(app, db):
     previous_page = hr._page
 
     def page_with_link(web_module):
-        from hr_portfolio_presentation import main_hr_quicklinks
-        return main_hr_quicklinks(previous_page(web_module))
+        from hr_portfolio_presentation import (
+            main_hr_quicklinks, main_hr_comparison_panel,
+        )
+        html = main_hr_quicklinks(previous_page(web_module))
+        return main_hr_comparison_panel(html, web_module.db)
 
     hr._page = page_with_link
     _INSTALLED = True
