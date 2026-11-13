@@ -208,8 +208,8 @@ def _send_telegram(
     # standard HR2 bet-ready cards may use this Telegram transport. Portfolio
     # Shadow, Quality, HR1, Live Yankee, Heinz legacy, XS1/2, diagnostics and
     # connection tests are all rejected even if old worker hooks run.
-    if source != "HR2_BET_READY":
-        raise RuntimeError("TELEGRAM_SOURCE_DISABLED: HR2_BET_READY_ONLY")
+    if source != "POCKET_MULTIPLES":
+        raise RuntimeError("TELEGRAM_SOURCE_DISABLED: POCKET_MULTIPLES_ONLY")
     endpoint = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     body = parse.urlencode({
         "chat_id": chat_id,
