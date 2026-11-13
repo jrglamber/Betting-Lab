@@ -181,6 +181,12 @@ def install(app,db,settings):
         info=status(db)
         panels="".join(f"<section style='padding:20px;border:1px solid #ddd;margin:12px 0;border-radius:12px'><h2>{escape(p)}</h2><pre>{escape(str(v))}</pre></section>" for p,v in info["streams"].items())
         return HTMLResponse("<html><head><meta name='viewport' content='width=device-width,initial-scale=1'></head><body style='font:16px system-ui;max-width:900px;margin:30px auto;padding:12px'><a href='/hit-rate-multiples'>← Hit Rate Lab</a><h1>Pocket Multiples</h1><p>Forward-only · 24-hour chronological grouping · manual betting only · HR2 research remains active</p>"+panels+"</body></html>")
+    original_page=hr._page
+    def pocket_lab_page(web_module):
+        html=original_page(web_module)
+        link="<div class='panel'><h2>Pocket Multiples</h2><p>EuroLeague 24h doubles and NCAAF 24h Yankees. HR2 research continues.</p><a href='/hit-rate-multiples/pocket-multiples'>Open Pocket Multiples</a></div>"
+        return html.replace("</body>",link+"</body>",1)
+    hr._page=pocket_lab_page
     # Preserve existing HR2 worker and research; run after its formation cycle.
     previous=hr._form
     def wrapped(db_obj,now):
