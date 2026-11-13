@@ -336,6 +336,18 @@ except Exception as exc:
     hr2_telegram_only = {"installed": False, "error": f"{type(exc).__name__}: {exc}"}
 print(f"HR2_TELEGRAM_ONLY_INSTALL {hr2_telegram_only}", flush=True)
 
+# Switch outbound routing only after the new pocket streams are installed.
+try:
+    from pocket_multiples_patch import install as install_pocket_multiples
+    pocket_multiples = install_pocket_multiples(
+        base.curated.base_app.app,
+        base.curated.base_app.db,
+        base.curated.base_app.web_module.settings,
+    )
+except Exception as exc:
+    pocket_multiples = {"installed": False, "error": f"{type(exc).__name__}: {exc}"}
+print(f"POCKET_MULTIPLES_INSTALL {pocket_multiples}", flush=True)
+
 # Read-only same-book candidate queue visibility for chronological Portfolio
 # Shadow and the quality-ranked challenger, using the existing quote cache.
 try:
