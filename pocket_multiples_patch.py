@@ -179,13 +179,58 @@ def install(app,db,settings):
     @app.get("/hit-rate-multiples/pocket-multiples",response_class=HTMLResponse)
     def pocket_page():
         info=status(db)
-        panels="".join(f"<section style='padding:20px;border:1px solid #ddd;margin:12px 0;border-radius:12px'><h2>{escape(p)}</h2><pre>{escape(str(v))}</pre></section>" for p,v in info["streams"].items())
-        return HTMLResponse("<html><head><meta name='viewport' content='width=device-width,initial-scale=1'></head><body style='font:16px system-ui;max-width:900px;margin:30px auto;padding:12px'><a href='/hit-rate-multiples'>← Hit Rate Lab</a><h1>Pocket Multiples</h1><p>Forward-only · 24-hour chronological grouping · manual betting only · HR2 research remains active</p>"+panels+"</body></html>")
+        def table(headers,rows,empty):
+            head="".join("<th>"+escape(h)+"</th>" for h in headers)
+            body="".join("<tr>"+"".join("<td>"+escape(str(v if v is not None else "—"))+"</td>" for v in row)+"</tr>" for row in rows)
+            if not body:body="<tr><td colspan='"+str(len(headers))+"'>"+escape(empty)+"</td></tr>"
+            return "<div class='table-wrap'><table><thead><tr>"+head+"</tr></thead><tbody>"+body+"</tbody></table></div>"
+        overview=[]
+        for key,title in (("EUROLEAGUE_DOUBLE","EuroLeague · 24h Doubles"),("NCAAF_YANKEE","NCAAF · 24h Yankees")):
+            x=info["streams"][key]
+            overview.append((title,x["queued"],x["cards"],x["settled"],f'{x["profit_units"]:+.2f}u',
+                             "—" if x["roi_pct"] is None else f'{x["roi_pct"]:+.1f}%',x["telegram_sent"]))
+        summary="<div class='panel'><h2>Performance by pocket</h2>"+table(
+            ["Pocket","Queue","Cards","Settled","P&L","ROI","Telegram sent"],overview,"No activity yet")+"</div>"
+        panels=[]
+        for pocket,title in (("EUROLEAGUE_DOUBLE","EuroLeague · 24-hour Doubles"),("NCAAF_YANKEE","NCAAF · 24-hour Yankees")):
+            queued=[dict(x) for x in db.fetchall("""SELECT * FROM pocket_multiple_legs WHERE pocket=? AND status='QUEUED'
+                ORDER BY first_seen_at,id LIMIT 100""",(pocket,))]
+            cards=[dict(x) for x in db.fetchall("""SELECT * FROM pocket_multiple_cards WHERE pocket=?
+                ORDER BY id DESC LIMIT 40""",(pocket,))]
+            queue_rows=[(x["home_team"]+" v "+x["away_team"] if x.get("home_team") and x.get("away_team") else x["event_id"],
+                x["selection"],f'{float(x["odds"]):.2f}',x["bookmaker_key"],str(x["commence_time"])[:16],str(x["first_seen_at"])[:16])
+                for x in queued]
+            card_rows=[]
+            leg_panels=[]
+            for card in cards:
+                legs=[dict(x) for x in db.fetchall("""SELECT * FROM pocket_multiple_legs WHERE card_id=?
+                    ORDER BY id""",(card["id"],))]
+                card_rows.append(("#"+str(card["id"]),str(card["created_at"])[:16],card["bookmaker_key"],
+                    card["status"],"—" if card.get("pnl_units") is None else f'{float(card["pnl_units"]):+.2f}u',
+                    card["telegram_status"]))
+                detail=table(["Fixture","Selection","Odds","Kickoff"],[
+                    ((x.get("home_team") or "?")+" v "+(x.get("away_team") or "?"),x["selection"],
+                     f'{float(x["odds"]):.2f}',str(x.get("commence_time") or "")[:16]) for x in legs],"No legs recorded")
+                leg_panels.append("<details class='panel'><summary>Card #"+str(card["id"])+" · "+escape(card["status"])+
+                                  " · "+escape(card["bookmaker_key"])+"</summary>"+detail+"</details>")
+            panels.append("<div class='panel'><h2>"+title+"</h2><div class='muted'>Chronological formation, one fixture per leg. Research only; prices may move.</div>"+
+                "<h3>Current selection queue</h3>"+table(["Fixture","Pick","Odds","Bookmaker","Kickoff","First seen"],
+                    queue_rows,"No qualifying queued selections.")+
+                "<h3>Formed cards and results</h3>"+table(["Card","Created","Bookmaker","Status","P&L","Telegram"],
+                    card_rows,"No cards formed yet.")+"".join(leg_panels)+"</div>")
+        style=hr.__dict__.get("_POCKET_UNUSED","")
+        import web as web_module
+        return HTMLResponse("<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Pocket Multiples | Hit Rate Lab</title><style>"+
+            web_module.BASE_STYLE+"</style></head><body><a href='/hit-rate-multiples'>← Hit Rate Lab</a>"+
+            "<h1>Pocket Multiples <span class='pill'>FORWARD RESEARCH</span></h1>"+
+            "<div class='sub'>EuroLeague doubles and NCAAF Yankees · 24-hour formation window · manual placement only · HR2 continues independently.</div>"+
+            summary+"".join(panels)+"</body></html>")
     original_page=hr._page
     def pocket_lab_page(web_module):
         html=original_page(web_module)
-        link="<div class='panel'><h2>Pocket Multiples</h2><p>EuroLeague 24h doubles and NCAAF 24h Yankees. HR2 research continues.</p><a href='/hit-rate-multiples/pocket-multiples'>Open Pocket Multiples</a></div>"
-        return html.replace("</body>",link+"</body>",1)
+        link="<div class='panel'><h2>Pocket Multiples — 24-hour studies</h2><div class='summary'>EuroLeague doubles and NCAAF Yankees · forward cards, selection queues, settlements and Telegram tracking. HR2 research continues.</div><a href='/hit-rate-multiples/pocket-multiples'>Open Pocket Multiples →</a></div>"
+        marker="<div class='grid'>"
+        return html.replace(marker,link+marker,1) if marker in html else html.replace("</body>",link+"</body>",1)
     hr._page=pocket_lab_page
     # Preserve existing HR2 worker and research; run after its formation cycle.
     previous=hr._form
