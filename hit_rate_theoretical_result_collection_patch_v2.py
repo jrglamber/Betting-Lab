@@ -118,9 +118,10 @@ def _hr2_quote_observation_events(
                     and cutoff <= start <= now):
                 due.append(event)
         return due
-    except Exception:
-        # Do not interfere with normal HR-only settlement when observations
-        # are absent in older schemas. The main HR2 maintenance exposes errors.
+    except Exception as exc:
+        # Preserve normal HR-only collection, but never fail silently: surface
+        # an explicit warning so quote-only result coverage can be monitored.
+        print(f"HR2_QUOTE_RESULT_LOOKUP_ERROR {sanitize_sensitive_text(exc)}", flush=True)
         return []
 
 
