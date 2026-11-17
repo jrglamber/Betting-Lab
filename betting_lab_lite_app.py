@@ -74,6 +74,10 @@ def schema():
 def record(kind, at, status, cost=0, info=""):
     db.execute("INSERT INTO lite_runs(at,kind,status,credits,info) VALUES(?,?,?,?,?)",
                (at.isoformat(), kind, status, int(cost), str(info)[:350]))
+    # Summarised, redacted operational evidence visible in Railway logs.
+    print("BETTING_LITE_RUN kind=" + kind + " status=" + status +
+          " credits=" + str(int(cost)) + " info=" +
+          sanitize_sensitive_text(str(info)[:250]), flush=True)
 
 
 def latest(kind):
