@@ -62,6 +62,69 @@ def _recently_polled(db, run_type: str, sport_key: str, now: datetime) -> bool:
     return bool(last and (now - last).total_seconds() < POLL_INTERVAL_SECONDS)
 
 
+def _hr2_quote_observation_events(
+    db, *, source_table: str, event_table: str, result_table: str,
+    now: datetime, limit: int = 300,
+) -> list[dict[str, Any]]:
+    """Find post-kickoff, HR2-quote-only events needing authoritative results.
+
+    The original HR-only collectors query hit_rate_legs; quote-rule observations
+    instead persist candidate IDs and can refer to events in no hit_rate_cards.
+    Read from existing frozen candidate identity, never form new bets.
+    Use only scores eligible for the existing API's three-day lookback.
+    """
+    try:
+        observations = db.fetchall(
+            "SELECT candidate_ids_json FROM hr2_relaxed_double_observations "
+            "WHERE status='AWAITING_SETTLEMENT' ORDER BY id DESC LIMIT ?",
+            (limit,),
+        )
+        ids = set()
+        for observation in observations:
+            try:
+                ids.update(int(i) for i in json.loads(observation["candidate_ids_json"]))
+            except (ValueError, TypeError, KeyError):
+                continue
+        if not ids:
+            return []
+        chosen = sorted(ids)[:800]
+        placeholders = ",".join("?" for _ in chosen)
+        candidates = db.fetchall(
+            "SELECT event_id FROM hit_rate_candidates "
+            "WHERE source_table=? AND id IN (" + placeholders + ")",
+            (source_table, *chosen),
+        )
+        event_ids = sorted(set(
+            str(c.get("event_id") or "") for c in candidates if c.get("event_id")
+        ))
+        if not event_ids:
+            return []
+        placeholders = ",".join("?" for _ in event_ids)
+        events = db.fetchall(
+            "SELECT * FROM " + event_table + " WHERE event_id IN (" + placeholders + ")",
+            tuple(event_ids),
+        )
+        existing_results = db.fetchall(
+            "SELECT event_id FROM " + result_table + " WHERE event_id IN (" + placeholders + ")",
+            tuple(event_ids),
+        )
+        resolved = {str(r["event_id"]) for r in existing_results}
+        cutoff = now - timedelta(days=3)
+        due = []
+        for raw in events:
+            event = dict(raw)
+            start = _parse(event.get("commence_time"))
+            if (event.get("event_id") not in resolved and start is not None
+                    and cutoff <= start <= now):
+                due.append(event)
+        return due
+    except Exception as exc:
+        # Preserve normal HR-only collection, but never fail silently: surface
+        # an explicit warning so quote-only result coverage can be monitored.
+        print(f"HR2_QUOTE_RESULT_LOOKUP_ERROR {sanitize_sensitive_text(exc)}", flush=True)
+        return []
+
+
 def _pending_hr_tennis(db, now: datetime) -> list[dict[str, Any]]:
     cutoff = now - timedelta(minutes=30)
     try:
@@ -81,7 +144,15 @@ def _pending_hr_tennis(db, now: datetime) -> list[dict[str, Any]]:
         )
     except Exception:
         rows = []
-    return [dict(x) for x in rows]
+    existing = {str(x["event_id"]): dict(x) for x in rows}
+    for event in _hr2_quote_observation_events(
+        db, source_table="THEORETICAL_TENNIS_H2H",
+        event_table="tennis_events", result_table="tennis_results", now=now,
+    ):
+        start = _parse(event.get("commence_time"))
+        if start is not None and start <= cutoff:
+            existing.setdefault(str(event["event_id"]), event)
+    return sorted(existing.values(), key=lambda e: str(e.get("commence_time") or ""))
 
 
 def _pending_hr_multisport(db, now: datetime) -> list[dict[str, Any]]:
@@ -101,9 +172,15 @@ def _pending_hr_multisport(db, now: datetime) -> list[dict[str, Any]]:
     except Exception:
         rows = []
 
+    all_events = {str(x["event_id"]): dict(x) for x in rows}
+    for event in _hr2_quote_observation_events(
+        db, source_table="THEORETICAL_MULTISPORT_H2H",
+        event_table="multisport_events", result_table="multisport_results", now=now,
+    ):
+        all_events.setdefault(str(event["event_id"]), event)
+
     due = []
-    for raw in rows:
-        event = dict(raw)
+    for event in all_events.values():
         start = _parse(event.get("commence_time"))
         if start is None:
             continue
