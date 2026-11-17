@@ -158,33 +158,81 @@ def observe(db, candidates, now, max_candidates=30):
             counts[variant+"_new"] += 1
     return counts
 
+_SETTLE_CURSOR_ID = 0
+
+
 def settle(db, now=None, max_rows=100):
-    """Settle prospective doubles from authoritative source results only."""
+    """Settle prospective doubles from authoritative, exact-event source results.
+
+    A source_table/source_id pair alone is insufficient for theoretical sources:
+    the canonical result fallback needs the candidate's event, selection and
+    market identity. Rehydrate each frozen candidate and verify its recorded
+    source identity before resolving the outcome. No provider calls are made.
+    """
     import json
     import hit_rate_multiples_lab as hr
+
+    global _SETTLE_CURSOR_ID
     now = _stamp(now or datetime.now(timezone.utc))
-    rows = db.fetchall(
+    max_rows = max(1, int(max_rows))
+    # Rotate through pending observations rather than permanently revisiting
+    # the oldest 100 while newer settled events starve.
+    query = (
         "SELECT * FROM hr2_relaxed_double_observations "
-        "WHERE status='AWAITING_SETTLEMENT' ORDER BY id LIMIT ?",
-        (max_rows,),
+        "WHERE status='AWAITING_SETTLEMENT' AND id>? ORDER BY id LIMIT ?"
     )
+    rows = db.fetchall(query, (_SETTLE_CURSOR_ID, max_rows))
+    if not rows:
+        _SETTLE_CURSOR_ID = 0
+        rows = db.fetchall(query, (0, max_rows))
+    if rows:
+        _SETTLE_CURSOR_ID = int(rows[-1]["id"])
+
     settled = 0
+    missing_candidates = 0
+    missing_results = 0
     for row in rows:
         try:
             sources = json.loads(row["candidate_sources_json"])
-            if len(sources) != 2:
+            candidate_ids = json.loads(row["candidate_ids_json"])
+            if len(sources) != 2 or len(candidate_ids) != 2:
                 continue
-            results = [hr._source_result(db, source) for source in sources]
-            normalized = [hr._result(x) for x in results]
-            if any(x is None for x in normalized):
+
+            legs = []
+            for candidate_id, source in zip(candidate_ids, sources):
+                candidate = db.fetchone(
+                    "SELECT * FROM hit_rate_candidates WHERE id=?",
+                    (int(candidate_id),),
+                )
+                if not candidate:
+                    break
+                leg = dict(candidate)
+                if (
+                    str(leg.get("source_table") or "") != str(source.get("source_table") or "")
+                    or str(leg.get("source_id")) != str(source.get("source_id"))
+                ):
+                    break
+                legs.append(leg)
+            if len(legs) != 2:
+                missing_candidates += 1
                 continue
-            if any(x in ("VOID", "PUSH") for x in normalized):
-                # A void leg changes effective double odds; exclude from
-                # comparable double ROI rather than silently treat as a loss.
+
+            # The installed canonical fallback is authoritative and requires
+            # full identity. Never infer a result from expired/consumed status.
+            normalized = [hr._result(hr._source_result(db, leg)) for leg in legs]
+            if any(result is None for result in normalized):
+                missing_results += 1
+                continue
+
+            if any(result in ("VOID", "PUSH") for result in normalized):
                 status, pnl = "VOID", None
             else:
                 status = "SETTLED"
-                pnl = float(row["combined_odds"])-1 if all(x == "WIN" for x in normalized) else -1.0
+                pnl = (
+                    float(row["combined_odds"]) - 1
+                    if all(result == "WIN" for result in normalized)
+                    else -1.0
+                )
             db.execute(
                 "UPDATE hr2_relaxed_double_observations SET "
                 "status=?, settled_at=?, pnl_units=?, leg_results_json=? WHERE id=?",
@@ -192,5 +240,11 @@ def settle(db, now=None, max_rows=100):
             )
             settled += 1
         except (KeyError, TypeError, ValueError):
-            continue
-    return {"settled_or_voided": settled}
+            missing_candidates += 1
+
+    return {
+        "settled_or_voided": settled,
+        "awaiting_source_results": missing_results,
+        "missing_or_mismatched_candidates": missing_candidates,
+        "rows_scanned": len(rows),
+    }
