@@ -69,6 +69,33 @@ class LiteSelectionTests(unittest.TestCase):
         self.assertGreaterEqual(lite.ODDS_HOURS,4)
 
 
+    def test_paid_quote_polling_targets_closing_prices_without_burning_idle_credits(self):
+        from unittest.mock import patch
+        before=datetime(2026,12,14,12,tzinfo=timezone.utc)
+        for ahead, expected in ((2,10),(20,20),(48,60)):
+            with patch.object(lite,"db") as db:
+                db.fetchone.return_value={"next_game":(before+timedelta(hours=ahead)).isoformat()}
+                self.assertEqual(round(lite.odds_poll_hours(before)*60),expected)
+        with patch.object(lite,"db") as db:
+            db.fetchone.return_value={"next_game":None}
+            self.assertEqual(round(lite.odds_poll_hours(before)*60),60)
+        after=datetime(2026,12,15,12,tzinfo=timezone.utc)
+        with patch.object(lite,"db") as db:
+            self.assertGreaterEqual(lite.odds_poll_hours(after),6)
+            db.fetchone.assert_not_called()
+        self.assertGreater(lite.PAID_CAP,30)
+
+    def test_provider_balance_probe_is_zero_cost(self):
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        with patch.object(lite,"api") as api, patch.object(lite,"record") as record:
+            api.api_key="test-only"
+            api.sports.return_value=SimpleNamespace(remaining=98765,used=1235)
+            lite.probe_provider_balance()
+            api.sports.assert_called_once_with()
+            self.assertEqual(record.call_args.args[3],0)
+            self.assertIn("provider_remaining=98765",record.call_args.args[4])
+
     def test_live_execution_components_are_not_imported(self):
         import sys
         self.assertNotIn("web",sys.modules)
