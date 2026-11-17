@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timedelta, timezone
 from html import escape
 from io import StringIO
-from statistics import mean
+from statistics import mean, median
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, Response
@@ -73,7 +73,9 @@ def schema():
         estimated_edge_pct DOUBLE PRECISION NOT NULL, reference_books INTEGER NOT NULL,
         commission_assumption DOUBLE PRECISION NOT NULL,
         result TEXT, home_score INTEGER, away_score INTEGER,
-        pnl_units DOUBLE PRECISION, settled_at TEXT)""")
+        pnl_units DOUBLE PRECISION, settled_at TEXT,
+        closing_odds DOUBLE PRECISION, closing_at TEXT,
+        closing_clv_pct DOUBLE PRECISION)""")
     db.execute("""CREATE TABLE IF NOT EXISTS lite_quotes(
         event_id TEXT NOT NULL, captured_at TEXT NOT NULL,
         bookmaker_key TEXT NOT NULL, selection TEXT NOT NULL,
@@ -328,9 +330,38 @@ def odds_poll_hours(when):
     return ODDS_HOURS
 
 
+def refresh_closing_prices(when):
+    """Freeze actual same-book pre-tipoff price; never use an in-play quote."""
+    due = db.fetchall("""SELECT event_id,commence_time,selection,bookmaker_key,entry_odds
+        FROM lite_picks WHERE closing_odds IS NULL AND commence_time<=?
+        AND commence_time>=?""",
+        (when.isoformat(),(when-timedelta(days=4)).isoformat()))
+    written = 0
+    for pick in due:
+        kickoff = stamp(pick["commence_time"])
+        if kickoff is None:
+            continue
+        quote = db.fetchone("""SELECT price,captured_at FROM lite_quotes
+            WHERE event_id=? AND selection=? AND bookmaker_key=?
+              AND captured_at<=? AND captured_at>=?
+            ORDER BY captured_at DESC LIMIT 1""",
+            (pick["event_id"],pick["selection"],pick["bookmaker_key"],
+             kickoff.isoformat(),(kickoff-timedelta(minutes=90)).isoformat()))
+        if not quote or float(quote["price"])<=1:
+            continue
+        closing=float(quote["price"])
+        pct=(float(pick["entry_odds"])/closing-1)*100
+        db.execute("""UPDATE lite_picks SET closing_odds=?,closing_at=?,closing_clv_pct=?
+            WHERE event_id=? AND closing_odds IS NULL""",
+            (closing,quote["captured_at"],pct,pick["event_id"]))
+        written+=1
+    return written
+
+
 def cycle():
     when=now_utc()
     try:
+        refresh_closing_prices(when)
         if is_due("results",RESULT_HOURS,when):
             poll_results(when)
         if is_due("odds",odds_poll_hours(when),when):
@@ -373,12 +404,16 @@ def summary():
                        "pnl":round(gpnl,2),
                        "roi":round(100*gpnl/len(rows),2) if rows else None})
     last50=settled[:50]
+    with_close = [p for p in settled if p.get("closing_clv_pct") is not None]
     return {
         "mode":"LITE","research_only":True,"live_execution":False,
         "sport":SPORT,"bands":groups,"observed":len(all_rows),
         "settled":len(settled),"pnl_units":round(pnl,2),
         "roi":round(100*pnl/len(settled),2) if settled else None,
         "rolling_50_roi":round(100*sum(float(p["pnl_units"] or 0) for p in last50)/len(last50),2) if last50 else None,
+        "closing_line_sample":len(with_close),
+        "median_clv_pct":round(median(float(p["closing_clv_pct"]) for p in with_close),3) if with_close else None,
+        "beat_close_pct":round(100*sum(float(p["closing_clv_pct"])>0 for p in with_close)/len(with_close),1) if with_close else None,
         "used_credits_today":used_today(now_utc()),"daily_credit_cap":credit_cap(now_utc()),
         "storage":"persistent SQLite /data","migration":db.fetchone("SELECT * FROM lite_migration_status WHERE id=1"),
         "odds":latest("odds"),"results":latest("results"),
@@ -411,7 +446,7 @@ def export_csv():
           "selection","bookmaker_key","bookmaker_title","entry_odds",
           "reference_probability","estimated_edge_pct","reference_books",
           "commission_assumption","result","home_score","away_score",
-          "pnl_units","settled_at")
+          "pnl_units","settled_at","closing_odds","closing_at","closing_clv_pct")
     io=StringIO()
     out=csv.DictWriter(io,fieldnames=cols,extrasaction="ignore")
     out.writeheader()
@@ -471,6 +506,11 @@ No legacy collectors, HR2, multiples, Telegram or execution bots.</p>
 <div class='panel'><h2>Current and settled selections</h2><div class='scroll'><table>
 <thead><tr><th>Fixture</th><th>Pick</th><th>Bookmaker</th><th>Odds</th><th>Est. edge</th><th>Result</th><th>P&amp;L</th></tr></thead>
 <tbody>"""+("".join(body) or "<tr><td colspan='7'>No qualifying new selections yet.</td></tr>")+"""</tbody></table></div></div>
+<div class='panel'><h2>Closing-line evidence</h2>
+<p>Compared at the same bookmaker, at most 90 minutes before tip-off.
+Measured: """+str(s["closing_line_sample"])+""" settled selections.
+Median CLV: """+pct(s["median_clv_pct"])+""".
+Beat closing price: """+pct(s["beat_close_pct"])+""". Missing qualifying close quotes remain unscored.</p></div>
 <div class='panel'><h2>Operations and controls</h2><p>Latest odds scan: """+e(last.get("at"))+" · "+e(last.get("status"))+""".
 Odds every """+str(ODDS_HOURS)+""" hours; results every """+str(RESULT_HOURS)+""" hours if due.
 API credit ceiling """+str(credit_cap(now_utc()))+""" credits/day.
