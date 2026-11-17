@@ -375,6 +375,22 @@ def refresh_closing_prices(when):
     return written
 
 
+def probe_provider_balance():
+    """Read quota headers from provider's free /sports endpoint on startup."""
+    when = now_utc()
+    if not api.api_key:
+        record("provider_balance",when,"CONFIG_ERROR",0,"Missing ODDS_API_KEY")
+        return
+    try:
+        data=api.sports()
+        remain=data.remaining if data.remaining is not None else "unknown"
+        used=data.used if data.used is not None else "unknown"
+        record("provider_balance",when,"OK",0,
+               f"provider_remaining={remain}; provider_used={used}; verify renewal separately")
+    except Exception as exc:
+        record("provider_balance",when,"ERROR",0,sanitize_sensitive_text(exc))
+
+
 def cycle():
     when=now_utc()
     try:
@@ -396,6 +412,7 @@ async def schedule():
 @asynccontextmanager
 async def lifespan(app):
     schema()
+    await asyncio.to_thread(probe_provider_balance)
     task=asyncio.create_task(schedule())
     try:
         yield
@@ -436,6 +453,7 @@ def summary():
         "odds_poll_minutes":round(odds_poll_hours(now_utc())*60),
         "storage":"persistent SQLite /data","migration":db.fetchone("SELECT * FROM lite_migration_status WHERE id=1"),
         "odds":latest("odds"),"results":latest("results"),
+        "provider_balance":latest("provider_balance"),
         "disclosure":"Independent-book no-vig consensus is an unvalidated price estimate; prices are observed, not guaranteed."
     }
 
@@ -536,6 +554,7 @@ API credit ceiling """+str(credit_cap(now_utc()))+""" credits/day.
 One frozen selection per fixture; at least two independent reference bookmakers.</p>
 <p>Estimated edges rely on an <strong>unvalidated market-consensus proxy</strong>, not a calibrated
 model. Available prices and exchange commission must be verified independently.</p>
+<p>Provider quota (last free probe): """+e((s["provider_balance"] or {}).get("info"))+"""</p>
 <p><a href='/export/lite.csv'>Download Lite CSV</a> · <a href='/api/status'>Status API</a></p>
 <small>Historic research remains untouched in the existing database; legacy functionality
 is stopped, not deleted.</small></div></main></body></html>"""
