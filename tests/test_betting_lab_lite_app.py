@@ -60,10 +60,14 @@ class LiteSelectionTests(unittest.TestCase):
         self.assertNotIn("ref_book_a",books)
         self.assertIsNone(lite.propose(ev,books))
 
-    def test_api_credit_cap_is_conservative(self):
-        self.assertGreaterEqual(lite.MAX_CREDITS,1)
-        self.assertLessEqual(lite.MAX_CREDITS,30)
+    def test_free_plan_credit_cap_and_paid_cutoff(self):
+        before=datetime(2026,12,14,23,59,tzinfo=timezone.utc)
+        after=datetime(2026,12,15,0,0,tzinfo=timezone.utc)
+        self.assertEqual(lite.credit_cap(before),lite.PAID_CAP)
+        self.assertEqual(lite.credit_cap(after),lite.FREE_CAP)
+        self.assertLessEqual(lite.FREE_CAP,12)
         self.assertGreaterEqual(lite.ODDS_HOURS,4)
+
 
     def test_live_execution_components_are_not_imported(self):
         import sys
