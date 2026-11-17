@@ -549,13 +549,13 @@ Measured: """+str(s["closing_line_sample"])+""" settled selections.
 Median CLV: """+pct(s["median_clv_pct"])+""".
 Beat closing price: """+pct(s["beat_close_pct"])+""". Missing qualifying close quotes remain unscored.</p></div>
 <div class='panel'><h2>Operations and controls</h2><p>Latest odds scan: """+e(last.get("at"))+" · "+e(last.get("status"))+""".
-Odds every """+str(ODDS_HOURS)+""" hours; results every """+str(RESULT_HOURS)+""" hours if due.
+Odds every """+str(round(odds_poll_hours(now_utc())*60))+""" minutes under the current schedule; results every """+str(RESULT_HOURS)+""" hours if due.
 API credit ceiling """+str(credit_cap(now_utc()))+""" credits/day.
 One frozen selection per fixture; at least two independent reference bookmakers.</p>
 <p>Estimated edges rely on an <strong>unvalidated market-consensus proxy</strong>, not a calibrated
 model. Available prices and exchange commission must be verified independently.</p>
 <p>Provider quota (last free probe): """+e((s["provider_balance"] or {}).get("info"))+"""</p>
 <p><a href='/export/lite.csv'>Download Lite CSV</a> · <a href='/api/status'>Status API</a></p>
-<small>Historic research remains untouched in the existing database; legacy functionality
-is stopped, not deleted.</small></div></main></body></html>"""
+<small>New research is stored in persistent SQLite. The old Betting Lab Postgres service
+and its legacy research history were deliberately retired.</small></div></main></body></html>"""
     return HTMLResponse(html)
