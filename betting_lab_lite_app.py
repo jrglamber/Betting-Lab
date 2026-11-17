@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timedelta, timezone
 from html import escape
 from io import StringIO
-from statistics import mean
+from statistics import mean, median
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, Response
@@ -24,11 +24,19 @@ BOOKS = tuple(x.strip() for x in os.getenv(
 EXCHANGES = {"betfair_ex_uk", "matchbook", "smarkets"}
 MIN_REFERENCES = 2
 EDGE_FLOOR = 0.04
-MAX_CREDITS = max(1, min(30, int(os.getenv("LITE_CREDIT_CAP", "12"))))
+PAID_ALLOWANCE_END = datetime(2026, 12, 15, tzinfo=timezone.utc)
+PAID_CAP = max(12, min(40, int(os.getenv("LITE_PAID_CREDIT_CAP", "30"))))
+FREE_CAP = max(1, min(12, int(os.getenv("LITE_FREE_CREDIT_CAP", "12"))))
 ODDS_HOURS = max(4, int(os.getenv("LITE_ODDS_HOURS", "6")))
 RESULT_HOURS = max(8, int(os.getenv("LITE_RESULTS_HOURS", "12")))
-DB_URL = os.getenv("DATABASE_URL", "")
-db = Database(database_url=DB_URL)
+SQLITE_PATH = os.getenv("LITE_SQLITE_PATH", "/data/betting-lab-lite.sqlite")
+LEGACY_PG = os.getenv("DATABASE_URL", "")
+db = Database(database_url="", db_path=SQLITE_PATH)
+
+def credit_cap(when):
+    # Scheduled cutover on user's stated 15 December renewal date.
+    return PAID_CAP if when < PAID_ALLOWANCE_END else FREE_CAP
+
 api = TheOddsApi(os.getenv("ODDS_API_KEY", ""))
 
 
@@ -49,10 +57,12 @@ def normalize(value):
 
 
 def schema():
-    if not DB_URL.startswith(("postgres://", "postgresql://")):
-        raise RuntimeError("Lite requires existing Postgres DATABASE_URL; refusing ephemeral SQLite")
+    # A Railway persistent mount is mandatory: never silently run ephemeral
+    # SQLite and lose collected picks at the next deployment.
+    if not os.path.ismount(os.path.dirname(SQLITE_PATH)):
+        raise RuntimeError("SQLite persistent volume at /data is not mounted")
     db.execute("""CREATE TABLE IF NOT EXISTS lite_runs(
-        id BIGSERIAL PRIMARY KEY, at TEXT NOT NULL, kind TEXT NOT NULL,
+        id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, kind TEXT NOT NULL,
         status TEXT NOT NULL, credits INTEGER NOT NULL, info TEXT NOT NULL)""")
     db.execute("""CREATE TABLE IF NOT EXISTS lite_picks(
         event_id TEXT PRIMARY KEY, observed_at TEXT NOT NULL,
@@ -63,12 +73,65 @@ def schema():
         estimated_edge_pct DOUBLE PRECISION NOT NULL, reference_books INTEGER NOT NULL,
         commission_assumption DOUBLE PRECISION NOT NULL,
         result TEXT, home_score INTEGER, away_score INTEGER,
-        pnl_units DOUBLE PRECISION, settled_at TEXT)""")
+        pnl_units DOUBLE PRECISION, settled_at TEXT,
+        closing_odds DOUBLE PRECISION, closing_at TEXT,
+        closing_clv_pct DOUBLE PRECISION)""")
     db.execute("""CREATE TABLE IF NOT EXISTS lite_quotes(
         event_id TEXT NOT NULL, captured_at TEXT NOT NULL,
         bookmaker_key TEXT NOT NULL, selection TEXT NOT NULL,
         price DOUBLE PRECISION NOT NULL, commence_time TEXT NOT NULL,
         PRIMARY KEY(event_id,captured_at,bookmaker_key,selection))""")
+    db.execute("""CREATE TABLE IF NOT EXISTS lite_migration_status (
+        id INTEGER PRIMARY KEY, migrated_at TEXT NOT NULL, run_rows INTEGER,
+        pick_rows INTEGER, quote_rows INTEGER)""")
+    migrate_legacy_lite_records()
+
+
+def migrate_legacy_lite_records():
+    """One-time, verified copy of *only* the new Lite tables from old Postgres.
+
+    No legacy betting tables are migrated. Migration failure aborts startup;
+    Postgres is not removed until this record and API health are verified.
+    """
+    done = db.fetchone("SELECT * FROM lite_migration_status WHERE id=1")
+    if done:
+        return
+    if not LEGACY_PG.startswith(("postgres://", "postgresql://")):
+        raise RuntimeError("Lite migration source unavailable: keep old database until migration complete")
+    source = Database(database_url=LEGACY_PG)
+    columns = {
+        "lite_runs": (
+            "id","at","kind","status","credits","info",
+        ),
+        "lite_picks": (
+            "event_id","observed_at","commence_time","home_team","away_team",
+            "selection","bookmaker_key","bookmaker_title","entry_odds",
+            "reference_probability","estimated_edge_pct","reference_books",
+            "commission_assumption","result","home_score","away_score",
+            "pnl_units","settled_at",
+        ),
+        "lite_quotes": (
+            "event_id","captured_at","bookmaker_key","selection","price",
+            "commence_time",
+        ),
+    }
+    copied = {}
+    for table, fields in columns.items():
+        rows = source.fetchall("SELECT " + ",".join(fields) + " FROM " + table)
+        sql = ("INSERT OR IGNORE INTO " + table + "(" + ",".join(fields) + ") "
+               "VALUES(" + ",".join("?" for _ in fields) + ")")
+        if rows:
+            db.executemany(sql, [tuple(item.get(field) for field in fields) for item in rows])
+        count = db.fetchone("SELECT COUNT(*) AS n FROM " + table)["n"]
+        if int(count) < len(rows):
+            raise RuntimeError("Lite migration row count incomplete for " + table)
+        copied[table] = int(count)
+    db.execute("""INSERT INTO lite_migration_status(
+        id,migrated_at,run_rows,pick_rows,quote_rows)
+        VALUES(1,?,?,?,?)""",
+        (now_utc().isoformat(),copied["lite_runs"],copied["lite_picks"],
+         copied["lite_quotes"]))
+    print("BETTING_LITE_SQLITE_MIGRATED "+str(copied),flush=True)
 
 
 def record(kind, at, status, cost=0, info=""):
@@ -160,7 +223,7 @@ def propose(event, books):
 
 
 def poll_odds(when):
-    if used_today(when)>=MAX_CREDITS:
+    if used_today(when)+1>credit_cap(when):
         record("odds",when,"QUOTA_BLOCKED",0,"Hard daily cap reached")
         return
     cost=1
@@ -213,7 +276,7 @@ def poll_results(when):
     if not pending:
         record("results",when,"NO_DUE",0,"No completed ungraded fixtures in three-day window")
         return
-    if used_today(when)>=MAX_CREDITS:
+    if used_today(when)+2>credit_cap(when):
         record("results",when,"QUOTA_BLOCKED",0,"Hard daily cap reached")
         return
     if not api.api_key:
@@ -255,12 +318,53 @@ def poll_results(when):
         record("results",when,"ERROR",cost,sanitize_sensitive_text(exc))
 
 
+def odds_poll_hours(when):
+    # Preserve one-hour close-price snapshots for imminent already-frozen picks.
+    row = db.fetchone("""SELECT commence_time FROM lite_picks
+        WHERE commence_time>? ORDER BY commence_time LIMIT 1""",(when.isoformat(),))
+    start = stamp(row["commence_time"]) if row else None
+    if start and timedelta(0) < start-when <= timedelta(hours=6):
+        return 1
+    if start and start-when <= timedelta(hours=24):
+        return 2
+    return ODDS_HOURS
+
+
+def refresh_closing_prices(when):
+    """Freeze actual same-book pre-tipoff price; never use an in-play quote."""
+    due = db.fetchall("""SELECT event_id,commence_time,selection,bookmaker_key,entry_odds
+        FROM lite_picks WHERE closing_odds IS NULL AND commence_time<=?
+        AND commence_time>=?""",
+        (when.isoformat(),(when-timedelta(days=4)).isoformat()))
+    written = 0
+    for pick in due:
+        kickoff = stamp(pick["commence_time"])
+        if kickoff is None:
+            continue
+        quote = db.fetchone("""SELECT price,captured_at FROM lite_quotes
+            WHERE event_id=? AND selection=? AND bookmaker_key=?
+              AND captured_at<=? AND captured_at>=?
+            ORDER BY captured_at DESC LIMIT 1""",
+            (pick["event_id"],pick["selection"],pick["bookmaker_key"],
+             kickoff.isoformat(),(kickoff-timedelta(minutes=90)).isoformat()))
+        if not quote or float(quote["price"])<=1:
+            continue
+        closing=float(quote["price"])
+        pct=(float(pick["entry_odds"])/closing-1)*100
+        db.execute("""UPDATE lite_picks SET closing_odds=?,closing_at=?,closing_clv_pct=?
+            WHERE event_id=? AND closing_odds IS NULL""",
+            (closing,quote["captured_at"],pct,pick["event_id"]))
+        written+=1
+    return written
+
+
 def cycle():
     when=now_utc()
     try:
+        refresh_closing_prices(when)
         if is_due("results",RESULT_HOURS,when):
             poll_results(when)
-        if is_due("odds",ODDS_HOURS,when):
+        if is_due("odds",odds_poll_hours(when),when):
             poll_odds(when)
     except Exception as exc:
         print("LITE_CYCLE_ERROR",sanitize_sensitive_text(exc),flush=True)
@@ -300,13 +404,18 @@ def summary():
                        "pnl":round(gpnl,2),
                        "roi":round(100*gpnl/len(rows),2) if rows else None})
     last50=settled[:50]
+    with_close = [p for p in settled if p.get("closing_clv_pct") is not None]
     return {
         "mode":"LITE","research_only":True,"live_execution":False,
         "sport":SPORT,"bands":groups,"observed":len(all_rows),
         "settled":len(settled),"pnl_units":round(pnl,2),
         "roi":round(100*pnl/len(settled),2) if settled else None,
         "rolling_50_roi":round(100*sum(float(p["pnl_units"] or 0) for p in last50)/len(last50),2) if last50 else None,
-        "used_credits_today":used_today(now_utc()),"daily_credit_cap":MAX_CREDITS,
+        "closing_line_sample":len(with_close),
+        "median_clv_pct":round(median(float(p["closing_clv_pct"]) for p in with_close),3) if with_close else None,
+        "beat_close_pct":round(100*sum(float(p["closing_clv_pct"])>0 for p in with_close)/len(with_close),1) if with_close else None,
+        "used_credits_today":used_today(now_utc()),"daily_credit_cap":credit_cap(now_utc()),
+        "storage":"persistent SQLite /data","migration":db.fetchone("SELECT * FROM lite_migration_status WHERE id=1"),
         "odds":latest("odds"),"results":latest("results"),
         "disclosure":"Independent-book no-vig consensus is an unvalidated price estimate; prices are observed, not guaranteed."
     }
@@ -337,7 +446,7 @@ def export_csv():
           "selection","bookmaker_key","bookmaker_title","entry_odds",
           "reference_probability","estimated_edge_pct","reference_books",
           "commission_assumption","result","home_score","away_score",
-          "pnl_units","settled_at")
+          "pnl_units","settled_at","closing_odds","closing_at","closing_clv_pct")
     io=StringIO()
     out=csv.DictWriter(io,fieldnames=cols,extrasaction="ignore")
     out.writeheader()
@@ -388,7 +497,7 @@ No legacy collectors, HR2, multiples, Telegram or execution bots.</p>
 <div class='tile'><div class='label'>Settled singles</div><div class='big'>"""+str(s["settled"])+"""</div></div>
 <div class='tile'><div class='label'>Net ROI (hypothetical)</div><div class='big'>"""+pct(s["roi"])+"""</div></div>
 <div class='tile'><div class='label'>Profit, 1u singles</div><div class='big'>"""+f"{s['pnl_units']:+.2f}u"+"""</div></div>
-<div class='tile'><div class='label'>Daily API credits</div><div class='big'>"""+str(s["used_credits_today"])+"/"+str(MAX_CREDITS)+"""</div></div>
+<div class='tile'><div class='label'>Daily API credits</div><div class='big'>"""+str(s["used_credits_today"])+"/"+str(credit_cap(now_utc()))+"""</div></div>
 </div>
 <div class='panel'><h2>Evidence by odds band</h2><div class='scroll'><table>
 <thead><tr><th>Band</th><th>Settled</th><th>Wins</th><th>ROI</th></tr></thead>
@@ -397,9 +506,14 @@ No legacy collectors, HR2, multiples, Telegram or execution bots.</p>
 <div class='panel'><h2>Current and settled selections</h2><div class='scroll'><table>
 <thead><tr><th>Fixture</th><th>Pick</th><th>Bookmaker</th><th>Odds</th><th>Est. edge</th><th>Result</th><th>P&amp;L</th></tr></thead>
 <tbody>"""+("".join(body) or "<tr><td colspan='7'>No qualifying new selections yet.</td></tr>")+"""</tbody></table></div></div>
+<div class='panel'><h2>Closing-line evidence</h2>
+<p>Compared at the same bookmaker, at most 90 minutes before tip-off.
+Measured: """+str(s["closing_line_sample"])+""" settled selections.
+Median CLV: """+pct(s["median_clv_pct"])+""".
+Beat closing price: """+pct(s["beat_close_pct"])+""". Missing qualifying close quotes remain unscored.</p></div>
 <div class='panel'><h2>Operations and controls</h2><p>Latest odds scan: """+e(last.get("at"))+" · "+e(last.get("status"))+""".
 Odds every """+str(ODDS_HOURS)+""" hours; results every """+str(RESULT_HOURS)+""" hours if due.
-API credit ceiling """+str(MAX_CREDITS)+""" credits/day.
+API credit ceiling """+str(credit_cap(now_utc()))+""" credits/day.
 One frozen selection per fixture; at least two independent reference bookmakers.</p>
 <p>Estimated edges rely on an <strong>unvalidated market-consensus proxy</strong>, not a calibrated
 model. Available prices and exchange commission must be verified independently.</p>
