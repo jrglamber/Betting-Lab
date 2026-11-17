@@ -25,7 +25,8 @@ EXCHANGES = {"betfair_ex_uk", "matchbook", "smarkets"}
 MIN_REFERENCES = 2
 EDGE_FLOOR = 0.04
 PAID_ALLOWANCE_END = datetime(2026, 12, 15, tzinfo=timezone.utc)
-PAID_CAP = max(12, min(40, int(os.getenv("LITE_PAID_CREDIT_CAP", "30"))))
+# Paid cap is a safety ceiling, NOT a target to exhaust purchased credits.
+PAID_CAP = max(12, min(500, int(os.getenv("LITE_PAID_CREDIT_CAP", "350"))))
 FREE_CAP = max(1, min(12, int(os.getenv("LITE_FREE_CREDIT_CAP", "12"))))
 ODDS_HOURS = max(4, int(os.getenv("LITE_ODDS_HOURS", "6")))
 RESULT_HOURS = max(8, int(os.getenv("LITE_RESULTS_HOURS", "12")))
@@ -241,7 +242,7 @@ def poll_odds(when):
             home,away=str(event.get("home_team") or ""),str(event.get("away_team") or "")
             if not eid or not start or not home or not away:
                 continue
-            if not when+timedelta(minutes=20)<=start<=when+timedelta(days=10):
+            if not when+timedelta(minutes=1)<=start<=when+timedelta(days=10):
                 continue
             books=verified_books(event,when)
             candidates+=1
@@ -264,7 +265,10 @@ def poll_odds(when):
                  proposal["bookmaker_key"],proposal["bookmaker_title"],proposal["price"],
                  proposal["probability"],proposal["edge"],proposal["ref_count"],proposal["commission"]))
             saved+=1
-        record("odds",when,"OK",cost,f"Events={candidates}, fresh singles={saved}")
+        remaining = resp.remaining if resp.remaining is not None else "unknown"
+        spent = resp.used if resp.used is not None else "unknown"
+        record("odds",when,"OK",cost,
+               f"Events={candidates}, fresh singles={saved}; provider_remaining={remaining}; provider_used={spent}")
     except Exception as exc:
         record("odds",when,"ERROR",cost,sanitize_sensitive_text(exc))
 
@@ -313,21 +317,34 @@ def poll_results(when):
                 WHERE event_id=? AND result IS NULL""",
                 (result,hs,aw,pnl,when.isoformat(),eid))
             resolved+=1
-        record("results",when,"OK",cost,f"Resolved={resolved}/{len(pending)}")
+        remaining = resp.remaining if resp.remaining is not None else "unknown"
+        record("results",when,"OK",cost,
+               f"Resolved={resolved}/{len(pending)}; provider_remaining={remaining}")
     except Exception as exc:
         record("results",when,"ERROR",cost,sanitize_sensitive_text(exc))
 
 
 def odds_poll_hours(when):
-    # Preserve one-hour close-price snapshots for imminent already-frozen picks.
-    row = db.fetchone("""SELECT commence_time FROM lite_picks
-        WHERE commence_time>? ORDER BY commence_time LIMIT 1""",(when.isoformat(),))
-    start = stamp(row["commence_time"]) if row else None
-    if start and timedelta(0) < start-when <= timedelta(hours=6):
-        return 1
-    if start and start-when <= timedelta(hours=24):
-        return 2
-    return ODDS_HOURS
+    """High-frequency snapshots until Dec 15; free-tier throttle thereafter.
+
+    Scan against every observed fixture, not only qualifying picks. No futile
+    10-minute polling on days without imminent EuroLeague fixtures.
+    """
+    if when >= PAID_ALLOWANCE_END:
+        return max(6,ODDS_HOURS)
+
+    row = db.fetchone("""SELECT MIN(commence_time) AS next_game FROM lite_quotes
+        WHERE commence_time>?""",(when.isoformat(),))
+    next_start = stamp(row["next_game"]) if row and row["next_game"] else None
+    if next_start:
+        until=next_start-when
+        if until <= timedelta(hours=3):
+            return 10/60
+        if until <= timedelta(hours=24):
+            return 20/60
+    return 1
+
+
 
 
 def refresh_closing_prices(when):
@@ -415,6 +432,8 @@ def summary():
         "median_clv_pct":round(median(float(p["closing_clv_pct"]) for p in with_close),3) if with_close else None,
         "beat_close_pct":round(100*sum(float(p["closing_clv_pct"])>0 for p in with_close)/len(with_close),1) if with_close else None,
         "used_credits_today":used_today(now_utc()),"daily_credit_cap":credit_cap(now_utc()),
+        "paid_allowance_end_utc":PAID_ALLOWANCE_END.isoformat(),
+        "odds_poll_minutes":round(odds_poll_hours(now_utc())*60),
         "storage":"persistent SQLite /data","migration":db.fetchone("SELECT * FROM lite_migration_status WHERE id=1"),
         "odds":latest("odds"),"results":latest("results"),
         "disclosure":"Independent-book no-vig consensus is an unvalidated price estimate; prices are observed, not guaranteed."
