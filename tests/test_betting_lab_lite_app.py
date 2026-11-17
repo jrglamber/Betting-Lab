@@ -64,6 +64,8 @@ class LiteSelectionTests(unittest.TestCase):
         before=datetime(2026,12,14,23,59,tzinfo=timezone.utc)
         after=datetime(2026,12,15,0,0,tzinfo=timezone.utc)
         self.assertEqual(lite.credit_cap(before),lite.PAID_CAP)
+        self.assertEqual(lite.PAID_CAP,1500)
+        self.assertLessEqual(lite.PAID_CAP*28,53690)
         self.assertEqual(lite.credit_cap(after),lite.FREE_CAP)
         self.assertLessEqual(lite.FREE_CAP,12)
         self.assertGreaterEqual(lite.ODDS_HOURS,4)

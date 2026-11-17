@@ -26,7 +26,7 @@ MIN_REFERENCES = 2
 EDGE_FLOOR = 0.04
 PAID_ALLOWANCE_END = datetime(2026, 12, 15, tzinfo=timezone.utc)
 # Paid cap is a safety ceiling, NOT a target to exhaust purchased credits.
-PAID_CAP = max(12, min(500, int(os.getenv("LITE_PAID_CREDIT_CAP", "350"))))
+PAID_CAP = max(12, min(2000, int(os.getenv("LITE_PAID_CREDIT_CAP", "1500"))))
 FREE_CAP = max(1, min(12, int(os.getenv("LITE_FREE_CREDIT_CAP", "12"))))
 ODDS_HOURS = max(4, int(os.getenv("LITE_ODDS_HOURS", "6")))
 RESULT_HOURS = max(8, int(os.getenv("LITE_RESULTS_HOURS", "12")))
